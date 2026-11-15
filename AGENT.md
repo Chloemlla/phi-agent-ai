@@ -109,23 +109,45 @@ honestly.
 Three wire protocols are supported: `anthropic_messages`, `openai_chat` and
 `openai_responses`, each with SSE streaming. Streaming deltas are transient and
 go to the shell sink; only the final assistant message is journaled. OpenAI
-reasoning models (`o1`/`o3`/`o4`/`gpt-5` families) use
-`max_completion_tokens` and reject sampling parameters such as `temperature`.
+reasoning models (the GPT-6 family) use `max_completion_tokens` and reject
+sampling parameters such as `temperature`.
 
 Model metadata suggestions live in `src-tauri/assets/model-catalog.json`,
 compiled into the binary. The file may be empty: unknown models stay manual
-specs with only their id. Provider APIs supply the live model list. Pricing may
-include cache read/write rates; Anthropic requests mark the system block with
-an ephemeral cache breakpoint, and cached usage is parsed into
-`ModelCallReturned`.
+specs with only their id. Provider APIs supply the live model list. Metadata is
+advisory only — the node records token usage, never prices. Catalogue entries
+match on family patterns plus required variant markers, so an unrecorded point
+release such as `gpt-6.5-luna` keeps its real version and variant. `ModelSpec.scale`
+ranks capability from 1 (small, fast) to 5 (frontier) and caps delegation: an
+agent may never call a model larger than itself. A per-message `thinking` effort
+(`off`/`low`/`medium`/`high`) maps to Anthropic's adaptive thinking plus
+`output_config.effort`, OpenAI Chat's `reasoning_effort`, or Responses'
+`reasoning.effort`; `off`/`None` omits the thinking fields — every current model
+accepts them. Legacy Anthropic `budget_tokens` shapes are not supported.
+Anthropic requests mark the system block with an ephemeral cache breakpoint,
+and cached usage is parsed into `ModelCallReturned`.
 
 ## Runtime loop
 
-The agent loop has no run-level step, cost or wall-clock cap. It ends when the
-model stops calling tools, when a response is truncated by the per-call output
-limit, or when the user cancels. Token usage and estimated cost are recorded
-per model call. `shell_exec` keeps its own per-command timeout (default 120s,
-max 300s); the HTTP client keeps its request timeout.
+The agent loop has no run-level step, token or wall-clock cap. It ends when the
+model stops calling tools or when the user cancels. Per-message model and
+thinking selection travel from the shell through `StartRunRequest` into every
+`ModelRequest`; `default` keeps the provider's primary model. Token usage is
+recorded per model call; prices are not computed.
+
+Two failure modes are deliberately recoverable rather than fatal:
+
+- A tool call whose arguments are not valid JSON is never executed. The
+  assistant text is journaled, a paired `tool_result` error names the tool and
+  parser error, and the loop lets the model re-issue the call.
+- A response cut off by the output limit is continued (tool calls from the cut
+  response are not executed); text-only continuation prompts are ephemeral and
+  never appear as user messages. After three truncation recoveries the run
+  fails honestly and names the token limit.
+
+If a model call fails after some text was already streamed, that partial text is
+persisted instead of being dropped. `shell_exec` keeps its own per-command
+timeout (default 120s, max 300s); the HTTP client keeps its request timeout.
 
 ## Memory
 

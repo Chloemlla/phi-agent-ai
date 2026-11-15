@@ -11,7 +11,11 @@ import { createSignal } from "solid-js";
 const [current, setCurrent] = createSignal<Lang>("en");
 
 export function setLang(value: string | null | undefined) {
-  setCurrent(value === "zh-CN" ? "zh-CN" : "en");
+  const next = value === "zh-CN" ? "zh-CN" : "en";
+  setCurrent(next);
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = next;
+  }
 }
 
 export function lang(): Lang {
@@ -53,7 +57,6 @@ const ZH: Record<string, string> = {
   "The node is not in normal mode; sending is disabled": "节点未处于正常模式，发送消息已被禁用",
   "Call {name}": "调用 {name}",
   "Tool result": "工具结果",
-  "Tool error": "工具错误",
   "The agent is working…": "Agent 正在工作…",
   "Describe a task… (Enter to send, Shift+Enter for a newline)": "输入任务…（Enter 发送，Shift+Enter 换行）",
   "Message": "消息",
@@ -72,7 +75,6 @@ const ZH: Record<string, string> = {
 
   // run bar and composer
   "Steps": "步数",
-  "Cost": "成本",
   "Time": "时间",
   "Cancel": "取消",
   "Send": "发送",
@@ -118,40 +120,23 @@ const ZH: Record<string, string> = {
   "{count} models": "{count} 个模型",
   "Key configured": "已配置密钥",
   "No key": "无密钥",
-  "Disabled": "已禁用",
-  "Enabled": "启用",
-  "Start from a preset": "从预设开始",
+  "No authentication": "无认证",
   "Provider saved.": "供应商已保存。",
   "Provider deleted.": "供应商已删除。",
   "Provider is now active.": "供应商已设为当前。",
-  "Fetched {count} models.": "已获取 {count} 个模型。",
   "The provider returned no models.": "供应商没有返回任何模型。",
   "Delete provider {name}? This cannot be undone.": "删除供应商 {name}？此操作无法撤销。",
   "New provider": "新建供应商",
   "Provider": "供应商",
-  "What do you want to connect?": "要连接什么？",
-  "Start from a preset, then adjust any field.": "从预设开始，然后按需调整。",
-  "Anthropic Messages API.": "Anthropic Messages 接口。",
-  "OpenAI Chat Completions API.": "OpenAI Chat Completions 接口。",
-  "OpenAI Responses API.": "OpenAI Responses 接口。",
-  "Any OpenAI-compatible endpoint, including local runtimes such as Ollama or LM Studio.":
-    "任意 OpenAI 兼容端点，包括 Ollama、LM Studio 等本地运行时。",
-  "An Anthropic Messages-compatible gateway or proxy.": "兼容 Anthropic Messages 的网关或代理。",
   "Connection": "连接",
   "Name": "名称",
   "My provider": "我的供应商",
-  "Protocol": "协议",
   "Anthropic Messages": "Anthropic Messages",
   "OpenAI Chat Completions": "OpenAI Chat Completions",
   "OpenAI Responses": "OpenAI Responses",
   "Base URL": "基础 URL",
-  "Authentication": "认证",
-  "API key header (x-api-key)": "API Key 请求头（x-api-key）",
-  "Bearer token": "Bearer 令牌",
-  "No authentication": "无认证",
   "API key": "API 密钥",
   "Leave empty to keep the current key.": "留空则保留当前密钥。",
-  "API key or env:NAME reference": "API 密钥或 env:NAME 引用",
   "Show key": "显示密钥",
   "Hide key": "隐藏密钥",
   "Current key: {hint}": "当前密钥：{hint}",
@@ -160,40 +145,10 @@ const ZH: Record<string, string> = {
   "Website": "网站",
   "Notes": "备注",
   "Models": "模型",
-  "Add model ids manually or fetch them from the provider. Metadata is auto-configured from the model name and can be edited.":
-    "可以手动添加模型 ID，或从供应商获取。元数据会按模型名自动配置，也可以手动修改。",
-  "Fetch from provider": "从供应商获取",
   "Add model": "添加模型",
-  "Primary model": "主模型",
-  "Model id": "模型 ID",
   "No models yet. Add one manually or fetch the provider's model list.":
     "还没有模型。可以手动添加，或获取供应商的模型列表。",
-  "New model": "新模型",
   "Remove model": "移除模型",
-  "Display name": "显示名称",
-  "Description": "描述",
-  "What is this model good at?": "这个模型擅长什么？",
-  "Tags": "标签",
-  "fast, reasoning, vision": "fast, reasoning, vision",
-  "Context window": "上下文窗口",
-  "Inherit": "继承",
-  "Max output tokens": "最大输出 Token",
-  "Input $/Mtok": "输入 $/百万 Token",
-  "Output $/Mtok": "输出 $/百万 Token",
-  "Cache read $/Mtok": "缓存读取 $/百万 Token",
-  "Cache write $/Mtok": "缓存写入 $/百万 Token",
-  "Temperature": "温度",
-  "Auto-configured from the model name. Edit any field to override; explicit values are kept.":
-    "已按模型名自动配置。修改任一字段即可覆盖；显式填写的值会保留。",
-  "Auto": "自动",
-  "Fetched": "已获取",
-  "Manual": "手动",
-  "Model roles": "模型角色",
-  "Roles map a logical name (for example fast or reasoner) to a model id. Agents can request a role instead of a concrete model.":
-    "角色把逻辑名称（如 fast、reasoner）映射到具体模型 ID。Agent 可以请求角色，而不是写死模型。",
-  "Role name": "角色名",
-  "Remove role": "移除角色",
-  "Add role": "添加角色",
   "Custom headers": "自定义请求头",
   "Headers are sent with every request. Authorization and x-api-key are managed by the gateway and cannot be overridden here.":
     "这些请求头会随每次调用发送。Authorization 与 x-api-key 由网关管理，不能在这里覆盖。",
@@ -201,11 +156,6 @@ const ZH: Record<string, string> = {
   "Value": "值",
   "Remove header": "移除请求头",
   "Add header": "添加请求头",
-  "Provider defaults": "供应商默认值",
-  "Used when a model does not declare its own pricing, output limit or temperature.":
-    "当模型没有单独声明价格、输出上限或温度时使用。",
-  "Default": "默认",
-  "Use protocol defaults": "使用协议默认值",
   "Connected in {ms} ms, {count} models available.": "连接成功，耗时 {ms} ms，可用模型 {count} 个。",
   "Connection failed: {error}": "连接失败：{error}",
   "Saving…": "保存中…",
@@ -261,6 +211,81 @@ const ZH: Record<string, string> = {
   "State active": "有效",
   "State invalidated": "已失效",
   "State superseded": "已取代",
+
+  // chat shell: model picker, markdown, notifications, tool errors
+  "API key (optional)": "API Key（可选）",
+  "Add manually": "手动添加",
+  "Add model IDs manually": "手动添加模型 ID",
+  "Add model by id": "按 ID 添加模型",
+  "Add {count} models": "添加 {count} 个模型",
+  "Added {count} models.": "已添加 {count} 个模型。",
+  "Advanced": "高级",
+  "Back": "返回",
+  "Base URL is required.": "基础 URL 不能为空。",
+  "Base URL must start with http:// or https://.":
+    "基础 URL 必须以 http:// 或 https:// 开头。",
+  "Choose the model and thinking effort": "选择模型与思考强度",
+  "Choose a model first.": "请先选择一个模型。",
+  "A run is already active.": "已有运行正在进行，请先等待或取消。",
+  "Code": "代码",
+  "Comma or newline separated": "用逗号或换行分隔",
+  "Connect an endpoint, then choose the models to add.":
+    "先连接端点，再选择要添加的模型。",
+  "Continue": "继续",
+  "Copied": "已复制",
+  "Copy": "复制",
+  "Defaults": "默认设置",
+  "Details": "详情",
+  "Default": "默认",
+  "Dismiss": "关闭",
+  "(empty)": "（空）",
+  "Existing models are kept; selected models are added.":
+    "现有模型会保留；勾选的模型会追加。",
+  "Fetch models": "获取模型",
+  "Fetching models…": "正在获取模型…",
+  "High": "高",
+  "Input {input} · Output {output} tokens": "输入 {input} · 输出 {output} tokens",
+  "Keep current key": "保留当前密钥",
+  "Low": "低",
+  "Mapped": "已映射",
+  "Medium": "中",
+  "Model": "模型",
+  "Model scale (1-5)": "模型规模（1-5）",
+  "Models without a mapping use default settings.":
+    "没有映射结果的模型使用默认设置。",
+  "Name is required.": "名称不能为空。",
+  "No details were recorded.": "没有记录到详情。",
+  "No model": "无模型",
+  "No model provider is configured. Add one in Settings.":
+    "还没有配置模型供应商。请先在设置中添加一个。",
+  "No models are enabled for this provider.": "这个供应商没有启用的模型。",
+  "No sessions yet.": "还没有会话。",
+  "Optional note, one line": "可选备注，一行",
+  "Optional. Leave empty for endpoints that do not require authentication.":
+    "可选。不需要认证的端点可以留空。",
+  "Primary": "主模型",
+  "Progress": "进度",
+  "Reasoning hidden by the provider": "推理内容已被供应商隐藏",
+  "Request format": "请求格式",
+  "Restore window": "还原窗口",
+  "Retry": "重试",
+  "Save the provider before adding models.": "请先保存供应商，再添加模型。",
+  "Search models": "搜索模型",
+  "Select all": "全选",
+  "Select none": "全不选",
+  "Select the models to add to this provider.":
+    "选择要添加到这个供应商的模型。",
+  "Stopped": "已停止",
+  "The model cannot be changed while a run is active.":
+    "运行进行中，无法切换模型。",
+  "Thinking": "思考",
+  "Tokens": "Token",
+  "Tool failed": "工具失败",
+  "Tool failed: {name}": "工具失败：{name}",
+  "Tool result: {name}": "工具结果：{name}",
+  "Website must start with http:// or https://.":
+    "官网必须以 http:// 或 https:// 开头。",
+  "{selected} of {total} selected": "已选择 {selected} / {total}",
 };
 
 export function t(key: string): string {

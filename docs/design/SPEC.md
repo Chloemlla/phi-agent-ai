@@ -266,7 +266,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 ### 5.3 用量 / Runbar
 
 - 位置：composer 正上方，与 composer 连成一体（圆角相接）。
-- 三个**只读读数**永远可见：步数、成本、耗时；没有上限分母或 meter。
+- 三个**只读读数**永远可见：步数、token（输入/输出）、耗时；没有上限分母或 meter。
 - 运行中：状态文字 accent + 旋转 ring；可取消（danger 软底按钮）。
 - 运行结束：状态点按 §5.4 着色；读数保留该次运行的最终值。
 
@@ -390,7 +390,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - 所有交互元素有 `:focus-visible` 环：`2px --accent` + `2px` offset。
 - 状态不只靠颜色：配文字标签或图标（如状态点旁永远有文字）。
 - 支持 `prefers-reduced-motion`（见 §7.5）。
-- 点击目标 ≥ 24px（icon 按钮 30px）。
+- 点击目标桌面 ≥ 24px（icon 按钮 30px）；触摸设备 ≥ 40px。
 
 ---
 
@@ -399,7 +399,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - 风格：**线性图标**（stroke `1.8~2`，圆角线帽），统一 24 viewBox。
 - 尺寸：工具栏 16 / 卡片头 14 / 内联 11~13。
 - 颜色：继承 `currentColor`，默认 `--text-secondary`，hover 转 primary。
-- 品牌 logo：圆角方块 + 渐变（`--accent` → `#7AB3FF`）+ 字标 `φ`。
+- 品牌 logo：圆角方块 + 纯色 `--accent` + 字标 `φ`（不使用渐变）。
 
 ---
 
@@ -411,7 +411,11 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 | 字体资产 | `src/assets/fonts/`（Figtree / Noto Sans SC / Cascadia Code 的 woff2 + `@font-face`） |
 | 组件 | `src/App.tsx`（消息/审批/runbar/composer）、`src/workbench/ViewRenderer.tsx`（workbench 白名单） |
 | 动效 | `src/App.css` keyframes + 工具类 |
-| 自绘标题栏 | `src-tauri/tauri.conf.json` frameless + `src/` 顶部组件，drag region |
+| 自绘标题栏 | `src-tauri/tauri.conf.json` frameless + `src/components/Titlebar.tsx`；平台决定 Windows/Linux 右侧 caption 按钮、macOS 左侧红绿灯、Android/iOS 应用栏 |
+| 模型 / 思考选择 | `src/components/ModelPicker.tsx`（悬浮子菜单，触摸内联展开） |
+| 通知 | `src/toast.ts` + `src/components/Toasts.tsx`（去重、限流、自动消失） |
+| Markdown | `src/components/Markdown.tsx`（安全 JSX，不注入 HTML） |
+| 响应式 / 安全区 | `src/App.css` 断点 1100/900/760/520 + `env(safe-area-inset-*)` |
 | 深色模式 | 未来替换 `:root` token 表为 `[data-theme="dark"]` |
 
 **实现顺序建议**：tokens → 布局骨架（titlebar/sidebar/main）→ 对话与审批分级 → runbar/composer → workbench → 微动画打磨。

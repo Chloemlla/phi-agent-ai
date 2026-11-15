@@ -87,19 +87,21 @@ export function ApprovalCard(props: {
 
       <div class="approval-actions">
         <button
+          type="button"
           classList={{
             btn: true,
             primary: true,
             small: level() === "low",
           }}
-          disabled={busy()}
+          disabled={busy() || expired()}
           onClick={() => void resolve(true)}
         >
           {level() === "high" ? t("Approve and run") : t("Approve")}
         </button>
         <button
+          type="button"
           classList={{ btn: true, default: true, small: level() === "low", reject: true }}
-          disabled={busy()}
+          disabled={busy() || expired()}
           onClick={() => void resolve(false)}
         >
           {t("Reject")}

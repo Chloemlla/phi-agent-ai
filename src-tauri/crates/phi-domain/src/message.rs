@@ -14,6 +14,17 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
+    /// Extended-reasoning block produced by Anthropic Messages. It must be
+    /// passed back unmodified on the next request during tool use.
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    /// A thinking block the provider chose to redact. The opaque payload must
+    /// also be passed back unchanged.
+    RedactedThinking {
+        data: String,
+    },
     ToolUse {
         id: String,
         name: String,

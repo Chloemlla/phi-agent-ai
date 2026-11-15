@@ -15,10 +15,10 @@
         "title": "phi-agent",
         "width": 1100,
         "height": 760,
-        "minWidth": 760,
-        "minHeight": 520,
+        "minWidth": 360,
+        "minHeight": 480,
         "decorations": false,
-        "backgroundColor": "#F7F9FB"
+        "backgroundColor": "#F5F6F7"
       }
     ],
     "security": {

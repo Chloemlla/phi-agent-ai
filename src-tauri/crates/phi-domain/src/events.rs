@@ -115,7 +115,6 @@ pub enum DomainEvent {
         cache_read_tokens: u64,
         #[serde(default)]
         cache_write_tokens: u64,
-        cost_usd: f64,
         finish_reason: String,
     },
     ModelCallFailed {

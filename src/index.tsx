@@ -8,6 +8,7 @@ import "@fontsource/figtree/600.css";
 import "@fontsource/figtree/700.css";
 import "@fontsource/noto-sans-sc/400.css";
 import "@fontsource/noto-sans-sc/500.css";
+import "@fontsource/noto-sans-sc/600.css";
 import "@fontsource/noto-sans-sc/700.css";
 import "@fontsource/cascadia-code/400.css";
 import "@fontsource/cascadia-code/600.css";

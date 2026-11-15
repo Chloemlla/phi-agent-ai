@@ -1,5 +1,6 @@
-// Session rail. The active item is a white card with a 3px accent indicator,
-// not a filled blue row: selection should be legible without shouting.
+// Session rail. The active item is a quiet surface with a 3px accent
+// indicator, not a filled blue row: selection should be legible without
+// shouting. On narrow windows the same element becomes a drawer.
 
 import { For, Show } from "solid-js";
 import { formatRelative } from "../format";
@@ -19,9 +20,20 @@ export function Sidebar(props: {
   onSelect: (id: string) => void;
 }) {
   return (
-    <aside classList={{ sidebar: true, collapsed: !props.open }}>
+    <aside
+      classList={{
+        sidebar: true,
+        open: props.open,
+        collapsed: !props.open,
+      }}
+      aria-label={t("Sessions")}
+    >
       <div class="sidebar-inner">
-        <button class="btn primary block new-session" onClick={props.onNew}>
+        <button
+          type="button"
+          class="btn primary block new-session"
+          onClick={props.onNew}
+        >
           <IconPlus size={15} />
           {t("New session")}
         </button>
@@ -29,10 +41,18 @@ export function Sidebar(props: {
         <div class="side-label">{t("Sessions")}</div>
 
         <div class="session-list">
+          <Show when={props.sessions.length === 0}>
+            <p class="session-empty">{t("No sessions yet.")}</p>
+          </Show>
           <For each={props.sessions}>
             {(session) => (
               <button
-                classList={{ session: true, active: session.id === props.currentId }}
+                type="button"
+                classList={{
+                  session: true,
+                  active: session.id === props.currentId,
+                }}
+                aria-current={session.id === props.currentId ? "true" : undefined}
                 onClick={() => props.onSelect(session.id)}
               >
                 <span class="session-title">

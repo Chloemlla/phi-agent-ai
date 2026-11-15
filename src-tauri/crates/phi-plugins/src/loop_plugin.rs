@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 use phi_contracts::SLOT_RUNTIME_SKELETON;
 use phi_contracts::memory::{MemoryQuery, Principal};
 use phi_contracts::ports::{
-    AssembledContext, ModelRequest, PolicyEffect, PolicyInput, RunStatus, RuntimePort,
-    StartRunRequest, ToolCall, ToolContext,
+    AssembledContext, InvalidToolCall, ModelRequest, PolicyEffect, PolicyInput, RunStatus,
+    RuntimePort, StartRunRequest, ThinkingEffort, ToolCall, ToolContext,
 };
 use phi_contracts::util::{
     ResourceIdentity, action_digest, args_preview, resource_identity, truncate_chars,
@@ -119,7 +119,6 @@ impl RuntimePort for LoopPlugin {
             session_id: req.session_id.clone(),
             state: "Scheduled".to_string(),
             steps: 0,
-            cost_usd: 0.0,
         }));
         let cancel = CancellationToken::new();
         {
@@ -143,6 +142,8 @@ impl RuntimePort for LoopPlugin {
             session_id: req.session_id,
             turn_id: req.turn_id,
             workspace: req.workspace,
+            model: req.model,
+            thinking: req.thinking,
             cancel,
             status,
             workbench_mode: req.workbench,
@@ -182,6 +183,10 @@ struct RunContext {
     session_id: String,
     turn_id: String,
     workspace: PathBuf,
+    /// Per-message model override, if the shell selected one.
+    model: Option<String>,
+    /// Per-message extended reasoning effort.
+    thinking: Option<ThinkingEffort>,
     cancel: CancellationToken,
     status: Arc<Mutex<RunStatus>>,
     workbench_mode: bool,
@@ -189,6 +194,11 @@ struct RunContext {
 
 /// Appended to the normal system prompt when the run may shape the workbench.
 const WORKBENCH_PROMPT: &str = include_str!("../../../assets/workbench-system-prompt.txt");
+
+/// A model that keeps re-emitting unparsable tool arguments gets a few fresh
+/// steps to correct itself, then the run fails honestly instead of looping
+/// without progress.
+const MAX_INVALID_TOOL_RECOVERIES: u32 = 5;
 
 enum RunOutcome {
     Succeeded,
@@ -279,9 +289,22 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
     }
     let max_output_tokens = env_u64("PHI_MAX_OUTPUT_TOKENS", 8192) as u32;
     let context_budget = history_char_budget(model.status().context_window, max_output_tokens);
-    // Actual spend, recorded per model call. There is no run-level cap; the
-    // loop ends when the model stops calling tools or the user cancels.
-    let mut spent = 0.0_f64;
+    // The shell may select a model per message; "default" lets the gateway
+    // resolve the provider's primary model (including model mappings).
+    let requested_model = ctx.model.clone().unwrap_or_else(|| "default".to_string());
+    // There is no run-level step cap; the loop ends when the model stops
+    // calling tools or the user cancels. Truncation is recovered a bounded
+    // number of times before the run fails honestly.
+    let mut truncation_recoveries = 0_u32;
+    // Malformed tool arguments are recoverable per call, but a model that
+    // never produces parsable JSON must not get a fresh step forever.
+    let mut invalid_tool_recoveries = 0_u32;
+    // A text-only truncation continues with an ephemeral prompt: the agent
+    // must not fabricate a user-authored message in the transcript.
+    let mut continuation_prompt: Option<String> = None;
+    // Memory is retrieved once per run; re-injecting it every step changes the
+    // system prefix mid-run and can invalidate preserved thinking.
+    let mut memory_injected = false;
     let mut step_index = 0_u64;
 
     loop {
@@ -303,7 +326,13 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         if ctx.workbench_mode {
             assembled.system = format!("{}\n\n{}", assembled.system, WORKBENCH_PROMPT);
         }
-        inject_memory(&ctx, memory_query.as_deref(), &mut assembled).await;
+        if !memory_injected {
+            inject_memory(&ctx, memory_query.as_deref(), &mut assembled).await;
+            memory_injected = true;
+        }
+        if let Some(prompt) = continuation_prompt.take() {
+            assembled.messages.push(ChatMessage::user_text(prompt));
+        }
 
         let step_id = ctx.ids.new_id("step");
         if let Err(error) = ctx.bus.publish(
@@ -321,7 +350,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 &[("error", error)],
             ));
         }
-        set_status_progress(ctx, step_index, spent);
+        set_status_progress(ctx, step_index);
 
         let mut response = None;
         let mut attempt = 0;
@@ -335,7 +364,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     call_id: call_id.clone(),
                     run_id: ctx.run_id.clone(),
                     step_id: step_id.clone(),
-                    model: model.status().model,
+                    model: requested_model.clone(),
                     max_output_tokens,
                 },
             ) {
@@ -346,13 +375,12 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             }
 
             let request = ModelRequest {
-                // The gateway resolves "default" through the active provider
-                // profile (including model mappings).
-                model: "default".to_string(),
+                model: requested_model.clone(),
                 system: assembled.system.clone(),
                 messages: assembled.messages.clone(),
                 tools: tools.clone(),
                 max_output_tokens,
+                thinking: ctx.thinking,
                 call_id: call_id.clone(),
                 run_id: ctx.run_id.clone(),
                 stream: env_bool("PHI_STREAM", true),
@@ -363,7 +391,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
 
             match result {
                 Ok(resp) => {
-                    spent += resp.cost_usd;
                     if let Err(publish_error) = ctx.bus.publish(
                         &ctx.session_id,
                         "plugin-loop",
@@ -374,7 +401,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             output_tokens: resp.output_tokens,
                             cache_read_tokens: resp.cache_read_tokens,
                             cache_write_tokens: resp.cache_write_tokens,
-                            cost_usd: resp.cost_usd,
                             finish_reason: resp.finish_reason.clone(),
                         },
                     ) {
@@ -383,7 +409,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             &[("error", publish_error)],
                         ));
                     }
-                    set_status_progress(ctx, step_index, spent);
+                    set_status_progress(ctx, step_index);
                     response = Some(resp);
                     break;
                 }
@@ -424,6 +450,20 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                         }
                         continue;
                     }
+                    // Keep what the model had already produced. This branch
+                    // is only reached after retries are exhausted or when the
+                    // error is not retryable, so a successful retry never
+                    // duplicates text.
+                    if let Some(partial) = error.partial_text {
+                        if !partial.trim().is_empty() {
+                            let _ = session.append_message(
+                                &ctx.session_id,
+                                Some(&ctx.turn_id),
+                                Role::Assistant,
+                                vec![ContentBlock::text(partial)],
+                            );
+                        }
+                    }
                     return RunOutcome::Failed(error.message);
                 }
             }
@@ -433,13 +473,39 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             return RunOutcome::Failed(i18n::t("Model call returned no response"));
         };
 
-        // Normalize tool ids so tool_use/tool_result pairs always match.
-        for block in &mut response.blocks {
+        // Normalize tool ids so tool_use/tool_result pairs always match. An
+        // empty id would otherwise make an invalid call fail to match its
+        // parsed entry and execute with `{}`. Align by block index so a valid
+        // id-less call cannot consume a malformed call's entry.
+        let mut generated_by_index: HashMap<usize, String> = HashMap::new();
+        for (index, block) in response.blocks.iter_mut().enumerate() {
             if let ContentBlock::ToolUse { id, .. } = block {
                 if id.trim().is_empty() {
-                    *id = ctx.ids.new_id("call");
+                    let generated = ctx.ids.new_id("call");
+                    *id = generated.clone();
+                    generated_by_index.insert(index, generated);
                 }
             }
+        }
+        let generated_ids: HashSet<String> = generated_by_index.values().cloned().collect();
+        for invalid in &mut response.invalid_tool_calls {
+            if invalid.id.trim().is_empty() {
+                if let Some(generated) = generated_by_index.get(&invalid.block_index) {
+                    invalid.id = generated.clone();
+                }
+            }
+        }
+
+        // A thinking block cut off before its signature cannot be replayed.
+        response.blocks.retain(|block| match block {
+            ContentBlock::Thinking { signature, .. } => !signature.is_empty(),
+            ContentBlock::RedactedThinking { data } => !data.is_empty(),
+            _ => true,
+        });
+        if response.blocks.is_empty() {
+            response
+                .blocks
+                .push(ContentBlock::text(i18n::t("(model returned no content)")));
         }
 
         let tool_calls: Vec<(String, String, Value)> = response
@@ -466,20 +532,61 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         }
 
         if matches!(response.finish_reason.as_str(), "length" | "max_tokens") {
-            // Never execute tool calls from a response cut off by the output
-            // limit: the arguments may be incomplete. Emit paired results for
-            // any tool_use blocks so the stored history remains valid.
-            let mut blocks = Vec::new();
-            for (call_id, _, _) in &tool_calls {
-                blocks.push(ContentBlock::tool_result(
-                    call_id.clone(),
-                    i18n::t(
-                        "Response was truncated before the tool call completed; the tool was not executed.",
-                    ),
-                    true,
+            // Truncation is recoverable a bounded number of times. Never
+            // execute tool calls from a cut-off response: the arguments may
+            // be incomplete.
+            const MAX_TRUNCATION_RECOVERIES: u32 = 3;
+            if truncation_recoveries >= MAX_TRUNCATION_RECOVERIES {
+                // The assistant message is already stored. Keep the protocol
+                // history valid before failing by pairing any tool_use block.
+                if !tool_calls.is_empty() {
+                    let blocks: Vec<ContentBlock> = tool_calls
+                        .iter()
+                        .map(|(call_id, _, _)| {
+                            ContentBlock::tool_result(
+                                call_id.clone(),
+                                i18n::t(
+                                    "Response was truncated before the tool call completed; the tool was not executed.",
+                                ),
+                                true,
+                            )
+                        })
+                        .collect();
+                    let _ = session.append_message(
+                        &ctx.session_id,
+                        Some(&ctx.turn_id),
+                        Role::User,
+                        blocks,
+                    );
+                }
+                return RunOutcome::Failed(i18n::t_args(
+                    "The model response was truncated by the output token limit ({max_output_tokens} tokens) three times; the run stopped to avoid an endless loop.",
+                    &[("max_output_tokens", max_output_tokens.to_string())],
                 ));
             }
-            if !blocks.is_empty() {
+            truncation_recoveries += 1;
+            if tool_calls.is_empty() {
+                // The assistant text is already stored. The continuation
+                // instruction is injected only into this run's next request;
+                // it is not a message the human wrote.
+                continuation_prompt = Some(i18n::t(
+                    "The previous response was cut off by the output token limit. Continue exactly where you stopped, without repeating what you already wrote.",
+                ));
+            } else {
+                // Emit paired results for every tool_use block so the stored
+                // history remains valid for the provider.
+                let blocks: Vec<ContentBlock> = tool_calls
+                    .iter()
+                    .map(|(call_id, _, _)| {
+                        ContentBlock::tool_result(
+                            call_id.clone(),
+                            i18n::t(
+                                "Response was truncated before the tool call completed; the tool was not executed.",
+                            ),
+                            true,
+                        )
+                    })
+                    .collect();
                 if let Err(error) =
                     session.append_message(&ctx.session_id, Some(&ctx.turn_id), Role::User, blocks)
                 {
@@ -489,17 +596,21 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     ));
                 }
             }
-            let _ = ctx.bus.publish(
+            if let Err(error) = ctx.bus.publish(
                 &ctx.session_id,
                 "plugin-loop",
                 &DomainEvent::StepCompleted {
                     run_id: ctx.run_id.clone(),
                     step_id,
                 },
-            );
-            return RunOutcome::Failed(i18n::t(
-                "The model response was truncated by the output token limit; the run stopped instead of reporting a partial result.",
-            ));
+            ) {
+                return RunOutcome::Failed(i18n::t_args(
+                    "Failed to record the step completion: {error}",
+                    &[("error", error)],
+                ));
+            }
+            // Recover: let the model continue from the truncated state.
+            continue;
         }
 
         if tool_calls.is_empty() {
@@ -522,6 +633,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         let mut result_blocks = Vec::new();
         let mut unknown_side_effect = false;
         let mut cancelled = false;
+        let mut invalid_calls: Vec<InvalidToolCall> = response.invalid_tool_calls.clone();
         for (call_id, tool_id, input) in tool_calls {
             // Once cancellation is observed, never start another tool. Still
             // emit a paired result so the history stays valid for the provider.
@@ -532,6 +644,29 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     i18n::t("Run cancelled; action was not executed."),
                     true,
                 ));
+                continue;
+            }
+            // The model produced arguments that were not valid JSON. Do not
+            // execute the tool; answer with a paired error so the protocol
+            // history stays valid and the model can re-issue the call.
+            if let Some(invalid) = take_invalid_call(
+                &mut invalid_calls,
+                &call_id,
+                &tool_id,
+                generated_ids.contains(&call_id),
+            ) {
+                let error = invalid_tool_message(&invalid);
+                invalid_tool_recoveries += 1;
+                let _ = ctx.bus.publish(
+                    &ctx.session_id,
+                    "plugin-loop",
+                    &DomainEvent::ToolInvokeFailed {
+                        invocation_id: call_id.clone(),
+                        run_id: ctx.run_id.clone(),
+                        error: error.clone(),
+                    },
+                );
+                result_blocks.push(ContentBlock::tool_result(call_id, error, true));
                 continue;
             }
             let outcome = execute_tool(
@@ -591,6 +726,12 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 reason: i18n::t("Cancelled by user"),
                 stop,
             };
+        }
+
+        if invalid_tool_recoveries >= MAX_INVALID_TOOL_RECOVERIES {
+            return RunOutcome::Failed(i18n::t(
+                "The model repeatedly sent tool arguments that were not valid JSON; the run stopped without executing them.",
+            ));
         }
     }
 }
@@ -998,6 +1139,54 @@ fn publish_tool_failed(ctx: &RunContext, call: &ToolCall, error: &str) {
     );
 }
 
+/// Match a tool block to its parsed invalid entry. Exact id first. Only a
+/// tool call whose id was generated during normalization may consume an
+/// entry whose id is empty; otherwise a valid call could be rejected merely
+/// because another call to the same tool was malformed. Consumed entries are
+/// removed so one malformed call cannot mark two tool calls.
+fn take_invalid_call(
+    invalid: &mut Vec<InvalidToolCall>,
+    call_id: &str,
+    tool_id: &str,
+    generated: bool,
+) -> Option<InvalidToolCall> {
+    if let Some(index) = invalid
+        .iter()
+        .position(|entry| !entry.id.trim().is_empty() && entry.id == call_id)
+    {
+        return Some(invalid.remove(index));
+    }
+    if generated {
+        if let Some(index) = invalid
+            .iter()
+            .position(|entry| entry.id.trim().is_empty() && entry.name == tool_id)
+        {
+            return Some(invalid.remove(index));
+        }
+        if let Some(index) = invalid.iter().position(|entry| entry.id.trim().is_empty()) {
+            return Some(invalid.remove(index));
+        }
+    }
+    None
+}
+
+/// Human- and model-facing explanation for a tool call whose streamed
+/// arguments could not be parsed. It names the tool, includes the parser error
+/// and a bounded raw prefix, and asks for a corrected call.
+fn invalid_tool_message(call: &InvalidToolCall) -> String {
+    // Malformed arguments can contain a partially written secret. Redact
+    // before the text is persisted in the transcript and journal.
+    let raw = redact_secrets(&call.raw_arguments).text;
+    i18n::t_args(
+        "Tool {tool} was not executed: the model sent arguments that are not valid JSON. Parser error: {error}. Raw arguments (truncated): {raw}. Re-issue the tool call with valid JSON arguments.",
+        &[
+            ("tool", call.name.clone()),
+            ("error", call.error.clone()),
+            ("raw", truncate_chars(&raw, 2000)),
+        ],
+    )
+}
+
 fn deny_result(call: &ToolCall, rationale: &str) -> ToolExecOutcome {
     ToolExecOutcome {
         block: ContentBlock::tool_result(
@@ -1025,10 +1214,9 @@ fn set_status(ctx: &RunContext, state: &str) {
     status.state = state.to_string();
 }
 
-fn set_status_progress(ctx: &RunContext, steps: u64, cost: f64) {
+fn set_status_progress(ctx: &RunContext, steps: u64) {
     let mut status = ctx.status.lock().unwrap();
     status.steps = steps;
-    status.cost_usd = cost;
     if status.state == "Scheduled" {
         status.state = "Running".to_string();
     }
@@ -1246,5 +1434,67 @@ mod tests {
     fn other_tool_previews_are_unchanged() {
         let preview = journal_args_preview("fs_read", &json!({ "path": "src/main.rs" }));
         assert_eq!(preview["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn invalid_call_matching_survives_a_generated_id() {
+        let mut invalid = vec![InvalidToolCall {
+            id: String::new(),
+            name: "fs_write".to_string(),
+            block_index: 0,
+            raw_arguments: "{bad".to_string(),
+            error: "expected value".to_string(),
+        }];
+        let matched = take_invalid_call(&mut invalid, "call_generated", "fs_write", true)
+            .expect("a generated id must still match its malformed entry");
+        assert_eq!(matched.name, "fs_write");
+        assert!(invalid.is_empty());
+
+        // A valid call must not consume an entry that belongs to another call.
+        let mut invalid = vec![InvalidToolCall {
+            id: String::new(),
+            name: "fs_write".to_string(),
+            block_index: 0,
+            raw_arguments: String::new(),
+            error: "bad".to_string(),
+        }];
+        assert!(take_invalid_call(&mut invalid, "call_valid", "fs_write", false).is_none());
+        assert_eq!(invalid.len(), 1);
+    }
+
+    #[test]
+    fn invalid_tool_message_redacts_secrets() {
+        let call = InvalidToolCall {
+            id: "call_bad".to_string(),
+            name: "fs_write".to_string(),
+            block_index: 0,
+            raw_arguments: "{\"content\":\"sk-test0000000000000000\"".to_string(),
+            error: "expected value".to_string(),
+        };
+        let message = invalid_tool_message(&call);
+        assert!(
+            !message.contains("sk-test0000000000000000"),
+            "a malformed secret must not be persisted: {message}"
+        );
+        assert!(message.contains("REDACTED"));
+    }
+
+    #[test]
+    fn invalid_tool_message_bounds_the_raw_arguments() {
+        let call = InvalidToolCall {
+            id: "call_bad".to_string(),
+            name: "fs_write".to_string(),
+            block_index: 0,
+            raw_arguments: "x".repeat(10_000),
+            error: "expected value at line 1 column 2".to_string(),
+        };
+        let message = invalid_tool_message(&call);
+        assert!(message.contains("fs_write"));
+        assert!(message.contains("expected value"));
+        assert!(
+            message.chars().count() < 2_500,
+            "raw arguments must be truncated: {}",
+            message.chars().count()
+        );
     }
 }

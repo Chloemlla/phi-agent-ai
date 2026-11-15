@@ -1,7 +1,50 @@
 // Shapes mirrored from the Rust read model (`phi-node` / `phi-domain`).
 
 import type { WorkbenchView } from "./workbench/types";
-import type { ProviderView } from "./settings/types";
+
+/** Host platform reported by the node. */
+export type Platform = "windows" | "macos" | "linux" | "android" | "ios";
+
+export function isMobilePlatform(platform: string | null | undefined): boolean {
+  return platform === "android" || platform === "ios";
+}
+
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
+
+export const THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return (
+    value === "off" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high"
+  );
+}
+
+/** The model the composer will call and how hard it should think. */
+export type ModelSelection = {
+  providerId: string;
+  modelId: string;
+  thinking: ThinkingLevel;
+};
+
+/** The subset of a provider's model spec the chat shell needs. */
+export type ModelSpec = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  tags?: string[];
+};
+
+/** The subset of a provider view exposed to the chat shell. */
+export type ProviderView = {
+  id: string;
+  name: string;
+  model: string;
+  models: ModelSpec[];
+  active?: boolean;
+};
 
 export type ModelStatus = {
   provider: string;
@@ -25,6 +68,8 @@ export type SessionSummary = {
 
 export type Block =
   | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | {
       type: "tool_result";
@@ -47,7 +92,6 @@ export type Run = {
   turnId: string;
   state: string;
   steps: number;
-  costUsd: number;
   workbenchMode: boolean;
   inputTokens: number;
   outputTokens: number;
@@ -95,6 +139,7 @@ export type ModelStreamEvent = {
   runId: string;
   callId: string;
   kind: string;
+  index?: number;
   text?: string;
 };
 
@@ -102,6 +147,7 @@ export type Bootstrap = {
   nodeId: string;
   mode: string;
   modeReason: string;
+  platform: string;
   model: ModelStatus;
   workspace: string | null;
   sessions: SessionSummary[];

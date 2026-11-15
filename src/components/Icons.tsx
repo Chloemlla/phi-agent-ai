@@ -6,11 +6,14 @@ export {
   ArrowUp as IconArrowUp,
   Brain as IconBrain,
   Check as IconCheck,
+  ChevronDown as IconChevronDown,
   ChevronRight as IconChevron,
   CircleAlert as IconCircleAlert,
+  Copy as IconCopy,
   Eye as IconEye,
   EyeOff as IconEyeOff,
   KeyRound as IconKey,
+  Menu as IconMenu,
   PanelLeft as IconPanel,
   Plus as IconPlus,
   RefreshCw as IconRefresh,
@@ -37,6 +40,72 @@ export function IconPhi(props: { size?: number }) {
     >
       <path d="M12 21V8.5" />
       <circle cx="12" cy="9.5" r="5.5" />
+    </svg>
+  );
+}
+
+// Crisp caption glyphs for the Windows/Linux window controls (10 px grid).
+export function IconWinMinimize(props: { size?: number }) {
+  return (
+    <svg
+      width={props.size ?? 10}
+      height={props.size ?? 10}
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1"
+      aria-hidden="true"
+    >
+      <path d="M0 5.5h10" />
+    </svg>
+  );
+}
+
+export function IconWinMaximize(props: { size?: number }) {
+  return (
+    <svg
+      width={props.size ?? 10}
+      height={props.size ?? 10}
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1"
+      aria-hidden="true"
+    >
+      <rect x="0.5" y="0.5" width="9" height="9" />
+    </svg>
+  );
+}
+
+export function IconWinRestore(props: { size?: number }) {
+  return (
+    <svg
+      width={props.size ?? 10}
+      height={props.size ?? 10}
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1"
+      aria-hidden="true"
+    >
+      <path d="M2.5 2.5V0.5h7v7h-2" />
+      <rect x="0.5" y="2.5" width="7" height="7" />
+    </svg>
+  );
+}
+
+export function IconWinClose(props: { size?: number }) {
+  return (
+    <svg
+      width={props.size ?? 10}
+      height={props.size ?? 10}
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1"
+      aria-hidden="true"
+    >
+      <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" />
     </svg>
   );
 }

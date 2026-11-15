@@ -88,6 +88,61 @@ pub struct ModelStatus {
     pub context_window: Option<u64>,
 }
 
+/// How much extended reasoning the model should spend on a single call.
+///
+/// The wire representation differs per protocol: Anthropic takes a token
+/// budget, while the OpenAI protocols take a named effort. `Off` and `None`
+/// both mean "do not ask for reasoning".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingEffort {
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ThinkingEffort {
+    /// Accepts case-insensitive names plus the aliases users are likely to
+    /// type. `none` and `auto` both mean "off" (the provider default).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" | "auto" | "default" | "disabled" | "false" | "0" => {
+                Some(ThinkingEffort::Off)
+            }
+            "low" | "minimal" => Some(ThinkingEffort::Low),
+            "medium" | "med" => Some(ThinkingEffort::Medium),
+            "high" => Some(ThinkingEffort::High),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThinkingEffort::Off => "off",
+            ThinkingEffort::Low => "low",
+            ThinkingEffort::Medium => "medium",
+            ThinkingEffort::High => "high",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidToolCall {
+    /// The tool_use id. The loop still emits a matching tool_result so the
+    /// conversation stays valid.
+    pub id: String,
+    pub name: String,
+    /// Index into the response's block list. Used to align generated ids when
+    /// the parser produced an id-less block.
+    pub block_index: usize,
+    /// The raw argument text exactly as the model produced it.
+    pub raw_arguments: String,
+    /// The parser error that made the call unusable.
+    pub error: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct ModelRequest {
     pub model: String,
@@ -95,6 +150,9 @@ pub struct ModelRequest {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDefinition>,
     pub max_output_tokens: u32,
+    /// Extended reasoning effort for this call. `None` leaves the provider
+    /// default untouched.
+    pub thinking: Option<ThinkingEffort>,
     /// Correlation ids used for transient stream events.
     pub call_id: String,
     pub run_id: String,
@@ -113,7 +171,9 @@ pub struct ModelResponse {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
-    pub cost_usd: f64,
+    /// Tool calls whose streamed arguments were not valid JSON. They stay in
+    /// `blocks` (so the history is valid) but must not be executed.
+    pub invalid_tool_calls: Vec<InvalidToolCall>,
     pub finish_reason: String,
     pub estimated_usage: bool,
 }
@@ -122,6 +182,24 @@ pub struct ModelResponse {
 pub struct ModelError {
     pub message: String,
     pub retryable: bool,
+    /// Text the model had already streamed when the call failed. The loop
+    /// keeps it in the transcript instead of dropping visible output.
+    pub partial_text: Option<String>,
+}
+
+impl ModelError {
+    pub fn new(message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            message: message.into(),
+            retryable,
+            partial_text: None,
+        }
+    }
+
+    pub fn with_partial_text(mut self, text: Option<String>) -> Self {
+        self.partial_text = text;
+        self
+    }
 }
 
 #[async_trait]
@@ -281,6 +359,10 @@ pub struct StartRunRequest {
     pub workspace: PathBuf,
     /// Let the agent shape the workbench view for this run.
     pub workbench: bool,
+    /// Per-message model override. `None` means the provider's primary model.
+    pub model: Option<String>,
+    /// Per-message extended reasoning effort.
+    pub thinking: Option<ThinkingEffort>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -290,11 +372,38 @@ pub struct RunStatus {
     pub session_id: String,
     pub state: String,
     pub steps: u64,
-    pub cost_usd: f64,
 }
 
 pub trait RuntimePort: Send + Sync {
     fn start_run(&self, req: StartRunRequest) -> Result<String, String>;
     fn cancel(&self, run_id: &str, reason: &str) -> bool;
     fn status(&self, run_id: &str) -> Option<RunStatus>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thinking_effort_parses_aliases_and_budgets() {
+        assert_eq!(ThinkingEffort::parse("OFF"), Some(ThinkingEffort::Off));
+        assert_eq!(ThinkingEffort::parse("none"), Some(ThinkingEffort::Off));
+        assert_eq!(ThinkingEffort::parse("auto"), Some(ThinkingEffort::Off));
+        assert_eq!(
+            ThinkingEffort::parse(" default "),
+            Some(ThinkingEffort::Off)
+        );
+        assert_eq!(ThinkingEffort::parse("Low"), Some(ThinkingEffort::Low));
+        assert_eq!(
+            ThinkingEffort::parse("MEDIUM"),
+            Some(ThinkingEffort::Medium)
+        );
+        assert_eq!(ThinkingEffort::parse("high"), Some(ThinkingEffort::High));
+        assert_eq!(ThinkingEffort::parse("extreme"), None);
+        assert_eq!(ThinkingEffort::High.as_str(), "high");
+        assert_eq!(
+            serde_json::to_string(&ThinkingEffort::Medium).unwrap(),
+            "\"medium\""
+        );
+    }
 }

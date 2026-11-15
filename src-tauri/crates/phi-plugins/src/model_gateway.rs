@@ -19,8 +19,9 @@ use crate::model_protocol::{
 use crate::provider_store::{ProviderStore, ResolvedProvider};
 use phi_contracts::SLOT_MODEL_INVOKE;
 use phi_contracts::ports::{ModelError, ModelPort, ModelRequest, ModelResponse, ModelStatus};
-use phi_contracts::provider::{AuthMode, Pricing, ProviderProfile};
+use phi_contracts::provider::{AuthMode, ProviderProfile};
 use phi_contracts::stream::{ModelStreamEvent, StreamHub};
+use phi_domain::message::ContentBlock;
 use phi_i18n as i18n;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::registry::Contribution;
@@ -29,27 +30,6 @@ pub struct ModelGateway {
     client: reqwest::Client,
     providers: Arc<ProviderStore>,
     streams: Arc<StreamHub>,
-}
-
-fn compute_cost(
-    pricing: Pricing,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_tokens: u64,
-) -> f64 {
-    // Unknown cache prices fall back to the ordinary input price, which
-    // overestimates rather than hiding spend.
-    let cache_read_price = pricing
-        .cache_read_per_mtok
-        .unwrap_or(pricing.input_per_mtok);
-    let cache_write_price = pricing
-        .cache_write_per_mtok
-        .unwrap_or(pricing.input_per_mtok);
-    input_tokens as f64 / 1_000_000.0 * pricing.input_per_mtok
-        + output_tokens as f64 / 1_000_000.0 * pricing.output_per_mtok
-        + cache_read_tokens as f64 / 1_000_000.0 * cache_read_price
-        + cache_write_tokens as f64 / 1_000_000.0 * cache_write_price
 }
 
 impl ModelGateway {
@@ -66,23 +46,6 @@ impl ModelGateway {
             providers,
             streams,
         }
-    }
-
-    fn compute_cost(
-        &self,
-        profile: &ProviderProfile,
-        input_tokens: u64,
-        output_tokens: u64,
-        cache_read_tokens: u64,
-        cache_write_tokens: u64,
-    ) -> f64 {
-        compute_cost(
-            profile.pricing_or_default(),
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_write_tokens,
-        )
     }
 
     async fn invoke_resolved(
@@ -112,13 +75,13 @@ impl ModelGateway {
         }
 
         let response = tokio::select! {
-            result = builder.send() => result.map_err(|error| ModelError {
-                message: i18n::t_args(
+            result = builder.send() => result.map_err(|error| ModelError::new(
+                i18n::t_args(
                     "network: request failed: {error}",
                     &[("error", error.to_string())],
                 ),
-                retryable: true,
-            })?,
+                true,
+            ))?,
             _ = cancel.cancelled() => return Err(cancelled_error()),
         };
 
@@ -139,22 +102,26 @@ impl ModelGateway {
             return self.consume_stream(response, profile, &req, cancel).await;
         }
 
-        let raw = response.text().await.map_err(|error| ModelError {
-            message: i18n::t_args(
-                "network: failed to read response: {error}",
-                &[("error", error.to_string())],
-            ),
-            retryable: true,
+        let raw = response.text().await.map_err(|error| {
+            ModelError::new(
+                i18n::t_args(
+                    "network: failed to read response: {error}",
+                    &[("error", error.to_string())],
+                ),
+                true,
+            )
         })?;
-        let value: Value = serde_json::from_str(&raw).map_err(|error| ModelError {
-            message: i18n::t_args(
-                "invalid_response: response is not valid JSON: {error}",
-                &[("error", error.to_string())],
-            ),
-            retryable: false,
+        let value: Value = serde_json::from_str(&raw).map_err(|error| {
+            ModelError::new(
+                i18n::t_args(
+                    "invalid_response: response is not valid JSON: {error}",
+                    &[("error", error.to_string())],
+                ),
+                false,
+            )
         })?;
         let parsed = parse_response(profile.protocol, &value)?;
-        Ok(self.finish_response(&profile, &req, parsed))
+        Ok(self.finish_response(&req, parsed))
     }
 
     async fn consume_stream(
@@ -167,15 +134,21 @@ impl ModelGateway {
         let mut buffer = SseBuffer::default();
         let mut decoder = decoder(profile.protocol);
         let mut done_emitted = false;
+        // Visible text already sent to the shell. If the stream fails, the
+        // caller keeps this instead of losing the model's partial answer.
+        let mut emitted_text = String::new();
 
         loop {
             let chunk = tokio::select! {
-                result = response.chunk() => result.map_err(|error| ModelError {
-                    message: i18n::t_args(
-                        "network: failed to read stream: {error}",
-                        &[("error", error.to_string())],
-                    ),
-                    retryable: true,
+                result = response.chunk() => result.map_err(|error| {
+                    ModelError::new(
+                        i18n::t_args(
+                            "network: failed to read stream: {error}",
+                            &[("error", error.to_string())],
+                        ),
+                        true,
+                    )
+                    .with_partial_text(partial_text(&emitted_text))
                 })?,
                 _ = cancel.cancelled() => return Err(cancelled_error()),
             };
@@ -184,8 +157,14 @@ impl ModelGateway {
             };
             buffer.push(&bytes);
             while let Some((event, data)) = buffer.next_event() {
-                for delta in decoder.feed(&event, &data)? {
-                    if matches!(delta, StreamDelta::Done) {
+                let deltas = decoder
+                    .feed(&event, &data)
+                    .map_err(|error| error.with_partial_text(partial_text(&emitted_text)))?;
+                for delta in deltas {
+                    if let StreamDelta::Text { text, .. } = &delta {
+                        emitted_text.push_str(text);
+                    }
+                    if matches!(&delta, StreamDelta::Done) {
                         done_emitted = true;
                     }
                     self.publish_delta(req, delta);
@@ -196,37 +175,64 @@ impl ModelGateway {
         // Some servers end the stream without a trailing blank line.
         buffer.push(b"\n\n");
         while let Some((event, data)) = buffer.next_event() {
-            for delta in decoder.feed(&event, &data)? {
-                if matches!(delta, StreamDelta::Done) {
+            let deltas = decoder
+                .feed(&event, &data)
+                .map_err(|error| error.with_partial_text(partial_text(&emitted_text)))?;
+            for delta in deltas {
+                if let StreamDelta::Text { text, .. } = &delta {
+                    emitted_text.push_str(text);
+                }
+                if matches!(&delta, StreamDelta::Done) {
                     done_emitted = true;
                 }
                 self.publish_delta(req, delta);
             }
         }
 
-        let parsed = decoder.finish()?;
+        let parsed = decoder
+            .finish()
+            .map_err(|error| error.with_partial_text(partial_text(&emitted_text)))?;
+        if !parsed.saw_terminal {
+            return Err(ModelError::new(
+                i18n::t("network: stream ended before the model finished"),
+                true,
+            )
+            .with_partial_text(partial_text(&emitted_text)));
+        }
         if !done_emitted {
             self.publish_delta(req, StreamDelta::Done);
         }
-        Ok(self.finish_response(&profile, req, parsed))
+        Ok(self.finish_response(req, parsed))
     }
 
-    fn finish_response(
-        &self,
-        profile: &ProviderProfile,
-        req: &ModelRequest,
-        parsed: ProtocolResponse,
-    ) -> ModelResponse {
-        let (fallback_input, fallback_output) = conservative_request_tokens(req);
-        let input_tokens = if parsed.input_tokens == 0 {
-            fallback_input
-        } else {
+    fn finish_response(&self, req: &ModelRequest, parsed: ProtocolResponse) -> ModelResponse {
+        let (fallback_input, _) = conservative_request_tokens(req);
+        let input_tokens = if parsed.input_tokens_known {
             parsed.input_tokens
-        };
-        let output_tokens = if parsed.output_tokens == 0 {
-            fallback_output
         } else {
+            fallback_input
+        };
+        let output_tokens = if parsed.output_tokens_known {
             parsed.output_tokens
+        } else {
+            // Estimate from the response itself instead of billing the whole
+            // output cap; providers that omit usage should not look like they
+            // generated 8k tokens.
+            let chars: usize = parsed
+                .blocks
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::Text { text } => text.chars().count(),
+                    ContentBlock::Thinking {
+                        thinking,
+                        signature,
+                    } => thinking.chars().count() + signature.chars().count(),
+                    ContentBlock::RedactedThinking { data } => data.chars().count(),
+                    ContentBlock::ToolUse { input, .. } => input.to_string().chars().count(),
+                    ContentBlock::ToolResult { content, .. } => content.chars().count(),
+                })
+                .sum();
+            ((chars / 4) as u64).clamp(1, u64::from(req.max_output_tokens))
         };
         ModelResponse {
             blocks: parsed.blocks,
@@ -234,13 +240,7 @@ impl ModelGateway {
             output_tokens,
             cache_read_tokens: parsed.cache_read_tokens,
             cache_write_tokens: parsed.cache_write_tokens,
-            cost_usd: self.compute_cost(
-                profile,
-                input_tokens,
-                output_tokens,
-                parsed.cache_read_tokens,
-                parsed.cache_write_tokens,
-            ),
+            invalid_tool_calls: parsed.invalid_tool_calls,
             finish_reason: parsed.finish_reason,
             estimated_usage: parsed.estimated_usage,
         }
@@ -311,10 +311,29 @@ impl ModelGateway {
         }
     }
 
+    /// Fetch the provider's live model list without persisting it. The
+    /// settings wizard uses this so a user can preview and choose models
+    /// before saving the provider.
+    pub async fn preview_models(&self, id: Option<&str>) -> Result<Vec<String>, String> {
+        let resolved = self.resolve_for_listing(id)?;
+        self.fetch_model_ids(&resolved).await
+    }
+
+    /// Fetch and persist the provider's live model list. Headless/CLI
+    /// compatibility keeps this behavior.
     pub async fn list_models(&self, id: Option<&str>) -> Result<(String, Vec<String>), String> {
         let resolved = self.resolve_for_listing(id)?;
-        let profile = resolved.profile;
-        let url = models_url(&profile);
+        let models = self.fetch_model_ids(&resolved).await?;
+        if !models.is_empty() {
+            self.providers
+                .mark_models(&resolved.profile.id, models.clone())?;
+        }
+        Ok((resolved.profile.id, models))
+    }
+
+    async fn fetch_model_ids(&self, resolved: &ResolvedProvider) -> Result<Vec<String>, String> {
+        let profile = &resolved.profile;
+        let url = models_url(profile);
         let mut request = self.client.get(&url);
         if let Some(key) = resolved.api_key.as_deref() {
             request = match profile.auth_mode() {
@@ -322,6 +341,9 @@ impl ModelGateway {
                 AuthMode::Bearer => request.header("authorization", format!("Bearer {key}")),
                 AuthMode::None => request,
             };
+        }
+        if profile.protocol == phi_contracts::provider::Protocol::AnthropicMessages {
+            request = request.header("anthropic-version", "2023-06-01");
         }
         for (key, value) in &profile.headers {
             request = request.header(key, value);
@@ -369,10 +391,7 @@ impl ModelGateway {
         }
         models.sort();
         models.dedup();
-        if !models.is_empty() {
-            self.providers.mark_models(&profile.id, models.clone())?;
-        }
-        Ok((profile.id, models))
+        Ok(models)
     }
 
     pub async fn test_provider(
@@ -380,8 +399,10 @@ impl ModelGateway {
         id: Option<&str>,
     ) -> phi_contracts::provider::ProviderTestView {
         let started = Instant::now();
-        match self.list_models(id).await {
-            Ok((_, models)) => phi_contracts::provider::ProviderTestView {
+        // Testing connectivity must not mutate the provider's model list;
+        // only an explicit fetch does that.
+        match self.preview_models(id).await {
+            Ok(models) => phi_contracts::provider::ProviderTestView {
                 ok: true,
                 latency_ms: started.elapsed().as_millis() as u64,
                 model_count: models.len(),
@@ -477,9 +498,14 @@ impl ModelPort for ModelGateway {
 }
 
 fn cancelled_error() -> ModelError {
-    ModelError {
-        message: "cancelled".to_string(),
-        retryable: false,
+    ModelError::new("cancelled", false)
+}
+
+fn partial_text(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text.to_string())
     }
 }
 
@@ -554,30 +580,6 @@ mod tests {
     use phi_contracts::provider::{ModelSpec, ProviderInput};
 
     #[test]
-    fn cost_accounts_for_cache_read_and_write() {
-        let pricing = Pricing {
-            input_per_mtok: 3.0,
-            output_per_mtok: 15.0,
-            cache_read_per_mtok: Some(0.3),
-            cache_write_per_mtok: Some(3.75),
-        };
-        let cost = compute_cost(pricing, 1_000_000, 0, 1_000_000, 1_000_000);
-        assert!((cost - (3.0 + 0.3 + 3.75)).abs() < 1e-9, "cost={cost}");
-    }
-
-    #[test]
-    fn unknown_cache_prices_fall_back_to_the_input_price() {
-        let pricing = Pricing {
-            input_per_mtok: 2.0,
-            output_per_mtok: 10.0,
-            cache_read_per_mtok: None,
-            cache_write_per_mtok: None,
-        };
-        let cost = compute_cost(pricing, 0, 0, 1_000_000, 1_000_000);
-        assert!((cost - 4.0).abs() < 1e-9, "cost={cost}");
-    }
-
-    #[test]
     fn sse_buffer_handles_split_frames_and_crlf() {
         let mut buffer = SseBuffer::default();
         buffer.push(b"event: message_start\ndata: {\"a\":1}\n\n");
@@ -612,6 +614,7 @@ mod tests {
             messages: vec![phi_domain::message::ChatMessage::user_text("hi")],
             tools: Vec::new(),
             max_output_tokens: 100,
+            thinking: None,
             call_id: "call".into(),
             run_id: "run".into(),
             stream: false,
@@ -654,6 +657,7 @@ mod tests {
             messages: vec![phi_domain::message::ChatMessage::user_text("hi")],
             tools: Vec::new(),
             max_output_tokens: 100,
+            thinking: None,
             call_id: "call".into(),
             run_id: "run".into(),
             stream: false,

@@ -32,7 +32,6 @@ pub struct RunView {
     pub turn_id: String,
     pub state: String,
     pub steps: u64,
-    pub cost_usd: f64,
     /// True when the agent may shape the workbench view for this run.
     pub workbench_mode: bool,
     pub input_tokens: u64,

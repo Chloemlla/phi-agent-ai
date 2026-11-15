@@ -1,7 +1,17 @@
-// Provider editor: identity, credentials, models (auto-configured by model
-// name), role mappings, custom headers and the provider-wide defaults.
+// Provider editor. A new provider is a two-step wizard (connection, then model
+// selection); an existing provider uses the same connection form plus a model
+// list and a collapsible advanced section. All persistence goes through the
+// page's callbacks; this component never writes files directly.
 
-import { For, Index, Show, createEffect, createSignal, on } from "solid-js";
+import {
+  For,
+  Index,
+  Show,
+  createEffect,
+  createSignal,
+  on,
+  onMount,
+} from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { t, tArgs } from "../i18n";
 import {
@@ -14,25 +24,82 @@ import {
   IconRefresh,
   IconTrash,
 } from "../components/Icons";
+import { formatTokens } from "../format";
 import {
+  cloneModel,
   mergeSuggestion,
   modelFromId,
+  normalizeModelId,
   type ModelSpec,
-  type Pricing,
   type ProviderInput,
   type ProviderTestView,
   type ProviderView,
 } from "./types";
-import { PRESETS, type ProviderPreset } from "./presets";
+
+const PROTOCOL_OPTIONS = ["openai_chat", "openai_responses", "anthropic_messages"] as const;
 
 function errorText(error: unknown): string {
   return typeof error === "string" ? error : String(error);
 }
 
-function numberOrNull(value: string): number | null {
-  if (value.trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+function entries(map: Record<string, string> | undefined): { key: string; value: string }[] {
+  return Object.entries(map ?? {}).map(([key, value]) => ({ key, value }));
+}
+
+function formatWindow(value: number | null | undefined): string {
+  return value != null && value > 0 ? formatTokens(value) : "";
+}
+
+function parseModelIds(raw: string): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const part of raw.split(/[\n,]+/)) {
+    const id = part.trim();
+    const key = normalizeModelId(id);
+    if (!id || seen.has(key)) continue;
+    seen.add(key);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function urlMessage(kind: "base" | "website"): string {
+  return kind === "base"
+    ? t("Base URL must start with http:// or https://.")
+    : t("Website must start with http:// or https://.");
+}
+
+function urlError(raw: string, kind: "base" | "website"): string {
+  const value = raw.trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? ""
+      : urlMessage(kind);
+  } catch {
+    return urlMessage(kind);
+  }
+}
+
+type FieldErrors = {
+  name?: string;
+  baseUrl?: string;
+  website?: string;
+};
+
+function validateConnection(draft: ProviderInput): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!(draft.name ?? "").trim()) errors.name = t("Name is required.");
+  if (!(draft.baseUrl ?? "").trim()) {
+    errors.baseUrl = t("Base URL is required.");
+  } else {
+    const baseError = urlError(draft.baseUrl ?? "", "base");
+    if (baseError) errors.baseUrl = baseError;
+  }
+  const websiteError = urlError(draft.websiteUrl ?? "", "website");
+  if (websiteError) errors.website = websiteError;
+  return errors;
 }
 
 export function protocolLabel(protocol: string): string {
@@ -48,32 +115,29 @@ export function protocolLabel(protocol: string): string {
   }
 }
 
-export function authLabel(auth: string): string {
-  switch (auth) {
-    case "x_api_key":
-      return t("API key header (x-api-key)");
-    case "bearer":
-      return t("Bearer token");
-    case "none":
-      return t("No authentication");
-    default:
-      return auth;
-  }
-}
-
-function sourceLabel(source: string): string {
-  switch (source) {
-    case "catalog":
-      return t("Auto");
-    case "fetched":
-      return t("Fetched");
-    default:
-      return t("Manual");
-  }
-}
-
-function entries(map: Record<string, string> | undefined): { key: string; value: string }[] {
-  return Object.entries(map ?? {}).map(([key, value]) => ({ key, value }));
+function WizardSteps(props: { step: 1 | 2 }) {
+  return (
+    <div class="wizard-steps" aria-label={t("Progress")}>
+      <span
+        classList={{
+          "wizard-step": true,
+          current: props.step === 1,
+          done: props.step === 2,
+        }}
+      >
+        1 {t("Connection")}
+      </span>
+      <span class="wizard-step-sep">—</span>
+      <span
+        classList={{
+          "wizard-step": true,
+          current: props.step === 2,
+        }}
+      >
+        2 {t("Models")}
+      </span>
+    </div>
+  );
 }
 
 export function ProviderEditor(props: {
@@ -86,31 +150,36 @@ export function ProviderEditor(props: {
   notice: string;
   testResult: ProviderTestView | null;
   onChange: (draft: ProviderInput) => void;
+  /** Persist the connection fields only (no model or models) for step 2. */
+  onPersistDraft: () => Promise<ProviderView | null>;
   onSave: () => void;
+  /** Save the selected models; returns true when the provider was persisted. */
+  onSaveModels: (selected: ModelSpec[]) => Promise<boolean>;
   onTest: () => void;
-  onFetch: () => void;
   onDelete: () => void;
   onActivate: () => void;
   onCancelNew: () => void;
-  onPreset: (preset: ProviderPreset) => void;
 }) {
+  const [step, setStep] = createSignal<1 | 2>(1);
   const [keyInput, setKeyInput] = createSignal("");
   const [showKey, setShowKey] = createSignal(false);
-  const [roles, setRoles] = createSignal<{ key: string; value: string }[]>(
-    entries(props.draft.modelMap),
-  );
   const [headers, setHeaders] = createSignal<{ key: string; value: string }[]>(
     entries(props.draft.headers),
   );
+  const [manualModel, setManualModel] = createSignal("");
+  const [attempted, setAttempted] = createSignal(false);
+  const [addingModel, setAddingModel] = createSignal(false);
 
   createEffect(
     on(
       () => props.selectionKey,
       () => {
+        setStep(1);
         setKeyInput("");
         setShowKey(false);
-        setRoles(entries(props.draft.modelMap));
         setHeaders(entries(props.draft.headers));
+        setManualModel("");
+        setAttempted(false);
       },
       { defer: true },
     ),
@@ -129,102 +198,53 @@ export function ProviderEditor(props: {
   );
 
   const models = () => props.draft.models ?? [];
-  const modelIds = () => models().map((model) => model.id).filter(Boolean);
+  const providerId = () => props.draft.id ?? props.view?.id ?? "";
+  const primaryId = () => (props.draft.model ?? "").trim() || models()[0]?.id || "";
+  const errors = () => validateConnection(props.draft);
+  const hasErrors = () => Object.keys(errors()).length > 0;
 
   function update(patch: Partial<ProviderInput>) {
     props.onChange({ ...props.draft, ...patch });
   }
 
-  function updateModel(index: number, patch: Partial<ModelSpec>) {
-    const next = models().map((model, i) => (i === index ? { ...model, ...patch } : model));
-    update({ models: next });
+  function isPrimary(model: ModelSpec): boolean {
+    return normalizeModelId(primaryId()) === normalizeModelId(model.id);
   }
 
   function removeModel(index: number) {
     const removed = models()[index];
     const next = models().filter((_, i) => i !== index);
     const patch: Partial<ProviderInput> = { models: next };
-    if (removed && props.draft.model === removed.id) {
+    if (removed && normalizeModelId(removed.id) === normalizeModelId(props.draft.model ?? "")) {
       patch.model = next[0]?.id ?? "";
     }
     update(patch);
   }
 
-  function addModel() {
-    update({ models: [...models(), modelFromId("")] });
-  }
-
-  async function suggestModel(index: number) {
-    const model = models()[index];
-    if (!model || !model.id.trim()) return;
-    try {
-      const [suggested] = await invoke<ModelSpec[]>("describe_models", {
-        modelIds: [model.id.trim()],
-      });
-      if (suggested) updateModel(index, mergeSuggestion(models()[index], suggested));
-    } catch {
-      // Suggestion is best-effort; save-time enrichment still runs.
+  async function addManualModel() {
+    const id = manualModel().trim();
+    if (!id || addingModel()) return;
+    const key = normalizeModelId(id);
+    if (models().some((model) => normalizeModelId(model.id) === key)) {
+      setManualModel("");
+      return;
     }
-  }
-
-  async function suggestPrimary() {
-    const id = (props.draft.model ?? "").trim();
-    if (!id || models().some((model) => model.id === id)) return;
+    setAddingModel(true);
+    let spec = modelFromId(id);
     try {
       const [suggested] = await invoke<ModelSpec[]>("describe_models", { modelIds: [id] });
-      update({ models: [...models(), suggested ?? modelFromId(id)] });
+      if (suggested) spec = mergeSuggestion(spec, suggested);
     } catch {
-      update({ models: [...models(), modelFromId(id)] });
+      // Catalogue metadata is best-effort; the id alone is a valid spec.
     }
-  }
-
-  type PricingKey =
-    | "inputPerMtok"
-    | "outputPerMtok"
-    | "cacheReadPerMtok"
-    | "cacheWritePerMtok";
-
-  function updatePricing(side: PricingKey, raw: string) {
-    const current = props.draft.pricing ?? { inputPerMtok: 0, outputPerMtok: 0 };
-    const value = numberOrNull(raw);
-    const next: Pricing = { ...current };
-    if (side === "inputPerMtok" || side === "outputPerMtok") {
-      next[side] = value ?? 0;
-    } else {
-      next[side] = value;
-    }
-    update({ pricing: next });
-  }
-
-  function updateModelPricing(index: number, side: PricingKey, raw: string) {
-    const model = models()[index];
-    if (!model) return;
-    const current = model.pricing ?? { inputPerMtok: 0, outputPerMtok: 0 };
-    const value = numberOrNull(raw);
-    const next: Pricing = { ...current };
-    if (side === "inputPerMtok" || side === "outputPerMtok") {
-      next[side] = value ?? 0;
-    } else {
-      next[side] = value;
-    }
-    updateModel(index, { pricing: next });
-  }
-
-  function clearModelPricing(index: number) {
-    // Keep the cleared price on the next save: a manual spec is not re-filled
-    // from the catalogue for numeric fields.
-    updateModel(index, { pricing: null, source: "manual" });
-  }
-
-  function commitRoles(next: { key: string; value: string }[]) {
-    setRoles(next);
+    spec = { ...spec, enabled: true };
+    const currentPrimary = (props.draft.model ?? "").trim();
     update({
-      modelMap: Object.fromEntries(
-        next
-          .filter((row) => row.key.trim() !== "")
-          .map((row) => [row.key.trim(), row.value.trim()]),
-      ),
+      models: [...models(), spec],
+      ...(currentPrimary ? {} : { model: spec.id }),
     });
+    setManualModel("");
+    setAddingModel(false);
   }
 
   function commitHeaders(next: { key: string; value: string }[]) {
@@ -240,125 +260,179 @@ export function ProviderEditor(props: {
 
   function handleKeyInput(value: string) {
     setKeyInput(value);
-    const next = { ...props.draft };
-    if (value.trim() === "") {
-      delete next.apiKey;
-    } else {
-      next.apiKey = value;
-      if (next.auth === "none") {
-        next.auth = next.protocol === "anthropic_messages" ? "x_api_key" : "bearer";
-      }
-    }
-    props.onChange(next);
+    update({ apiKey: value });
   }
 
   function clearKey() {
     setKeyInput("");
-    update({ apiKey: "", auth: "none" });
+    update({ apiKey: props.view?.keyHint ? "" : undefined });
+  }
+
+  async function handleContinue() {
+    setAttempted(true);
+    if (hasErrors()) return;
+    const saved = await props.onPersistDraft();
+    if (!saved) return;
+    setKeyInput("");
+    setShowKey(false);
+    setStep(2);
+  }
+
+  function handleSave() {
+    setAttempted(true);
+    if (hasErrors()) return;
+    props.onSave();
+  }
+
+  function handleTestConnection() {
+    setAttempted(true);
+    if (hasErrors()) return;
+    props.onTest();
+  }
+
+  /// Persist the connection before previewing models so the fetch uses the
+  /// endpoint and key currently shown in the form.
+  async function handleFetchModels() {
+    setAttempted(true);
+    if (hasErrors()) return;
+    const saved = await props.onPersistDraft();
+    if (!saved) return;
+    setKeyInput("");
+    setShowKey(false);
+    setStep(2);
+  }
+
+  function handleBack() {
+    setAttempted(false);
+    setStep(1);
   }
 
   return (
-    <div class="provider-editor">
-      <div class="provider-editor-head">
-        <div>
-          <h2>{props.isNew ? t("New provider") : props.view?.name || t("Provider")}</h2>
-          <div class="provider-editor-meta">
-            <Show when={props.view?.active}>
-              <span class="provider-active-badge">{t("Active")}</span>
-            </Show>
-            <Show when={props.view}>
-              <span class="mono">{protocolLabel(props.view?.protocol ?? "")}</span>
-              <span class={props.draft.enabled === false ? "dot tone-idle" : "dot tone-ok"} />
-              <span>{props.draft.enabled === false ? t("Disabled") : t("Enabled")}</span>
+    <div class="provider-editor provider-form">
+      <Show
+        when={step() === 1}
+        fallback={
+          <ModelPicker
+            providerId={providerId()}
+            isWizard={props.isNew}
+            existing={props.view?.models.map((model) => model.id) ?? []}
+            busy={props.busy}
+            error={props.error}
+            onBack={handleBack}
+            onCancel={props.onCancelNew}
+            onSave={props.onSaveModels}
+          />
+        }
+      >
+        <div class="editor-head">
+          <div class="editor-head-main">
+            <Show
+              when={props.isNew}
+              fallback={
+                <>
+                  <h2>{props.view?.name || t("Provider")}</h2>
+                  <div class="editor-meta">
+                    <Show when={props.view?.active}>
+                      <span class="provider-active">{t("Active")}</span>
+                    </Show>
+                    <span class="mono">
+                      {protocolLabel(props.draft.protocol ?? "openai_chat")}
+                    </span>
+                  </div>
+                </>
+              }
+            >
+              <h2>{t("New provider")}</h2>
+              <WizardSteps step={1} />
+              <p class="hint">{t("Connect an endpoint, then choose the models to add.")}</p>
             </Show>
           </div>
         </div>
-        <Show when={props.isNew}>
-          <button class="btn default" onClick={props.onCancelNew}>
-            {t("Cancel")}
-          </button>
-        </Show>
-      </div>
 
-      <Show when={props.error}>
-        <div class="banner danger">{props.error}</div>
-      </Show>
-      <Show when={props.notice}>
-        <div class="settings-note">
-          <IconCheck size={14} />
-          {props.notice}
-        </div>
-      </Show>
-
-      <Show when={props.isNew}>
-        <section class="settings-section">
-          <h3>{t("What do you want to connect?")}</h3>
-          <p class="hint">{t("Start from a preset, then adjust any field.")}</p>
-          <div class="preset-grid">
-            <For each={PRESETS}>
-              {(preset) => (
-                <button class="preset" onClick={() => props.onPreset(preset)}>
-                  <span class="preset-name">{preset.name}</span>
-                  <span class="preset-desc">{t(preset.description)}</span>
-                </button>
+        <Show when={props.error || props.notice || props.testResult}>
+          <div class="editor-status">
+            <Show when={props.error}>
+              <div class="inline-error">
+                <IconCircleAlert size={14} />
+                <span>{props.error}</span>
+              </div>
+            </Show>
+            <Show when={props.notice}>
+              <div class="settings-note">
+                <IconCheck size={14} />
+                <span>{props.notice}</span>
+              </div>
+            </Show>
+            <Show when={props.testResult}>
+              {(result) => (
+                <div
+                  classList={{
+                    "inline-note": true,
+                    ok: result().ok,
+                    bad: !result().ok,
+                  }}
+                >
+                  <Show when={result().ok} fallback={<IconCircleAlert size={14} />}>
+                    <IconCheck size={14} />
+                  </Show>
+                  <span>
+                    {result().ok
+                      ? tArgs("Connected in {ms} ms, {count} models available.", {
+                          ms: result().latencyMs,
+                          count: result().modelCount,
+                        })
+                      : tArgs("Connection failed: {error}", {
+                          error: result().error ?? errorText(result()),
+                        })}
+                  </span>
+                </div>
               )}
-            </For>
+            </Show>
           </div>
-        </section>
-      </Show>
+        </Show>
 
-      <section class="settings-section">
-        <h3>{t("Connection")}</h3>
-        <div class="field-grid">
-          <label class="field">
-            <span>{t("Name")}</span>
-            <input
-              value={props.draft.name ?? ""}
-              onInput={(event) => update({ name: event.currentTarget.value })}
-              placeholder={t("My provider")}
-            />
-          </label>
-          <label class="field">
-            <span>{t("Protocol")}</span>
-            <select
-              value={props.draft.protocol ?? "anthropic_messages"}
-              onChange={(event) => {
-                const protocol = event.currentTarget.value;
-                update({
-                  protocol,
-                  auth:
-                    protocol === "anthropic_messages"
-                      ? "x_api_key"
-                      : "bearer",
-                });
-              }}
-            >
-              <For each={["anthropic_messages", "openai_chat", "openai_responses"]}>
-                {(protocol) => <option value={protocol}>{protocolLabel(protocol)}</option>}
-              </For>
-            </select>
-          </label>
-          <label class="field full">
-            <span>{t("Base URL")}</span>
-            <input
-              class="mono"
-              value={props.draft.baseUrl ?? ""}
-              onInput={(event) => update({ baseUrl: event.currentTarget.value })}
-              placeholder="https://api.example.com/v1"
-            />
-          </label>
-          <label class="field">
-            <span>{t("Authentication")}</span>
-            <select
-              value={props.draft.auth ?? "x_api_key"}
-              onChange={(event) => update({ auth: event.currentTarget.value })}
-            >
-              <option value="x_api_key">{authLabel("x_api_key")}</option>
-              <option value="bearer">{authLabel("bearer")}</option>
-              <option value="none">{authLabel("none")}</option>
-            </select>
-          </label>
-          <Show when={props.draft.auth !== "none"}>
+        <section class="editor-section">
+          <h3>{t("Connection")}</h3>
+          <div class="connection-fields">
+            <label class="field">
+              <span>{t("Name")}</span>
+              <input
+                value={props.draft.name ?? ""}
+                onInput={(event) => update({ name: event.currentTarget.value })}
+                placeholder={t("My provider")}
+                autocomplete="off"
+                required
+                aria-invalid={attempted() && Boolean(errors().name)}
+              />
+              <Show when={attempted() && errors().name}>
+                <span class="field-error">{errors().name}</span>
+              </Show>
+            </label>
+
+            <label class="field">
+              <span>{t("Notes")}</span>
+              <input
+                value={props.draft.notes ?? ""}
+                onInput={(event) => update({ notes: event.currentTarget.value })}
+                placeholder={t("Optional note, one line")}
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="field">
+              <span>{t("Website")}</span>
+              <input
+                value={props.draft.websiteUrl ?? ""}
+                onInput={(event) => update({ websiteUrl: event.currentTarget.value })}
+                placeholder="https://example.com"
+                autocomplete="off"
+                aria-invalid={attempted() && Boolean(errors().website)}
+              />
+              <Show when={attempted() && errors().website}>
+                <span class="field-error">{errors().website}</span>
+              </Show>
+            </label>
+
             <label class="field">
               <span>{t("API key")}</span>
               <div class="field-row">
@@ -367,12 +441,15 @@ export function ProviderEditor(props: {
                   value={keyInput()}
                   onInput={(event) => handleKeyInput(event.currentTarget.value)}
                   placeholder={
-                    props.view?.hasKey
-                      ? t("Leave empty to keep the current key.")
-                      : t("API key or env:NAME reference")
+                    props.view?.keyHint
+                      ? "••••••••"
+                      : t("API key (optional)")
                   }
+                  autocomplete="off"
+                  spellcheck={false}
                 />
                 <button
+                  type="button"
                   class="icon-btn"
                   title={showKey() ? t("Hide key") : t("Show key")}
                   aria-label={showKey() ? t("Hide key") : t("Show key")}
@@ -383,529 +460,612 @@ export function ProviderEditor(props: {
                   </Show>
                 </button>
               </div>
-              <Show when={props.view?.hasKey && props.draft.apiKey !== ""}>
+              <Show when={props.view?.keyHint}>
                 <span class="field-hint mono">
                   {tArgs("Current key: {hint}", { hint: props.view?.keyHint ?? "" })}
                 </span>
+                <span class="field-hint">{t("Leave empty to keep the current key.")}</span>
               </Show>
-              <Show when={props.draft.apiKey === ""}>
-                <span class="field-hint danger-text">{t("The key will be cleared when you save.")}</span>
+              <Show when={!props.view?.keyHint}>
+                <span class="field-hint">
+                  {t(
+                    "Optional. Leave empty for endpoints that do not require authentication.",
+                  )}
+                </span>
               </Show>
-              <Show when={props.view?.hasKey && props.draft.apiKey !== ""}>
-                <button class="link-button" onClick={clearKey}>
+              <Show when={props.isNew && props.view?.keyHint}>
+                <button type="button" class="link-button" onClick={clearKey}>
                   {t("Clear key")}
                 </button>
               </Show>
+              <Show when={props.view?.keyHint && props.draft.apiKey === ""}>
+                <span class="field-hint danger-text">
+                  {t("The key will be cleared when you save.")}
+                </span>
+                <button
+                  type="button"
+                  class="link-button"
+                  onClick={() => update({ apiKey: undefined })}
+                >
+                  {t("Keep current key")}
+                </button>
+              </Show>
             </label>
-          </Show>
-          <label class="field full">
-            <span>{t("Website")}</span>
-            <input
-              value={props.draft.websiteUrl ?? ""}
-              onInput={(event) => update({ websiteUrl: event.currentTarget.value })}
-              placeholder="https://"
-            />
-          </label>
-          <label class="field full">
-            <span>{t("Notes")}</span>
-            <textarea
-              rows={2}
-              value={props.draft.notes ?? ""}
-              onInput={(event) => update({ notes: event.currentTarget.value })}
-            />
-          </label>
-        </div>
-        <label class="switch-row provider-enabled">
-          <input
-            type="checkbox"
-            checked={props.draft.enabled !== false}
-            onChange={(event) => update({ enabled: event.currentTarget.checked })}
-          />
-          <span class="switch" aria-hidden="true" />
-          <span>{t("Enabled")}</span>
-        </label>
-      </section>
 
-      <section class="settings-section">
-        <div class="settings-section-head">
-          <div>
-            <h3>{t("Models")}</h3>
-            <p class="hint">
-              {t(
-                "Add model ids manually or fetch them from the provider. Metadata is auto-configured from the model name and can be edited.",
-              )}
-            </p>
+            <label class="field">
+              <span>{t("Base URL")}</span>
+              <input
+                class="mono"
+                value={props.draft.baseUrl ?? ""}
+                onInput={(event) => update({ baseUrl: event.currentTarget.value })}
+                placeholder="https://api.example.com/v1"
+                autocomplete="off"
+                spellcheck={false}
+                required
+                aria-invalid={attempted() && Boolean(errors().baseUrl)}
+              />
+              <Show when={attempted() && errors().baseUrl}>
+                <span class="field-error">{errors().baseUrl}</span>
+              </Show>
+            </label>
+
+            <label class="field">
+              <span>{t("Request format")}</span>
+              <select
+                value={props.draft.protocol ?? "openai_chat"}
+                onChange={(event) => update({ protocol: event.currentTarget.value })}
+              >
+                <For each={PROTOCOL_OPTIONS}>
+                  {(protocol) => <option value={protocol}>{protocolLabel(protocol)}</option>}
+                </For>
+              </select>
+            </label>
           </div>
-          <div class="settings-actions">
-            <button class="btn default small" disabled={props.busy} onClick={props.onFetch}>
-              <IconRefresh size={14} />
-              {t("Fetch from provider")}
-            </button>
-            <button class="btn default small" onClick={addModel}>
-              <IconPlus size={14} />
-              {t("Add model")}
-            </button>
-          </div>
-        </div>
+        </section>
 
-        <label class="field">
-          <span>{t("Primary model")}</span>
-          <input
-            class="mono"
-            list="provider-model-ids"
-            value={props.draft.model ?? ""}
-            onInput={(event) => update({ model: event.currentTarget.value })}
-            onBlur={() => void suggestPrimary()}
-            placeholder={t("Model id")}
-          />
-          <datalist id="provider-model-ids">
-            <For each={modelIds()}>{(id) => <option value={id} />}</For>
-          </datalist>
-        </label>
+        <Show when={!props.isNew}>
+          <section class="editor-section">
+            <div class="section-head">
+              <h3>{t("Models")}</h3>
+              <button
+                class="btn"
+                disabled={props.busy || !providerId()}
+                onClick={() => void handleFetchModels()}
+              >
+                <IconRefresh size={14} />
+                {t("Fetch models")}
+              </button>
+            </div>
 
-        <Show
-          when={models().length > 0}
-          fallback={<p class="hint">{t("No models yet. Add one manually or fetch the provider's model list.")}</p>}
-        >
-          <div class="model-list">
-            <Index each={models()}>
-              {(model, index) => (
-                <details
-                  class="model-row"
-                  ref={(element) => {
-                    if (model().id === "") element.open = true;
-                  }}
-                >
-                  <summary class="model-summary">
-                    <input
-                      type="checkbox"
-                      checked={model().enabled}
-                      onClick={(event) => event.stopPropagation()}
-                      onChange={(event) =>
-                        updateModel(index, { enabled: event.currentTarget.checked })
-                      }
-                    />
-                    <span class="model-id mono">{model().id || t("New model")}</span>
-                    <span class="model-name">{model().name !== model().id ? model().name : ""}</span>
-                    <span class="model-tags">
-                      <For each={model().tags.slice(0, 3)}>
-                        {(tag) => <span class="model-tag">{tag}</span>}
-                      </For>
-                    </span>
-                    <span class={`model-source source-${model().source}`}>
-                      {sourceLabel(model().source)}
-                    </span>
-                    <button
-                      class="icon-btn"
-                      title={t("Remove model")}
-                      aria-label={t("Remove model")}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        removeModel(index);
-                      }}
-                    >
-                      <IconTrash size={14} />
-                    </button>
-                  </summary>
-                  <div class="model-body">
-                    <label class="field">
-                      <span>{t("Model id")}</span>
-                      <input
-                        class="mono"
-                        value={model().id}
-                        onInput={(event) => updateModel(index, { id: event.currentTarget.value })}
-                        onBlur={() => void suggestModel(index)}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Display name")}</span>
-                      <input
-                        value={model().name}
-                        onInput={(event) => updateModel(index, { name: event.currentTarget.value })}
-                      />
-                    </label>
-                    <label class="field full">
-                      <span>{t("Description")}</span>
-                      <textarea
-                        rows={2}
-                        value={model().description}
-                        onInput={(event) =>
-                          updateModel(index, { description: event.currentTarget.value })
-                        }
-                        placeholder={t("What is this model good at?")}
-                      />
-                    </label>
-                    <label class="field full">
-                      <span>{t("Tags")}</span>
-                      <input
-                        value={model().tags.join(", ")}
-                        onInput={(event) =>
-                          updateModel(index, {
-                            tags: event.currentTarget.value
-                              .split(",")
-                              .map((tag) => tag.trim())
-                              .filter(Boolean),
-                          })
-                        }
-                        placeholder={t("fast, reasoning, vision")}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Context window")}</span>
-                      <input
-                        class="mono"
-                        inputmode="numeric"
-                        value={model().contextWindow ?? ""}
-                        onInput={(event) =>
-                          updateModel(index, {
-                            contextWindow: numberOrNull(event.currentTarget.value),
-                          })
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Max output tokens")}</span>
-                      <input
-                        class="mono"
-                        inputmode="numeric"
-                        value={model().maxOutputTokens ?? ""}
-                        onInput={(event) =>
-                          updateModel(index, {
-                            maxOutputTokens: numberOrNull(event.currentTarget.value),
-                          })
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Input $/Mtok")}</span>
-                      <input
-                        class="mono"
-                        inputmode="decimal"
-                        value={model().pricing?.inputPerMtok ?? ""}
-                        onInput={(event) =>
-                          updateModelPricing(index, "inputPerMtok", event.currentTarget.value)
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Output $/Mtok")}</span>
-                      <input
-                        class="mono"
-                        inputmode="decimal"
-                        value={model().pricing?.outputPerMtok ?? ""}
-                        onInput={(event) =>
-                          updateModelPricing(index, "outputPerMtok", event.currentTarget.value)
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Cache read $/Mtok")}</span>
-                      <input
-                        class="mono"
-                        inputmode="decimal"
-                        value={model().pricing?.cacheReadPerMtok ?? ""}
-                        onInput={(event) =>
-                          updateModelPricing(index, "cacheReadPerMtok", event.currentTarget.value)
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <label class="field">
-                      <span>{t("Cache write $/Mtok")}</span>
-                      <input
-                        class="mono"
-                        inputmode="decimal"
-                        value={model().pricing?.cacheWritePerMtok ?? ""}
-                        onInput={(event) =>
-                          updateModelPricing(index, "cacheWritePerMtok", event.currentTarget.value)
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <Show when={model().pricing}>
-                      <span class="full field-hint">
-                        <button
-                          class="link-button"
-                          onClick={() => clearModelPricing(index)}
-                        >
-                          {t("Use protocol defaults")}
-                        </button>
-                      </span>
-                    </Show>
-                    <label class="field">
-                      <span>{t("Temperature")}</span>
-                      <input
-                        class="mono"
-                        inputmode="decimal"
-                        value={model().temperature ?? ""}
-                        onInput={(event) =>
-                          updateModel(index, {
-                            temperature: numberOrNull(event.currentTarget.value),
-                          })
-                        }
-                        placeholder={t("Inherit")}
-                      />
-                    </label>
-                    <span class="model-footnote full">
-                      {t(
-                        "Auto-configured from the model name. Edit any field to override; explicit values are kept.",
-                      )}
-                    </span>
-                  </div>
-                </details>
-              )}
-            </Index>
-          </div>
-        </Show>
-      </section>
-
-      <details class="settings-section collapsible">
-        <summary>{t("Model roles")}</summary>
-        <p class="hint">
-          {t(
-            "Roles map a logical name (for example fast or reasoner) to a model id. Agents can request a role instead of a concrete model.",
-          )}
-        </p>
-        <div class="map-editor">
-          <Index each={roles()}>
-            {(role, index) => (
-              <div class="map-row">
-                <input
-                  value={role().key}
-                  onInput={(event) => {
-                    const next = roles().map((row, i) =>
-                      i === index ? { ...row, key: event.currentTarget.value } : row,
-                    );
-                    commitRoles(next);
-                  }}
-                  placeholder={t("Role name")}
-                />
-                <input
-                  class="mono"
-                  list="provider-model-ids"
-                  value={role().value}
-                  onInput={(event) => {
-                    const next = roles().map((row, i) =>
-                      i === index ? { ...row, value: event.currentTarget.value } : row,
-                    );
-                    commitRoles(next);
-                  }}
-                  placeholder={t("Model id")}
-                />
-                <button
-                  class="icon-btn"
-                  title={t("Remove role")}
-                  aria-label={t("Remove role")}
-                  onClick={() => commitRoles(roles().filter((_, i) => i !== index))}
-                >
-                  <IconClose size={14} />
-                </button>
-              </div>
-            )}
-          </Index>
-          <button
-            class="btn default small"
-            onClick={() => commitRoles([...roles(), { key: "", value: "" }])}
-          >
-            <IconPlus size={14} />
-            {t("Add role")}
-          </button>
-        </div>
-      </details>
-
-      <details class="settings-section collapsible">
-        <summary>{t("Custom headers")}</summary>
-        <p class="hint">
-          {t(
-            "Headers are sent with every request. Authorization and x-api-key are managed by the gateway and cannot be overridden here.",
-          )}
-        </p>
-        <div class="map-editor">
-          <Index each={headers()}>
-            {(header, index) => (
-              <div class="map-row">
-                <input
-                  class="mono"
-                  value={header().key}
-                  onInput={(event) => {
-                    const next = headers().map((row, i) =>
-                      i === index ? { ...row, key: event.currentTarget.value } : row,
-                    );
-                    commitHeaders(next);
-                  }}
-                  placeholder={t("Header")}
-                />
-                <input
-                  class="mono"
-                  value={header().value}
-                  onInput={(event) => {
-                    const next = headers().map((row, i) =>
-                      i === index ? { ...row, value: event.currentTarget.value } : row,
-                    );
-                    commitHeaders(next);
-                  }}
-                  placeholder={t("Value")}
-                />
-                <button
-                  class="icon-btn"
-                  title={t("Remove header")}
-                  aria-label={t("Remove header")}
-                  onClick={() => commitHeaders(headers().filter((_, i) => i !== index))}
-                >
-                  <IconClose size={14} />
-                </button>
-              </div>
-            )}
-          </Index>
-          <button
-            class="btn default small"
-            onClick={() => commitHeaders([...headers(), { key: "", value: "" }])}
-          >
-            <IconPlus size={14} />
-            {t("Add header")}
-          </button>
-        </div>
-      </details>
-
-      <details class="settings-section collapsible">
-        <summary>{t("Provider defaults")}</summary>
-        <p class="hint">
-          {t("Used when a model does not declare its own pricing, output limit or temperature.")}
-        </p>
-        <div class="field-grid">
-          <label class="field">
-            <span>{t("Input $/Mtok")}</span>
-            <input
-              class="mono"
-              inputmode="decimal"
-              value={props.draft.pricing?.inputPerMtok ?? ""}
-              onInput={(event) => updatePricing("inputPerMtok", event.currentTarget.value)}
-            />
-          </label>
-          <label class="field">
-            <span>{t("Output $/Mtok")}</span>
-            <input
-              class="mono"
-              inputmode="decimal"
-              value={props.draft.pricing?.outputPerMtok ?? ""}
-              onInput={(event) => updatePricing("outputPerMtok", event.currentTarget.value)}
-            />
-          </label>
-          <label class="field">
-            <span>{t("Cache read $/Mtok")}</span>
-            <input
-              class="mono"
-              inputmode="decimal"
-              value={props.draft.pricing?.cacheReadPerMtok ?? ""}
-              onInput={(event) =>
-                updatePricing("cacheReadPerMtok", event.currentTarget.value)
+            <Show
+              when={models().length > 0}
+              fallback={
+                <p class="hint">
+                  {t("No models yet. Add one manually or fetch the provider's model list.")}
+                </p>
               }
-            />
-          </label>
-          <label class="field">
-            <span>{t("Cache write $/Mtok")}</span>
-            <input
-              class="mono"
-              inputmode="decimal"
-              value={props.draft.pricing?.cacheWritePerMtok ?? ""}
-              onInput={(event) =>
-                updatePricing("cacheWritePerMtok", event.currentTarget.value)
-              }
-            />
-          </label>
-          <span class="full field-hint">
-            <button
-              class="link-button"
-              onClick={() => update({ pricing: undefined, clearPricing: true })}
             >
-              {t("Use protocol defaults")}
-            </button>
-          </span>
-          <label class="field">
-            <span>{t("Max output tokens")}</span>
-            <input
-              class="mono"
-              inputmode="numeric"
-              value={props.draft.maxOutputTokens ?? ""}
-              onInput={(event) =>
-                update({ maxOutputTokens: numberOrNull(event.currentTarget.value) ?? undefined })
-              }
-              placeholder={t("Default")}
-            />
-          </label>
-          <label class="field">
-            <span>{t("Temperature")}</span>
-            <input
-              class="mono"
-              inputmode="decimal"
-              value={props.draft.temperature ?? ""}
-              onInput={(event) =>
-                update({ temperature: numberOrNull(event.currentTarget.value) ?? undefined })
-              }
-              placeholder={t("Default")}
-            />
-          </label>
-        </div>
-      </details>
-
-      <Show when={props.testResult}>
-        {(result) => (
-          <div
-            classList={{
-              "test-result": true,
-              ok: result().ok,
-              bad: !result().ok,
-            }}
-          >
-            <Show when={result().ok} fallback={<IconCircleAlert size={15} />}>
-              <IconCheck size={15} />
+              <ul class="provider-model-list">
+                <For each={models()}>
+                  {(model, index) => (
+                    <li class="provider-model-row">
+                      <span class="provider-model-main">
+                        <span class="provider-model-id mono" title={model.id}>
+                          {model.id}
+                        </span>
+                        <Show when={model.name && model.name !== model.id}>
+                          <span class="provider-model-name" title={model.name}>
+                            {model.name}
+                          </span>
+                        </Show>
+                      </span>
+                      <Show when={isPrimary(model)}>
+                        <span class="model-tag primary">{t("Primary")}</span>
+                      </Show>
+                      <span class="model-tag" title={t("Model scale (1-5)")}>
+                        S{model.scale ?? 3}
+                      </span>
+                      <span
+                        class="provider-model-ctx mono"
+                        title={formatWindow(model.contextWindow)}
+                      >
+                        {formatWindow(model.contextWindow) || "—"}
+                      </span>
+                      <button
+                        class="icon-btn"
+                        title={t("Remove model")}
+                        aria-label={t("Remove model")}
+                        disabled={props.busy}
+                        onClick={() => removeModel(index())}
+                      >
+                        <IconTrash size={14} />
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
             </Show>
-            <span>
-              {result().ok
-                ? tArgs("Connected in {ms} ms, {count} models available.", {
-                    ms: result().latencyMs,
-                    count: result().modelCount,
-                  })
-                : tArgs("Connection failed: {error}", {
-                    error: result().error ?? errorText(result()),
-                  })}
-            </span>
+
+            <form
+              class="model-add-row"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void addManualModel();
+              }}
+            >
+              <input
+                class="mono"
+                value={manualModel()}
+                onInput={(event) => setManualModel(event.currentTarget.value)}
+                placeholder={t("Add model by id")}
+                autocomplete="off"
+                spellcheck={false}
+              />
+              <button
+                class="btn"
+                type="submit"
+                disabled={props.busy || addingModel() || !manualModel().trim()}
+              >
+                <IconPlus size={14} />
+                {t("Add model")}
+              </button>
+            </form>
+          </section>
+
+          <details class="editor-section collapsible">
+            <summary>{t("Advanced")}</summary>
+            <div class="advanced-body">
+              <h4 class="advanced-title">{t("Custom headers")}</h4>
+              <p class="hint">
+                {t(
+                  "Headers are sent with every request. Authorization and x-api-key are managed by the gateway and cannot be overridden here.",
+                )}
+              </p>
+              <div class="map-editor">
+                <Index each={headers()}>
+                  {(header, index) => (
+                    <div class="map-row">
+                      <input
+                        class="mono"
+                        value={header().key}
+                        onInput={(event) => {
+                          const next = headers().map((row, i) =>
+                            i === index ? { ...row, key: event.currentTarget.value } : row,
+                          );
+                          commitHeaders(next);
+                        }}
+                        placeholder={t("Header")}
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                      <input
+                        class="mono"
+                        value={header().value}
+                        onInput={(event) => {
+                          const next = headers().map((row, i) =>
+                            i === index ? { ...row, value: event.currentTarget.value } : row,
+                          );
+                          commitHeaders(next);
+                        }}
+                        placeholder={t("Value")}
+                        autocomplete="off"
+                        spellcheck={false}
+                      />
+                      <button
+                        type="button"
+                        class="icon-btn"
+                        title={t("Remove header")}
+                        aria-label={t("Remove header")}
+                        onClick={() =>
+                          commitHeaders(headers().filter((_, i) => i !== index))
+                        }
+                      >
+                        <IconClose size={14} />
+                      </button>
+                    </div>
+                  )}
+                </Index>
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={() => setHeaders([...headers(), { key: "", value: "" }])}
+                >
+                  <IconPlus size={14} />
+                  {t("Add header")}
+                </button>
+              </div>
+              <Show when={props.view?.keyHint || (props.draft.apiKey ?? "") !== ""}>
+                <div class="advanced-actions">
+                  <button type="button" class="link-button" onClick={clearKey}>
+                    {t("Clear key")}
+                  </button>
+                </div>
+              </Show>
+            </div>
+          </details>
+        </Show>
+
+        <div class="editor-foot">
+          <div class="editor-foot-group">
+            <Show
+              when={props.isNew}
+              fallback={
+                <>
+                  <button class="btn primary" disabled={props.busy} onClick={handleSave}>
+                    {props.busy ? t("Saving…") : t("Save")}
+                  </button>
+                  <button class="btn" disabled={props.busy} onClick={handleTestConnection}>
+                    {t("Test connection")}
+                  </button>
+                  <Show when={props.view && !props.view.active && primaryId()}>
+                    <button class="btn" disabled={props.busy} onClick={props.onActivate}>
+                      {t("Set as active")}
+                    </button>
+                  </Show>
+                </>
+              }
+            >
+              <button class="btn" disabled={props.busy} onClick={props.onCancelNew}>
+                {t("Cancel")}
+              </button>
+              <button
+                class="btn primary"
+                disabled={props.busy}
+                onClick={() => void handleContinue()}
+              >
+                {props.busy ? t("Saving…") : t("Continue")}
+              </button>
+            </Show>
           </div>
-        )}
+          <Show when={!props.isNew}>
+            <button class="btn danger" disabled={props.busy} onClick={props.onDelete}>
+              <IconTrash size={14} />
+              {t("Delete provider")}
+            </button>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function ModelPicker(props: {
+  providerId: string;
+  isWizard: boolean;
+  /** Model ids already stored on the provider; pre-checked when editing. */
+  existing: string[];
+  busy: boolean;
+  error: string;
+  onBack: () => void;
+  onCancel: () => void;
+  onSave: (selected: ModelSpec[]) => Promise<boolean>;
+}) {
+  const [rows, setRows] = createSignal<{ id: string; spec: ModelSpec }[]>([]);
+  const [checked, setChecked] = createSignal<Record<string, boolean>>({});
+  const [loading, setLoading] = createSignal(true);
+  const [fetchError, setFetchError] = createSignal("");
+  const [query, setQuery] = createSignal("");
+  const [manual, setManual] = createSignal("");
+  const [saving, setSaving] = createSignal(false);
+  let loadToken = 0;
+
+  async function load() {
+    const token = ++loadToken;
+    setLoading(true);
+    setFetchError("");
+    try {
+      const ids = await invoke<string[]>("preview_models", {
+        providerId: props.providerId,
+      });
+      if (token !== loadToken) return;
+      const seen = new Set<string>();
+      const unique: string[] = [];
+      for (const raw of ids) {
+        const id = raw.trim();
+        const key = normalizeModelId(id);
+        if (!id || seen.has(key)) continue;
+        seen.add(key);
+        unique.push(id);
+      }
+      let described: ModelSpec[] = [];
+      try {
+        described = await invoke<ModelSpec[]>("describe_models", { modelIds: unique });
+      } catch {
+        // Mapping is advisory; every model still works with default settings.
+      }
+      if (token !== loadToken) return;
+      const byKey = new Map<string, ModelSpec>();
+      for (const spec of described) byKey.set(normalizeModelId(spec.id), spec);
+      const nextRows = unique.map((id) => ({
+        id,
+        spec: byKey.get(normalizeModelId(id)) ?? modelFromId(id),
+      }));
+      setRows(nextRows);
+      const kept = new Set(props.existing.map(normalizeModelId));
+      const nextChecked: Record<string, boolean> = {};
+      for (const row of nextRows) {
+        const key = normalizeModelId(row.id);
+        // A new provider starts with every fetched model selected. When
+        // editing, the list mirrors what is already configured so saving
+        // only adds the models the user newly checks.
+        nextChecked[key] = props.isWizard || kept.has(key);
+      }
+      setChecked(nextChecked);
+    } catch (error) {
+      if (token !== loadToken) return;
+      setRows([]);
+      setChecked({});
+      setFetchError(errorText(error));
+    } finally {
+      if (token === loadToken) setLoading(false);
+    }
+  }
+
+  onMount(() => {
+    void load();
+  });
+
+  const visibleRows = () => {
+    const text = query().trim().toLowerCase();
+    if (!text) return rows();
+    return rows().filter(
+      (row) =>
+        row.id.toLowerCase().includes(text) ||
+        row.spec.name.toLowerCase().includes(text),
+    );
+  };
+
+  const selectedCount = () =>
+    rows().filter((row) => checked()[normalizeModelId(row.id)]).length;
+
+  const selectedSpecs = (): ModelSpec[] =>
+    rows()
+      .filter((row) => checked()[normalizeModelId(row.id)])
+      .map((row) => ({ ...cloneModel(row.spec), id: row.id, enabled: true }));
+
+  function setAllVisible(value: boolean) {
+    const next = { ...checked() };
+    for (const row of visibleRows()) next[normalizeModelId(row.id)] = value;
+    setChecked(next);
+  }
+
+  function toggle(id: string, value: boolean) {
+    const key = normalizeModelId(id);
+    setChecked({ ...checked(), [key]: value });
+  }
+
+  async function addManual() {
+    const ids = parseModelIds(manual());
+    if (ids.length === 0) return;
+    const known = new Set(rows().map((row) => normalizeModelId(row.id)));
+    const fresh = ids.filter((id) => !known.has(normalizeModelId(id)));
+    if (fresh.length === 0) {
+      setManual("");
+      return;
+    }
+    let described: ModelSpec[] = [];
+    try {
+      described = await invoke<ModelSpec[]>("describe_models", { modelIds: fresh });
+    } catch {
+      // Id-only specs are valid; the backend enriches unknown models.
+    }
+    const byKey = new Map<string, ModelSpec>();
+    for (const spec of described) byKey.set(normalizeModelId(spec.id), spec);
+    const nextRows = [
+      ...rows(),
+      ...fresh.map((id) => ({
+        id,
+        spec: byKey.get(normalizeModelId(id)) ?? modelFromId(id),
+      })),
+    ];
+    setRows(nextRows);
+    const nextChecked = { ...checked() };
+    for (const id of fresh) nextChecked[normalizeModelId(id)] = true;
+    setChecked(nextChecked);
+    setManual("");
+  }
+
+  async function handleSave() {
+    const selected = selectedSpecs();
+    if (selected.length === 0 || saving()) return;
+    setSaving(true);
+    try {
+      const saved = await props.onSave(selected);
+      if (saved) props.onBack();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div class="editor-head">
+        <div class="editor-head-main">
+          <h2>{t("Models")}</h2>
+          <Show when={props.isWizard}>
+            <WizardSteps step={2} />
+          </Show>
+          <p class="hint">
+            {t("Select the models to add to this provider.")}
+          </p>
+        </div>
+      </div>
+
+      <Show when={props.error}>
+        <div class="editor-status">
+          <div class="inline-error">
+            <IconCircleAlert size={14} />
+            <span>{props.error}</span>
+          </div>
+        </div>
       </Show>
 
-      <div class="provider-editor-foot">
-        <div class="settings-actions">
-          <button class="btn primary" disabled={props.busy} onClick={props.onSave}>
-            {props.busy ? t("Saving…") : t("Save")}
-          </button>
-          <button class="btn default" disabled={props.busy} onClick={props.onTest}>
-            {t("Test connection")}
-          </button>
+      <section class="editor-section">
+        <Show when={!props.isWizard}>
+          <p class="hint">
+            {t("Existing models are kept; selected models are added.")}
+          </p>
+        </Show>
+
+        <Show when={loading()}>
+          <div class="picker-loading">
+            <span class="ring" aria-hidden="true" />
+            <span>{t("Fetching models…")}</span>
+          </div>
+        </Show>
+
+        <Show when={!loading()}>
+          <p class="hint">{t("Models without a mapping use default settings.")}</p>
+
+          <div class="picker-toolbar">
+            <input
+              class="settings-input picker-search"
+              value={query()}
+              onInput={(event) => setQuery(event.currentTarget.value)}
+              placeholder={t("Search models")}
+              autocomplete="off"
+            />
+            <div class="picker-actions">
+              <button
+                type="button"
+                class="link-button"
+                disabled={visibleRows().length === 0}
+                onClick={() => setAllVisible(true)}
+              >
+                {t("Select all")}
+              </button>
+              <button
+                type="button"
+                class="link-button"
+                disabled={rows().length === 0}
+                onClick={() => setAllVisible(false)}
+              >
+                {t("Select none")}
+              </button>
+            </div>
+          </div>
+
+          <p class="picker-count hint">
+            {tArgs("{selected} of {total} selected", {
+              selected: selectedCount(),
+              total: rows().length,
+            })}
+          </p>
+
+          <Show when={fetchError()}>
+            <div class="picker-failure">
+              <div class="inline-error">
+                <IconCircleAlert size={14} />
+                <span>{fetchError()}</span>
+              </div>
+              <button class="btn" onClick={() => void load()}>
+                <IconRefresh size={14} />
+                {t("Retry")}
+              </button>
+            </div>
+          </Show>
+
           <Show
-            when={
-              props.view &&
-              !props.view.active &&
-              (props.draft.model ?? "").trim() !== ""
+            when={!fetchError() && rows().length === 0}
+            fallback={
+              <div class="model-pick-list">
+                <For each={visibleRows()}>
+                  {(row) => {
+                    const key = normalizeModelId(row.id);
+                    const mapped = () => row.spec.source === "catalog";
+                    const name = () =>
+                      row.spec.name && row.spec.name !== row.id ? row.spec.name : "";
+                    return (
+                      <label class="model-pick-row">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(checked()[key])}
+                          onChange={(event) => toggle(row.id, event.currentTarget.checked)}
+                        />
+                        <span class="model-pick-main">
+                          <span class="model-pick-id mono" title={row.id}>
+                            {row.id}
+                          </span>
+                          <Show when={name()}>
+                            <span class="model-pick-name" title={name()}>
+                              {name()}
+                            </span>
+                          </Show>
+                        </span>
+                        <span class="model-tag" title={t("Model scale (1-5)")}>
+                          S{row.spec.scale ?? 3}
+                        </span>
+                        <span
+                          class="model-pick-ctx mono"
+                          title={formatWindow(row.spec.contextWindow)}
+                        >
+                          {formatWindow(row.spec.contextWindow) || "—"}
+                        </span>
+                        <span
+                          classList={{
+                            "model-pick-badge": true,
+                            mapped: mapped(),
+                          }}
+                        >
+                          {mapped() ? t("Mapped") : t("Defaults")}
+                        </span>
+                      </label>
+                    );
+                  }}
+                </For>
+              </div>
             }
           >
-            <button class="btn default" disabled={props.busy} onClick={props.onActivate}>
-              {t("Set as active")}
+            <p class="hint">{t("The provider returned no models.")}</p>
+          </Show>
+
+          <Show when={!loading() && (Boolean(fetchError()) || rows().length === 0)}>
+            <div class="picker-manual">
+              <p class="hint">{t("Add model IDs manually")}</p>
+              <textarea
+                class="mono"
+                rows={2}
+                value={manual()}
+                onInput={(event) => setManual(event.currentTarget.value)}
+                placeholder={t("Comma or newline separated")}
+                spellcheck={false}
+              />
+              <button
+                class="btn"
+                disabled={!manual().trim()}
+                onClick={() => void addManual()}
+              >
+                <IconPlus size={14} />
+                {t("Add manually")}
+              </button>
+            </div>
+          </Show>
+        </Show>
+      </section>
+
+      <div class="editor-foot">
+        <div class="editor-foot-group">
+          <Show when={props.isWizard}>
+            <button class="btn" disabled={saving() || props.busy} onClick={props.onCancel}>
+              {t("Cancel")}
             </button>
           </Show>
         </div>
-        <Show when={!props.isNew}>
-          <button class="btn danger" disabled={props.busy} onClick={props.onDelete}>
-            <IconTrash size={14} />
-            {t("Delete provider")}
+        <div class="editor-foot-group">
+          <button class="btn" disabled={saving() || props.busy} onClick={props.onBack}>
+            {t("Back")}
           </button>
-        </Show>
+          <button
+            class="btn primary"
+            disabled={saving() || props.busy || selectedCount() === 0}
+            onClick={() => void handleSave()}
+          >
+            {saving() || props.busy
+              ? t("Saving…")
+              : tArgs("Add {count} models", { count: selectedCount() })}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

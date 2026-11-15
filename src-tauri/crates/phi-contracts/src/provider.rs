@@ -72,27 +72,6 @@ impl Protocol {
             Protocol::OpenAiChat | Protocol::OpenAiResponses => AuthMode::Bearer,
         }
     }
-
-    /// Conservative list prices used when a profile does not declare its own.
-    /// They drive the cost figure recorded for each model call; users can
-    /// override them per provider (pricing changes should not silently rewrite
-    /// history).
-    pub fn default_pricing(&self) -> Pricing {
-        match self {
-            Protocol::AnthropicMessages => Pricing {
-                input_per_mtok: 3.0,
-                output_per_mtok: 15.0,
-                cache_read_per_mtok: None,
-                cache_write_per_mtok: None,
-            },
-            Protocol::OpenAiChat | Protocol::OpenAiResponses => Pricing {
-                input_per_mtok: 2.5,
-                output_per_mtok: 10.0,
-                cache_read_per_mtok: None,
-                cache_write_per_mtok: None,
-            },
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,25 +110,12 @@ impl AuthMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Pricing {
-    pub input_per_mtok: f64,
-    pub output_per_mtok: f64,
-    /// Cached-input read price. `None` falls back to the input price.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_per_mtok: Option<f64>,
-    /// Cache-write price. `None` falls back to the input price.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_per_mtok: Option<f64>,
-}
-
 /// One model available through a provider.
 ///
 /// Only `id` (the wire model name) is required. Everything else is advisory
-/// metadata: pricing and output limits shape the recorded usage and the
-/// per-call output cap when present, while `description` and `tags` are
-/// catalogue data for humans and for future model-routing / multi-agent work.
+/// metadata: output limits shape the per-call output cap, `scale` ranks
+/// capability for delegation caps, while `description` and `tags` are
+/// catalogue data for humans and future model routing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSpec {
@@ -164,8 +130,11 @@ pub struct ModelSpec {
     pub context_window: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing: Option<Pricing>,
+    /// Capability scale from 1 (small, fast) to 5 (frontier). Used to keep a
+    /// delegated agent from calling a model larger than its parent; `3` when
+    /// the catalogue has no entry.
+    #[serde(default = "default_scale")]
+    pub scale: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default = "default_true")]
@@ -180,12 +149,12 @@ impl ModelSpec {
         let id = id.into();
         Self {
             name: id.clone(),
+            scale: default_scale(),
             id,
             description: String::new(),
             tags: Vec::new(),
             context_window: None,
             max_output_tokens: None,
-            pricing: None,
             temperature: None,
             enabled: true,
             source: "manual".to_string(),
@@ -208,6 +177,9 @@ impl ModelSpec {
         if self.source.trim().is_empty() {
             self.source = "manual".to_string();
         }
+        if !(1..=5).contains(&self.scale) {
+            self.scale = default_scale();
+        }
         if self
             .temperature
             .is_some_and(|value| !(0.0..=2.0).contains(&value))
@@ -220,16 +192,6 @@ impl ModelSpec {
         if self.context_window == Some(0) {
             self.context_window = None;
         }
-        if self.pricing.is_some_and(|pricing| {
-            pricing.input_per_mtok < 0.0
-                || pricing.output_per_mtok < 0.0
-                || pricing.cache_read_per_mtok.is_some_and(|value| value < 0.0)
-                || pricing
-                    .cache_write_per_mtok
-                    .is_some_and(|value| value < 0.0)
-        }) {
-            self.pricing = None;
-        }
     }
 
     pub fn display_name(&self) -> &str {
@@ -238,6 +200,12 @@ impl ModelSpec {
         } else {
             &self.name
         }
+    }
+
+    /// Whether an agent running this model may delegate work to `child`. A
+    /// delegate may never be more capable than the model that spawned it.
+    pub fn may_delegate_to(&self, child: &ModelSpec) -> bool {
+        child.scale <= self.scale
     }
 }
 
@@ -423,8 +391,6 @@ pub struct ProviderProfile {
     #[serde(default)]
     pub headers: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pricing: Option<Pricing>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -450,6 +416,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_scale() -> u8 {
+    3
+}
+
 /// Provider settings read model. Never contains a credential value.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -470,7 +440,6 @@ pub struct ProviderView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_hint: Option<String>,
     pub auth: String,
-    pub pricing: Pricing,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -503,23 +472,21 @@ impl ProviderProfile {
         self.auth.unwrap_or_else(|| self.protocol.default_auth())
     }
 
-    pub fn pricing_or_default(&self) -> Pricing {
-        self.pricing
-            .unwrap_or_else(|| self.protocol.default_pricing())
-    }
-
     /// Resolve a requested model to a wire model id.
     ///
     /// Empty or `"default"` selects the profile's primary model. Other values
-    /// go through `model_map` first, so a UI label can point at a concrete id.
+    /// go through `model_map` first (keys and input are compared
+    /// case-insensitively, after trimming), so a UI label can point at a
+    /// concrete id.
     pub fn resolve_model(&self, requested: &str) -> String {
         let requested = requested.trim();
         if requested.is_empty() || requested.eq_ignore_ascii_case("default") {
             return self.model.clone();
         }
         self.model_map
-            .get(requested)
-            .cloned()
+            .iter()
+            .find(|(key, _)| key.trim().eq_ignore_ascii_case(requested))
+            .map(|(_, value)| value.trim().to_string())
             .unwrap_or_else(|| requested.to_string())
     }
 
@@ -542,8 +509,8 @@ impl ProviderProfile {
     }
 
     /// A view of this profile with per-model overrides applied. Used by the
-    /// gateway right before a call so pricing, output limits and temperature
-    /// come from the selected model when it declares them.
+    /// gateway right before a call so output limits and temperature come from
+    /// the selected model when it declares them.
     pub fn with_model_overrides(&self, model_id: &str) -> Self {
         let mut profile = self.clone();
         if let Some(spec) = self.model_spec(model_id) {
@@ -552,9 +519,6 @@ impl ProviderProfile {
             }
             if spec.temperature.is_some() {
                 profile.temperature = spec.temperature;
-            }
-            if spec.pricing.is_some() {
-                profile.pricing = spec.pricing;
             }
         }
         profile
@@ -588,15 +552,11 @@ pub struct ProviderInput {
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
     #[serde(default)]
-    pub pricing: Option<Pricing>,
-    #[serde(default)]
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
     /// Patch inputs cannot express "set to null", so these flags let the
     /// settings UI clear a previously configured override.
-    #[serde(default)]
-    pub clear_pricing: bool,
     #[serde(default)]
     pub clear_max_output_tokens: bool,
     #[serde(default)]
@@ -677,7 +637,6 @@ mod tests {
             model_map: HashMap::from([("fast".to_string(), "gpt-5-mini".to_string())]),
             auth: Some(AuthMode::Bearer),
             headers: HashMap::new(),
-            pricing: None,
             max_output_tokens: None,
             temperature: None,
             enabled: true,
@@ -694,6 +653,36 @@ mod tests {
         assert_eq!(profile.resolve_model("gpt-5-nano"), "gpt-5-nano");
         profile.api_key = Some(SecretRef::literal("x"));
         assert!(profile.has_key());
+    }
+
+    #[test]
+    fn model_mapping_is_case_insensitive_and_trims() {
+        let profile = ProviderProfile {
+            id: "p".into(),
+            name: "p".into(),
+            protocol: Protocol::OpenAiChat,
+            base_url: "https://example.com".into(),
+            api_key: None,
+            model: "gpt-5".into(),
+            models: vec![],
+            model_map: HashMap::from([("Fast".to_string(), "gpt-5-mini".to_string())]),
+            auth: Some(AuthMode::Bearer),
+            headers: HashMap::new(),
+            max_output_tokens: None,
+            temperature: None,
+            enabled: true,
+            sort_index: 0,
+            icon: None,
+            icon_color: None,
+            website_url: None,
+            notes: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        assert_eq!(profile.resolve_model("  fast  "), "gpt-5-mini");
+        assert_eq!(profile.resolve_model("FAST"), "gpt-5-mini");
+        assert_eq!(profile.resolve_model("  "), "gpt-5");
+        assert_eq!(profile.resolve_model("DEFAULT"), "gpt-5");
     }
 
     #[test]
@@ -766,12 +755,6 @@ mod tests {
             models: vec![
                 ModelSpec::from_id("gpt-5"),
                 ModelSpec {
-                    pricing: Some(Pricing {
-                        input_per_mtok: 0.25,
-                        output_per_mtok: 2.0,
-                        cache_read_per_mtok: None,
-                        cache_write_per_mtok: None,
-                    }),
                     max_output_tokens: Some(128_000),
                     ..ModelSpec::from_id("gpt-5-mini")
                 },
@@ -779,12 +762,6 @@ mod tests {
             model_map: HashMap::from([("fast".to_string(), "gpt-5-mini".to_string())]),
             auth: Some(AuthMode::Bearer),
             headers: HashMap::new(),
-            pricing: Some(Pricing {
-                input_per_mtok: 9.0,
-                output_per_mtok: 90.0,
-                cache_read_per_mtok: None,
-                cache_write_per_mtok: None,
-            }),
             max_output_tokens: Some(4_096),
             temperature: None,
             enabled: true,
@@ -797,9 +774,22 @@ mod tests {
             updated_at: String::new(),
         };
         let effective = profile.with_model_overrides("gpt-5-mini");
-        let pricing = effective.pricing_or_default();
-        assert_eq!(pricing.input_per_mtok, 0.25);
         assert_eq!(effective.max_output_tokens, Some(128_000));
         assert_eq!(profile.resolved_model("fast"), "gpt-5-mini");
+    }
+
+    #[test]
+    fn model_scale_caps_delegation() {
+        let mut parent = ModelSpec::from_id("claude-opus-5-5");
+        parent.scale = 4;
+        let mut child = ModelSpec::from_id("claude-haiku-5-5");
+        child.scale = 2;
+        assert!(parent.may_delegate_to(&child));
+        assert!(!child.may_delegate_to(&parent));
+
+        let mut invalid = ModelSpec::from_id("custom");
+        invalid.scale = 9;
+        invalid.normalize();
+        assert_eq!(invalid.scale, 3);
     }
 }

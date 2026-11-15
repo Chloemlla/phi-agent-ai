@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use phi_contracts::ports::{ModelError, ModelRequest, ToolDefinition};
+use phi_contracts::ports::{
+    InvalidToolCall, ModelError, ModelRequest, ThinkingEffort, ToolDefinition,
+};
 use phi_contracts::provider::{AuthMode, Protocol, ProviderProfile};
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
 use phi_i18n as i18n;
@@ -33,11 +35,22 @@ pub struct ProtocolResponse {
     /// prompt total are normalized here.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Whether the provider actually reported the field. A reported `0` is
+    /// real (for example a fully cached prompt) and must not be replaced by an
+    /// estimate.
+    pub input_tokens_known: bool,
+    pub output_tokens_known: bool,
     /// Input tokens served from the provider's prompt cache.
     pub cache_read_tokens: u64,
     /// Input tokens written to the provider's prompt cache.
     pub cache_write_tokens: u64,
+    /// Calls whose arguments could not be parsed. Their blocks are still in
+    /// `blocks`; the loop must not execute them.
+    pub invalid_tool_calls: Vec<InvalidToolCall>,
     pub finish_reason: String,
+    /// True when the protocol delivered an explicit terminal marker
+    /// (`message_stop`, `[DONE]`, a stop reason, or `response.completed`).
+    pub saw_terminal: bool,
     pub estimated_usage: bool,
 }
 
@@ -131,13 +144,26 @@ pub fn build_http(
         .map(|limit| req.max_output_tokens.min(limit))
         .unwrap_or(req.max_output_tokens)
         .max(1);
+    // `Off` and `None` are equivalent: leave the provider default untouched.
+    let effort = req.thinking.filter(|effort| *effort != ThinkingEffort::Off);
 
     let body = match profile.protocol {
         Protocol::AnthropicMessages => {
+            let last_assistant = req
+                .messages
+                .iter()
+                .rposition(|message| message.role == Role::Assistant);
             let mut body = json!({
                 "model": model,
                 "max_tokens": max_tokens,
-                "messages": req.messages.iter().map(message_to_anthropic).collect::<Vec<_>>(),
+                "messages": req.messages.iter().enumerate()
+                    .map(|(index, message)| {
+                        // Only the most recent assistant turn's thinking blocks
+                        // are needed for tool-use continuation. Older ones are
+                        // dropped so history edits do not invalidate the request.
+                        message_to_anthropic(message, Some(index) == last_assistant)
+                    })
+                    .collect::<Vec<_>>(),
                 "stream": stream,
             });
             if !req.system.trim().is_empty() {
@@ -149,9 +175,17 @@ pub fn build_http(
                     "cache_control": { "type": "ephemeral" }
                 }]);
             }
-            if let Some(temperature) = profile.temperature {
-                body["temperature"] = json!(temperature);
+            if let Some(effort) = effort {
+                // Current Claude models use adaptive thinking; the effort level
+                // is the only depth control. Legacy `budget_tokens` shapes are
+                // intentionally not supported.
+                body["thinking"] = json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                });
+                body["output_config"] = json!({ "effort": effort.as_str() });
             }
+            // Anthropic rejects temperature/top_p on every current model.
             if !req.tools.is_empty() {
                 body["tools"] = Value::Array(req.tools.iter().map(tool_to_anthropic).collect());
             }
@@ -164,6 +198,10 @@ pub fn build_http(
                 "messages": messages_to_chat(&req.messages),
                 "stream": stream,
             });
+            if stream {
+                // Ask for the final usage chunk; compatible providers ignore it.
+                body["stream_options"] = json!({ "include_usage": true });
+            }
             // Reasoning models reject `max_tokens`; newer Chat Completions
             // models use `max_completion_tokens`.
             if reasoning {
@@ -175,6 +213,11 @@ pub fn build_http(
                 if let Some(temperature) = profile.temperature {
                     body["temperature"] = json!(temperature);
                 }
+            }
+            if let Some(effort) = effort {
+                // Every current model accepts a reasoning effort; providers
+                // that do not know the field ignore it.
+                body["reasoning_effort"] = json!(effort.as_str());
             }
             if !req.tools.is_empty() {
                 body["tools"] = Value::Array(req.tools.iter().map(tool_to_chat).collect());
@@ -197,6 +240,9 @@ pub fn build_http(
                     body["temperature"] = json!(temperature);
                 }
             }
+            if let Some(effort) = effort {
+                body["reasoning"] = json!({ "effort": effort.as_str() });
+            }
             if !req.tools.is_empty() {
                 body["tools"] = Value::Array(req.tools.iter().map(tool_to_responses).collect());
             }
@@ -207,9 +253,9 @@ pub fn build_http(
     Ok(HttpPlan { url, headers, body })
 }
 
-/// OpenAI reasoning models (`o1`, `o3`, `o4`, `gpt-5` families) use
-/// `max_completion_tokens` on Chat Completions and reject sampling parameters
-/// such as `temperature` on both Chat and Responses.
+/// OpenAI reasoning models (the GPT-6 family) use `max_completion_tokens` on
+/// Chat Completions and reject sampling parameters such as `temperature` on
+/// both Chat and Responses.
 fn is_reasoning_model(model: &str) -> bool {
     let model = model
         .rsplit('/')
@@ -217,9 +263,22 @@ fn is_reasoning_model(model: &str) -> bool {
         .unwrap_or(model)
         .trim()
         .to_ascii_lowercase();
-    ["o1", "o3", "o4", "gpt-5"]
-        .iter()
-        .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")))
+    family_match(&model, "gpt-6")
+}
+
+/// Match `prefix` at the start of `id` as a family boundary, so `gpt-5`
+/// matches `gpt-6.1` and `gpt-6-mini` but not `gpt-60`.
+fn family_match(id: &str, prefix: &str) -> bool {
+    match id.strip_prefix(prefix) {
+        Some(rest) => {
+            rest.is_empty()
+                || rest.starts_with('-')
+                || rest.starts_with('.')
+                || rest.starts_with(':')
+                || rest.starts_with('_')
+        }
+        None => false,
+    }
 }
 
 fn auth_headers(
@@ -242,9 +301,6 @@ fn auth_headers(
     match profile.auth_mode() {
         AuthMode::XApiKey => {
             headers.push(("x-api-key".to_string(), key.unwrap_or_default()));
-            if profile.protocol == Protocol::AnthropicMessages {
-                headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
-            }
         }
         AuthMode::Bearer => {
             headers.push((
@@ -254,31 +310,59 @@ fn auth_headers(
         }
         AuthMode::None => {}
     }
+    if profile.protocol == Protocol::AnthropicMessages {
+        headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
+    }
     Ok(headers)
 }
 
-fn message_to_anthropic(message: &ChatMessage) -> Value {
+fn message_to_anthropic(message: &ChatMessage, keep_thinking: bool) -> Value {
     let content: Vec<Value> = message
         .blocks
         .iter()
-        .map(|block| match block {
-            ContentBlock::Text { text } => json!({ "type": "text", "text": text }),
-            ContentBlock::ToolUse { id, name, input } => json!({
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(json!({ "type": "text", "text": text })),
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
+                // An unsigned thinking block cannot be replayed.
+                if keep_thinking && !signature.is_empty() {
+                    Some(json!({
+                        "type": "thinking",
+                        "thinking": thinking,
+                        "signature": signature,
+                    }))
+                } else {
+                    None
+                }
+            }
+            ContentBlock::RedactedThinking { data } => {
+                if keep_thinking && !data.is_empty() {
+                    Some(json!({
+                        "type": "redacted_thinking",
+                        "data": data,
+                    }))
+                } else {
+                    None
+                }
+            }
+            ContentBlock::ToolUse { id, name, input } => Some(json!({
                 "type": "tool_use",
                 "id": id,
                 "name": name,
                 "input": input,
-            }),
+            })),
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
                 is_error,
-            } => json!({
+            } => Some(json!({
                 "type": "tool_result",
                 "tool_use_id": tool_use_id,
                 "content": content,
                 "is_error": is_error,
-            }),
+            })),
         })
         .collect();
     let role = match message.role {
@@ -458,6 +542,7 @@ pub fn parse_response(protocol: Protocol, value: &Value) -> Result<ProtocolRespo
 
 fn parse_anthropic(value: &Value) -> Result<ProtocolResponse, ModelError> {
     let mut blocks = Vec::new();
+    let mut invalid_tool_calls = Vec::new();
     if let Some(content) = value["content"].as_array() {
         for item in content {
             match item["type"].as_str() {
@@ -469,11 +554,36 @@ fn parse_anthropic(value: &Value) -> Result<ProtocolResponse, ModelError> {
                     }
                 }
                 Some("tool_use") => {
-                    blocks.push(ContentBlock::ToolUse {
-                        id: item["id"].as_str().unwrap_or_default().to_string(),
-                        name: item["name"].as_str().unwrap_or_default().to_string(),
-                        input: item["input"].clone(),
-                    });
+                    let id = item["id"].as_str().unwrap_or_default().to_string();
+                    let name = item["name"].as_str().unwrap_or_default().to_string();
+                    let (input, error) = parse_arguments(&item["input"]);
+                    if let Some(error) = error {
+                        invalid_tool_calls.push(InvalidToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            block_index: blocks.len(),
+                            raw_arguments: item["input"].as_str().unwrap_or_default().to_string(),
+                            error,
+                        });
+                    }
+                    blocks.push(ContentBlock::ToolUse { id, name, input });
+                }
+                Some("thinking") => {
+                    let thinking = item["thinking"].as_str().unwrap_or_default();
+                    let signature = item["signature"].as_str().unwrap_or_default();
+                    if !thinking.is_empty() || !signature.is_empty() {
+                        blocks.push(ContentBlock::Thinking {
+                            thinking: thinking.to_string(),
+                            signature: signature.to_string(),
+                        });
+                    }
+                }
+                Some("redacted_thinking") => {
+                    if let Some(data) = item["data"].as_str() {
+                        blocks.push(ContentBlock::RedactedThinking {
+                            data: data.to_string(),
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -494,10 +604,14 @@ fn parse_anthropic(value: &Value) -> Result<ProtocolResponse, ModelError> {
         output_tokens: output_tokens.unwrap_or(0),
         cache_read_tokens,
         cache_write_tokens,
+        invalid_tool_calls,
         finish_reason: value["stop_reason"]
             .as_str()
             .unwrap_or("end_turn")
             .to_string(),
+        input_tokens_known: input_tokens.is_some(),
+        output_tokens_known: output_tokens.is_some(),
+        saw_terminal: true,
         estimated_usage: input_tokens.is_none() || output_tokens.is_none(),
     })
 }
@@ -509,6 +623,7 @@ fn parse_chat(value: &Value) -> Result<ProtocolResponse, ModelError> {
         .ok_or_else(|| model_error(i18n::t("Model response is missing choices")))?;
     let message = &choice["message"];
     let mut blocks = Vec::new();
+    let mut invalid_tool_calls = Vec::new();
 
     if let Some(content) = message.get("content") {
         if let Some(text) = content.as_str() {
@@ -529,14 +644,22 @@ fn parse_chat(value: &Value) -> Result<ProtocolResponse, ModelError> {
     if let Some(calls) = message["tool_calls"].as_array() {
         for call in calls {
             let arguments = &call["function"]["arguments"];
-            blocks.push(ContentBlock::ToolUse {
-                id: call["id"].as_str().unwrap_or_default().to_string(),
-                name: call["function"]["name"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                input: parse_arguments(arguments)?,
-            });
+            let id = call["id"].as_str().unwrap_or_default().to_string();
+            let name = call["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let (input, error) = parse_arguments(arguments);
+            if let Some(error) = error {
+                invalid_tool_calls.push(InvalidToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    block_index: blocks.len(),
+                    raw_arguments: arguments.as_str().unwrap_or_default().to_string(),
+                    error,
+                });
+            }
+            blocks.push(ContentBlock::ToolUse { id, name, input });
         }
     }
 
@@ -560,16 +683,31 @@ fn parse_chat(value: &Value) -> Result<ProtocolResponse, ModelError> {
         output_tokens: output_tokens.unwrap_or(0),
         cache_read_tokens,
         cache_write_tokens: 0,
+        invalid_tool_calls,
         finish_reason: choice["finish_reason"]
             .as_str()
             .unwrap_or("stop")
             .to_string(),
+        input_tokens_known: input_tokens.is_some(),
+        output_tokens_known: output_tokens.is_some(),
+        saw_terminal: true,
         estimated_usage: input_tokens.is_none() || output_tokens.is_none(),
     })
 }
 
 fn parse_responses(value: &Value) -> Result<ProtocolResponse, ModelError> {
+    if value["status"].as_str() == Some("failed") || value.get("error").is_some() {
+        let detail = value["error"]["message"]
+            .as_str()
+            .or_else(|| value["error"].as_str())
+            .unwrap_or("the provider reported a failed response");
+        return Err(model_error(i18n::t_args(
+            "Model response failed: {error}",
+            &[("error", truncate(detail, 500))],
+        )));
+    }
     let mut blocks = Vec::new();
+    let mut invalid_tool_calls = Vec::new();
     if let Some(output) = value["output"].as_array() {
         for item in output {
             match item["type"].as_str() {
@@ -595,15 +733,24 @@ fn parse_responses(value: &Value) -> Result<ProtocolResponse, ModelError> {
                     }
                 }
                 Some("function_call") => {
-                    blocks.push(ContentBlock::ToolUse {
-                        id: item["call_id"]
-                            .as_str()
-                            .or_else(|| item["id"].as_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        name: item["name"].as_str().unwrap_or_default().to_string(),
-                        input: parse_arguments(&item["arguments"])?,
-                    });
+                    let id = item["call_id"]
+                        .as_str()
+                        .or_else(|| item["id"].as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let name = item["name"].as_str().unwrap_or_default().to_string();
+                    let arguments = &item["arguments"];
+                    let (input, error) = parse_arguments(arguments);
+                    if let Some(error) = error {
+                        invalid_tool_calls.push(InvalidToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            block_index: blocks.len(),
+                            raw_arguments: arguments.as_str().unwrap_or_default().to_string(),
+                            error,
+                        });
+                    }
+                    blocks.push(ContentBlock::ToolUse { id, name, input });
                 }
                 _ => {}
             }
@@ -620,10 +767,17 @@ fn parse_responses(value: &Value) -> Result<ProtocolResponse, ModelError> {
     let input_tokens = prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens));
     let output_tokens = usage["output_tokens"].as_u64();
     let finish_reason = match value["status"].as_str() {
-        Some("incomplete") => value["incomplete_details"]["reason"]
-            .as_str()
-            .unwrap_or("length")
-            .to_string(),
+        Some("incomplete") => {
+            // OpenAI names the output cap differently from Chat Completions;
+            // normalize it so the loop's truncation recovery sees it.
+            match value["incomplete_details"]["reason"]
+                .as_str()
+                .unwrap_or("length")
+            {
+                "max_output_tokens" => "length".to_string(),
+                other => other.to_string(),
+            }
+        }
         _ => "end_turn".to_string(),
     };
     Ok(ProtocolResponse {
@@ -632,35 +786,116 @@ fn parse_responses(value: &Value) -> Result<ProtocolResponse, ModelError> {
         output_tokens: output_tokens.unwrap_or(0),
         cache_read_tokens,
         cache_write_tokens: 0,
+        invalid_tool_calls,
         finish_reason,
+        input_tokens_known: input_tokens.is_some(),
+        output_tokens_known: output_tokens.is_some(),
+        saw_terminal: true,
         estimated_usage: input_tokens.is_none() || output_tokens.is_none(),
     })
 }
 
-fn parse_arguments(value: &Value) -> Result<Value, ModelError> {
+/// Parse tool arguments without ever failing. Returns the best-effort value
+/// and an error string when recovery did not produce valid JSON.
+///
+/// A malformed call must not abort the whole model response: the assistant
+/// text and the tool block are still returned, and the loop sends a paired
+/// tool_result error instead of executing the tool.
+fn parse_arguments(value: &Value) -> (Value, Option<String>) {
     match value {
-        Value::String(raw) => {
-            if raw.trim().is_empty() {
-                Ok(json!({}))
-            } else {
-                serde_json::from_str(raw).map_err(|error| {
-                    model_error(i18n::t_args(
-                        "Tool arguments are not valid JSON: {error}",
-                        &[("error", error.to_string())],
-                    ))
-                })
-            }
-        }
-        Value::Null => Ok(json!({})),
-        other => Ok(other.clone()),
+        Value::String(raw) => parse_raw_arguments(raw),
+        Value::Null => (json!({}), None),
+        other => (other.clone(), None),
     }
 }
 
-pub fn model_error(message: impl Into<String>) -> ModelError {
-    ModelError {
-        message: message.into(),
-        retryable: false,
+fn parse_raw_arguments(raw: &str) -> (Value, Option<String>) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") {
+        return (json!({}), None);
     }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return (value, None);
+    }
+    let error = serde_json::from_str::<Value>(trimmed)
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| i18n::t("Tool arguments are not valid JSON"));
+    // Models sometimes wrap JSON in markdown fences or prose. Recover the
+    // outermost balanced object or array before giving up.
+    let mut candidates: Vec<&str> = Vec::new();
+    if let Some(unfenced) = strip_code_fence(trimmed) {
+        candidates.push(unfenced);
+    }
+    candidates.push(trimmed);
+    for candidate in candidates {
+        if let Some(json_text) = extract_balanced_json(candidate) {
+            // Reject ambiguous output like `{...} {...}`: the trailing text
+            // must be whitespace, not a second payload.
+            let end = json_text.as_ptr() as usize + json_text.len();
+            let trailing = &candidate[end - candidate.as_ptr() as usize..];
+            // Trailing prose is fine; a second object/array is ambiguous.
+            if trailing.contains('{') || trailing.contains('[') {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(json_text) {
+                return (value, None);
+            }
+        }
+    }
+    (json!({}), Some(error))
+}
+
+fn strip_code_fence(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    let after_open = trimmed.strip_prefix("```")?;
+    let after_language = match after_open.find('\n') {
+        Some(index) => &after_open[index + 1..],
+        None => "",
+    };
+    let without_close = after_language.trim_end();
+    let without_close = without_close.strip_suffix("```").unwrap_or(without_close);
+    Some(without_close.trim())
+}
+
+/// Extract the outermost balanced `{...}` or `[...]` without trusting the
+/// surrounding text. String literals and escapes are skipped so braces inside
+/// values do not end the candidate early.
+fn extract_balanced_json(raw: &str) -> Option<&str> {
+    let start = raw.find(|c| c == '{' || c == '[')?;
+    let bytes = raw.as_bytes();
+    let open = bytes[start];
+    let close = if open == b'{' { b'}' } else { b']' };
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, &byte) in bytes[start..].iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+        } else if byte == open {
+            depth += 1;
+        } else if byte == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(&raw[start..start + offset + 1]);
+            }
+        }
+    }
+    None
+}
+
+pub fn model_error(message: impl Into<String>) -> ModelError {
+    ModelError::new(message, false)
 }
 
 /// Stable, human-readable classification for HTTP failures. The prefixes are
@@ -675,10 +910,7 @@ pub fn parse_http_error(status: u16, body: &str) -> ModelError {
         500..=599 => ("server", true),
         _ => ("http", false),
     };
-    ModelError {
-        message: format!("{kind}: HTTP {status}: {detail}"),
-        retryable,
-    }
+    ModelError::new(format!("{kind}: HTTP {status}: {detail}"), retryable)
 }
 
 fn extract_error_detail(body: &str) -> String {
@@ -713,6 +945,11 @@ pub fn conservative_request_tokens(req: &ModelRequest) -> (u64, u64) {
         for block in &message.blocks {
             bytes += match block {
                 ContentBlock::Text { text } => text.len(),
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => thinking.len() + signature.len(),
+                ContentBlock::RedactedThinking { data } => data.len(),
                 ContentBlock::ToolUse { input, .. } => input.to_string().len(),
                 ContentBlock::ToolResult { content, .. } => content.len(),
             };
@@ -734,10 +971,16 @@ struct AnthropicDecoder {
     cache_read_tokens: u64,
     cache_write_tokens: u64,
     stop_reason: Option<String>,
+    saw_terminal: bool,
 }
 
 enum BlockAccum {
     Text(String),
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    RedactedThinking(String),
     Tool {
         id: String,
         name: String,
@@ -772,6 +1015,23 @@ impl StreamDecoder for AnthropicDecoder {
                 match value["content_block"]["type"].as_str() {
                     Some("text") => {
                         self.blocks.insert(index, BlockAccum::Text(String::new()));
+                    }
+                    Some("thinking") => {
+                        self.blocks.insert(
+                            index,
+                            BlockAccum::Thinking {
+                                thinking: String::new(),
+                                signature: String::new(),
+                            },
+                        );
+                    }
+                    Some("redacted_thinking") => {
+                        let data = value["content_block"]["data"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string();
+                        self.blocks
+                            .insert(index, BlockAccum::RedactedThinking(data));
                     }
                     Some("tool_use") => {
                         let id = value["content_block"]["id"]
@@ -826,6 +1086,26 @@ impl StreamDecoder for AnthropicDecoder {
                             }
                         }
                     }
+                    "thinking_delta" => {
+                        if let Some(thinking) = value["delta"]["thinking"].as_str() {
+                            if let Some(BlockAccum::Thinking {
+                                thinking: buffer, ..
+                            }) = self.blocks.get_mut(&index)
+                            {
+                                buffer.push_str(thinking);
+                            }
+                        }
+                    }
+                    "signature_delta" => {
+                        if let Some(signature) = value["delta"]["signature"].as_str() {
+                            if let Some(BlockAccum::Thinking {
+                                signature: buffer, ..
+                            }) = self.blocks.get_mut(&index)
+                            {
+                                buffer.push_str(signature);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -838,12 +1118,16 @@ impl StreamDecoder for AnthropicDecoder {
             "message_delta" => {
                 if let Some(reason) = value["delta"]["stop_reason"].as_str() {
                     self.stop_reason = Some(reason.to_string());
+                    self.saw_terminal = true;
                 }
                 if let Some(output) = value["usage"]["output_tokens"].as_u64() {
                     self.output_tokens = Some(output);
                 }
             }
-            "message_stop" => deltas.push(StreamDelta::Done),
+            "message_stop" => {
+                self.saw_terminal = true;
+                deltas.push(StreamDelta::Done);
+            }
             "error" => {
                 return Err(model_error(i18n::t_args(
                     "SSE error: {message}",
@@ -864,6 +1148,7 @@ impl StreamDecoder for AnthropicDecoder {
     fn finish(self: Box<Self>) -> Result<ProtocolResponse, ModelError> {
         let this = *self;
         let mut blocks = Vec::new();
+        let mut invalid_tool_calls = Vec::new();
         for (_, block) in this.blocks {
             match block {
                 BlockAccum::Text(text) => {
@@ -871,8 +1156,33 @@ impl StreamDecoder for AnthropicDecoder {
                         blocks.push(ContentBlock::text(text));
                     }
                 }
+                BlockAccum::Thinking {
+                    thinking,
+                    signature,
+                } => {
+                    if !thinking.is_empty() || !signature.is_empty() {
+                        blocks.push(ContentBlock::Thinking {
+                            thinking,
+                            signature,
+                        });
+                    }
+                }
+                BlockAccum::RedactedThinking(data) => {
+                    if !data.is_empty() {
+                        blocks.push(ContentBlock::RedactedThinking { data });
+                    }
+                }
                 BlockAccum::Tool { id, name, args } => {
-                    let input = parse_arguments(&Value::String(args))?;
+                    let (input, error) = parse_arguments(&Value::String(args.clone()));
+                    if let Some(error) = error {
+                        invalid_tool_calls.push(InvalidToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            block_index: blocks.len(),
+                            raw_arguments: args,
+                            error,
+                        });
+                    }
                     blocks.push(ContentBlock::ToolUse { id, name, input });
                 }
             }
@@ -886,7 +1196,11 @@ impl StreamDecoder for AnthropicDecoder {
             output_tokens: this.output_tokens.unwrap_or(0),
             cache_read_tokens: this.cache_read_tokens,
             cache_write_tokens: this.cache_write_tokens,
+            invalid_tool_calls,
             finish_reason: this.stop_reason.unwrap_or_else(|| "end_turn".to_string()),
+            input_tokens_known: this.input_tokens.is_some(),
+            output_tokens_known: this.output_tokens.is_some(),
+            saw_terminal: this.saw_terminal,
             estimated_usage: this.input_tokens.is_none() || this.output_tokens.is_none(),
         })
     }
@@ -900,6 +1214,7 @@ struct ChatDecoder {
     output_tokens: Option<u64>,
     cache_read_tokens: u64,
     finish_reason: Option<String>,
+    saw_terminal: bool,
 }
 
 #[derive(Default)]
@@ -916,6 +1231,7 @@ impl StreamDecoder for ChatDecoder {
             return Ok(Vec::new());
         }
         if data.trim() == "[DONE]" {
+            self.saw_terminal = true;
             return Ok(vec![StreamDelta::Done]);
         }
         let value: Value = serde_json::from_str(data).map_err(|error| {
@@ -955,6 +1271,7 @@ impl StreamDecoder for ChatDecoder {
                 if let Some(finish) = choice["finish_reason"].as_str() {
                     if !finish.is_empty() {
                         self.finish_reason = Some(finish.to_string());
+                        self.saw_terminal = true;
                     }
                 }
                 let delta = &choice["delta"];
@@ -1007,14 +1324,26 @@ impl StreamDecoder for ChatDecoder {
     fn finish(self: Box<Self>) -> Result<ProtocolResponse, ModelError> {
         let this = *self;
         let mut blocks = Vec::new();
+        let mut invalid_tool_calls = Vec::new();
         if !this.text.is_empty() {
             blocks.push(ContentBlock::text(this.text));
         }
         for (_, tool) in this.tools {
+            let raw_arguments = tool.args;
+            let (input, error) = parse_arguments(&Value::String(raw_arguments.clone()));
+            if let Some(error) = error {
+                invalid_tool_calls.push(InvalidToolCall {
+                    id: tool.id.clone(),
+                    name: tool.name.clone(),
+                    block_index: blocks.len(),
+                    raw_arguments,
+                    error,
+                });
+            }
             blocks.push(ContentBlock::ToolUse {
                 id: tool.id,
                 name: tool.name,
-                input: parse_arguments(&Value::String(tool.args))?,
+                input,
             });
         }
         if blocks.is_empty() {
@@ -1026,7 +1355,11 @@ impl StreamDecoder for ChatDecoder {
             output_tokens: this.output_tokens.unwrap_or(0),
             cache_read_tokens: this.cache_read_tokens,
             cache_write_tokens: 0,
+            invalid_tool_calls,
             finish_reason: this.finish_reason.unwrap_or_else(|| "stop".to_string()),
+            input_tokens_known: this.input_tokens.is_some(),
+            output_tokens_known: this.output_tokens.is_some(),
+            saw_terminal: this.saw_terminal,
             estimated_usage: this.input_tokens.is_none() || this.output_tokens.is_none(),
         })
     }
@@ -1041,6 +1374,7 @@ struct ResponsesDecoder {
     cache_read_tokens: u64,
     final_response: Option<Value>,
     finish_reason: Option<String>,
+    saw_terminal: bool,
 }
 
 impl StreamDecoder for ResponsesDecoder {
@@ -1049,6 +1383,7 @@ impl StreamDecoder for ResponsesDecoder {
             return Ok(Vec::new());
         }
         if data.trim() == "[DONE]" {
+            self.saw_terminal = true;
             return Ok(vec![StreamDelta::Done]);
         }
         let value: Value = serde_json::from_str(data).map_err(|error| {
@@ -1116,6 +1451,7 @@ impl StreamDecoder for ResponsesDecoder {
             }
             "response.completed" => {
                 self.final_response = Some(value["response"].clone());
+                self.saw_terminal = true;
                 if let Some(usage) = value["response"].get("usage") {
                     let cache_read = usage["input_tokens_details"]["cached_tokens"]
                         .as_u64()
@@ -1131,6 +1467,7 @@ impl StreamDecoder for ResponsesDecoder {
             "response.incomplete" => {
                 self.final_response = Some(value["response"].clone());
                 self.finish_reason = Some("length".to_string());
+                self.saw_terminal = true;
                 deltas.push(StreamDelta::Done);
             }
             "response.failed" | "error" => {
@@ -1155,14 +1492,26 @@ impl StreamDecoder for ResponsesDecoder {
             return parse_responses(&response);
         }
         let mut blocks = Vec::new();
+        let mut invalid_tool_calls = Vec::new();
         if !this.text.is_empty() {
             blocks.push(ContentBlock::text(this.text));
         }
         for (_, tool) in this.tools {
+            let raw_arguments = tool.args;
+            let (input, error) = parse_arguments(&Value::String(raw_arguments.clone()));
+            if let Some(error) = error {
+                invalid_tool_calls.push(InvalidToolCall {
+                    id: tool.id.clone(),
+                    name: tool.name.clone(),
+                    block_index: blocks.len(),
+                    raw_arguments,
+                    error,
+                });
+            }
             blocks.push(ContentBlock::ToolUse {
                 id: tool.id,
                 name: tool.name,
-                input: parse_arguments(&Value::String(tool.args))?,
+                input,
             });
         }
         if blocks.is_empty() {
@@ -1174,7 +1523,11 @@ impl StreamDecoder for ResponsesDecoder {
             output_tokens: this.output_tokens.unwrap_or(0),
             cache_read_tokens: this.cache_read_tokens,
             cache_write_tokens: 0,
+            invalid_tool_calls,
             finish_reason: this.finish_reason.unwrap_or_else(|| "end_turn".to_string()),
+            input_tokens_known: this.input_tokens.is_some(),
+            output_tokens_known: this.output_tokens.is_some(),
+            saw_terminal: this.saw_terminal,
             estimated_usage: this.input_tokens.is_none() || this.output_tokens.is_none(),
         })
     }
@@ -1183,7 +1536,6 @@ impl StreamDecoder for ResponsesDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phi_contracts::provider::Pricing;
     use std::collections::HashMap;
 
     fn profile(protocol: Protocol) -> ProviderProfile {
@@ -1198,12 +1550,6 @@ mod tests {
             model_map: HashMap::new(),
             auth: None,
             headers: HashMap::new(),
-            pricing: Some(Pricing {
-                input_per_mtok: 1.0,
-                output_per_mtok: 2.0,
-                cache_read_per_mtok: Some(0.1),
-                cache_write_per_mtok: Some(1.25),
-            }),
             max_output_tokens: None,
             temperature: None,
             enabled: true,
@@ -1244,6 +1590,7 @@ mod tests {
                 side_effect: phi_contracts::ports::SideEffect::None,
             }],
             max_output_tokens: 100,
+            thinking: None,
             call_id: "call".into(),
             run_id: "run".into(),
             stream: true,
@@ -1304,7 +1651,7 @@ mod tests {
     #[test]
     fn reasoning_models_use_max_completion_tokens_and_skip_temperature() {
         let mut p = profile(Protocol::OpenAiChat);
-        p.model = "o3-mini".into();
+        p.model = "gpt-6-astra".into();
         p.temperature = Some(0.2);
         let plan = build_http(&p, &request(), false).unwrap();
         assert_eq!(plan.body["max_completion_tokens"], 100);
@@ -1421,6 +1768,35 @@ mod tests {
         }
         assert_eq!(response.input_tokens, 10);
         assert!(!response.estimated_usage);
+        assert!(response.invalid_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn responses_incomplete_output_cap_is_truncation() {
+        let value = json!({
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_truncated",
+                "name": "fs_write",
+                "arguments": "{\"path\":"
+            }],
+            "usage": { "input_tokens": 5, "output_tokens": 2 }
+        });
+        let response = parse_response(Protocol::OpenAiResponses, &value).unwrap();
+        assert_eq!(response.finish_reason, "length");
+        assert_eq!(response.invalid_tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn responses_failed_status_is_an_error() {
+        let value = json!({
+            "status": "failed",
+            "error": { "message": "upstream exploded" }
+        });
+        let error = parse_response(Protocol::OpenAiResponses, &value).unwrap_err();
+        assert!(error.message.contains("upstream exploded"));
     }
 
     #[test]
@@ -1494,6 +1870,7 @@ mod tests {
         assert_eq!(response.input_tokens, 4);
         assert_eq!(response.output_tokens, 9);
         assert_eq!(response.finish_reason, "tool_use");
+        assert!(response.invalid_tool_calls.is_empty());
         match &response.blocks[1] {
             ContentBlock::ToolUse { id, input, .. } => {
                 assert_eq!(id, "call_1");
@@ -1501,6 +1878,85 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn anthropic_thinking_blocks_are_preserved_and_replayed() {
+        // Non-streaming parse keeps the thinking block and its signature.
+        let value = json!({
+            "content": [
+                {"type": "thinking", "thinking": "consider the file", "signature": "sig-1"},
+                {"type": "text", "text": "I will read it."}
+            ],
+            "usage": {"input_tokens": 5, "output_tokens": 7},
+            "stop_reason": "end_turn"
+        });
+        let response = parse_response(Protocol::AnthropicMessages, &value).unwrap();
+        match &response.blocks[0] {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
+                assert_eq!(thinking, "consider the file");
+                assert_eq!(signature, "sig-1");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        // The assistant message is replayed to Anthropic with the block intact.
+        let message = ChatMessage {
+            role: Role::Assistant,
+            blocks: response.blocks,
+        };
+        let wire = message_to_anthropic(&message, true);
+        assert_eq!(wire["content"][0]["type"], "thinking");
+        assert_eq!(wire["content"][0]["thinking"], "consider the file");
+        assert_eq!(wire["content"][0]["signature"], "sig-1");
+    }
+
+    #[test]
+    fn anthropic_sse_collects_thinking_and_redacted_blocks() {
+        let mut decoder = decoder(Protocol::AnthropicMessages);
+        let events = vec![
+            (
+                "content_block_start",
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+            ),
+            (
+                "content_block_delta",
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me think"}}),
+            ),
+            (
+                "content_block_delta",
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-2"}}),
+            ),
+            (
+                "content_block_stop",
+                json!({"type":"content_block_stop","index":0}),
+            ),
+            (
+                "content_block_start",
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque"}}),
+            ),
+            (
+                "content_block_stop",
+                json!({"type":"content_block_stop","index":1}),
+            ),
+            ("message_stop", json!({"type":"message_stop"})),
+        ];
+        for (event, value) in events {
+            decoder.feed(event, &value.to_string()).unwrap();
+        }
+        let response = decoder.finish().unwrap();
+        assert!(matches!(
+            &response.blocks[0],
+            ContentBlock::Thinking { thinking, signature }
+                if thinking == "let me think" && signature == "sig-2"
+        ));
+        assert!(matches!(
+            &response.blocks[1],
+            ContentBlock::RedactedThinking { data } if data == "opaque"
+        ));
     }
 
     #[test]
@@ -1558,6 +2014,208 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(response.input_tokens, 5);
+    }
+
+    #[test]
+    fn anthropic_adaptive_thinking_uses_effort_and_omits_temperature() {
+        let mut p = profile(Protocol::AnthropicMessages);
+        p.model = "claude-sonnet-5-5".into();
+        p.temperature = Some(0.3);
+        p.max_output_tokens = Some(4_096);
+        let mut req = request();
+        req.max_output_tokens = 4_096;
+        req.thinking = Some(ThinkingEffort::High);
+        let plan = build_http(&p, &req, false).unwrap();
+        assert_eq!(plan.body["thinking"]["type"], "adaptive");
+        assert_eq!(plan.body["thinking"]["display"], "summarized");
+        assert_eq!(plan.body["output_config"]["effort"], "high");
+        assert_eq!(
+            plan.body["max_tokens"].as_u64().unwrap(),
+            4_096,
+            "adaptive thinking must not exceed the model output cap"
+        );
+        assert!(
+            plan.body.get("temperature").is_none(),
+            "Anthropic rejects temperature on current models"
+        );
+    }
+
+    #[test]
+    fn off_thinking_omits_protocol_fields() {
+        let mut p = profile(Protocol::AnthropicMessages);
+        p.model = "claude-sonnet-5-5".into();
+        p.temperature = Some(0.3);
+        let mut req = request();
+        req.thinking = Some(ThinkingEffort::Off);
+        let plan = build_http(&p, &req, false).unwrap();
+        assert!(plan.body.get("thinking").is_none());
+        assert!(plan.body.get("output_config").is_none());
+        assert!(
+            plan.body.get("temperature").is_none(),
+            "temperature is never valid on current Anthropic models"
+        );
+
+        let p = profile(Protocol::OpenAiChat);
+        let mut req = request();
+        req.thinking = Some(ThinkingEffort::Off);
+        let plan = build_http(&p, &req, false).unwrap();
+        assert!(plan.body.get("reasoning_effort").is_none());
+
+        let mut p = profile(Protocol::OpenAiResponses);
+        p.model = "gpt-6-sol".into();
+        let plan = build_http(&p, &req, false).unwrap();
+        assert!(plan.body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn chat_thinking_sets_reasoning_effort() {
+        let mut p = profile(Protocol::OpenAiChat);
+        p.model = "gpt-6-astra".into();
+        let mut req = request();
+        req.thinking = Some(ThinkingEffort::Low);
+        let plan = build_http(&p, &req, false).unwrap();
+        assert_eq!(plan.body["reasoning_effort"], "low");
+
+        // Compatibility providers serving custom ids receive the same effort
+        // field; APIs that do not know it ignore it.
+        p.model = "custom-reasoner".into();
+        let plan = build_http(&p, &req, false).unwrap();
+        assert_eq!(plan.body["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn responses_thinking_sets_the_reasoning_object() {
+        let mut p = profile(Protocol::OpenAiResponses);
+        p.model = "gpt-6-sol".into();
+        let mut req = request();
+        req.thinking = Some(ThinkingEffort::Medium);
+        let plan = build_http(&p, &req, false).unwrap();
+        assert_eq!(plan.body["reasoning"]["effort"], "medium");
+    }
+
+    #[test]
+    fn malformed_chat_arguments_keep_text_and_emit_a_block() {
+        let value = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "I will write the file.",
+                    "tool_calls": [{
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {"name": "fs_write", "arguments": "{\"path\": src/main.rs}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+        let response = parse_response(Protocol::OpenAiChat, &value).unwrap();
+        match &response.blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "I will write the file."),
+            other => panic!("unexpected {other:?}"),
+        }
+        match &response.blocks[1] {
+            ContentBlock::ToolUse { id, input, .. } => {
+                assert_eq!(id, "call_bad");
+                assert_eq!(input, &json!({}));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(response.invalid_tool_calls.len(), 1);
+        assert_eq!(response.invalid_tool_calls[0].id, "call_bad");
+        assert_eq!(response.invalid_tool_calls[0].name, "fs_write");
+        assert!(!response.invalid_tool_calls[0].error.is_empty());
+    }
+
+    #[test]
+    fn fenced_and_wrapped_json_arguments_are_recovered() {
+        for arguments in [
+            "```json\n{\"path\":\".\"}\n```",
+            "Here is the call: {\"path\":\".\"} thanks",
+            "{\"path\":\".\"}",
+        ] {
+            let value = json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call_ok",
+                            "type": "function",
+                            "function": {"name": "fs_list", "arguments": arguments}
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            });
+            let response = parse_response(Protocol::OpenAiChat, &value).unwrap();
+            assert!(
+                response.invalid_tool_calls.is_empty(),
+                "should recover {arguments}"
+            );
+            match &response.blocks[0] {
+                ContentBlock::ToolUse { input, .. } => assert_eq!(input["path"], "."),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn chat_sse_malformed_arguments_do_not_fail_the_response() {
+        let mut decoder = decoder(Protocol::OpenAiChat);
+        decoder
+            .feed(
+                "",
+                &json!({"choices":[{"delta":{"content":"Looking."}}]}).to_string(),
+            )
+            .unwrap();
+        decoder
+            .feed(
+                "",
+                &json!({"choices":[{
+                    "delta":{"tool_calls":[{
+                        "index":0,
+                        "id":"call_bad",
+                        "function":{"name":"fs_write","arguments":"{\"path\": src/main.rs}"}
+                    }]},
+                    "finish_reason":"tool_calls"
+                }]})
+                .to_string(),
+            )
+            .unwrap();
+        let response = decoder.finish().unwrap();
+        assert_eq!(response.blocks.len(), 2);
+        assert_eq!(response.invalid_tool_calls.len(), 1);
+        match &response.blocks[1] {
+            ContentBlock::ToolUse { input, .. } => assert_eq!(input, &json!({})),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_sse_malformed_arguments_do_not_fail_the_response() {
+        let mut decoder = decoder(Protocol::AnthropicMessages);
+        let events = vec![
+            json!({"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Working."}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_bad","name":"fs_write"}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\": src/main.rs}"}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"message_stop"}),
+        ];
+        for event in events {
+            decoder.feed("", &event.to_string()).unwrap();
+        }
+        let response = decoder.finish().unwrap();
+        assert_eq!(response.blocks.len(), 2);
+        assert_eq!(response.invalid_tool_calls.len(), 1);
+        assert_eq!(response.invalid_tool_calls[0].id, "call_bad");
+        match &response.blocks[1] {
+            ContentBlock::ToolUse { input, .. } => assert_eq!(input, &json!({})),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

@@ -47,20 +47,22 @@ Reading your workspace is automatic. Writing files and running shell commands as
 Messages, tool calls, approval requests, and results appear in the conversation as each step completes. The whole run stays in your session, so you can look back at what happened.
 
 **4. Take it back.**
-Cancel at any time. The agent keeps working until the task is done or you stop it; steps, tokens and cost are shown live. If the app closes mid-task, the run is marked for review instead of being silently retried.
+Cancel at any time. The agent keeps working until the task is done or you stop it; steps and token usage are shown live. If the app closes mid-task, the run is marked for review instead of being silently retried.
 
 ## Built for people who own their tools
 
 | | |
 |---|---|
 | 🔒 **Local-first**<br>Sessions and API keys stay on your machine. | 🧾 **Recorded**<br>Every run is saved and can be reviewed later. |
-| 🛑 **Human approval**<br>Writes and commands wait for your explicit OK. | 📊 **Visible usage**<br>Steps, tokens and cost are shown live for every run. |
+| 🛑 **Human approval**<br>Writes and commands wait for your explicit OK. | 📊 **Visible usage**<br>Steps and token usage are shown live for every run. |
 | 🧠 **Bring your own model**<br>Use your own Anthropic- or OpenAI-compatible model endpoints and keys. | 🔁 **Crash-safe**<br>Interrupted work is marked for review, never auto-retried. |
 | 🖥️ **One workspace, one boundary**<br>File tools stay inside the folder you choose. | 🛰️ **Multi-device**<br>Continue a task from another device — on the roadmap. |
 
 ## Bring your own model
 
-phi-agent works with Anthropic Messages and OpenAI-compatible endpoints. Add one or more providers in **Settings → Model providers**; keys stay on your machine and are sent only to the endpoints you configure. Each provider can list several models with descriptions, context limits and prices, and one provider is active at a time.
+phi-agent works with Anthropic Messages and OpenAI-compatible endpoints. Add one or more providers in **Settings → Model providers**: enter the endpoint and key, then pick the models you want from the list fetched from the provider. Keys stay on your machine and are sent only to the endpoints you configure. One provider is active at a time.
+
+The composer shows the current model. Switch models without opening Settings, and choose how much thinking effort to spend on the next message. Replies render Markdown, including code blocks and tables.
 
 Without a provider, a run fails with a clear message instead of inventing output. Point a provider at a local OpenAI-compatible runtime (Ollama, LM Studio, vLLM) to stay fully offline.
 
@@ -93,6 +95,8 @@ bun install
 bun run tauri dev
 ```
 
+On Android, install the Android SDK/NDK from the Tauri 2 prerequisites and run `bun run tauri android dev`. The UI adapts to phone widths with a drawer sidebar, a touch-friendly composer and safe-area insets.
+
 On first launch, phi-agent creates a `phi-workspace` folder in your Documents directory. You can change it in the app.
 
 ## Safety you can see
@@ -104,7 +108,7 @@ Giving an agent the ability to edit files and run commands is serious. phi-agent
 - **File tools stay in the workspace.** The folder you choose is the boundary for reading and writing files.
 - **Shell commands use your permissions.** Command execution is not sandboxed like a virtual machine, so the approval prompt is the real safety boundary. Read it before you approve.
 - **Cancellation is real.** Commands that may have already had an effect are marked “outcome unknown” instead of pretending otherwise.
-- **Spend is visible.** Every model call records its token usage and estimated cost in the session; there is no hidden meter. Stop any run with Cancel.
+- **Usage is visible.** Every model call records its input and output tokens in the session; there is no hidden pricing or meter. Stop any run with Cancel.
 
 ## Roadmap
 

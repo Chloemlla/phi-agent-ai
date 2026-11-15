@@ -50,12 +50,16 @@ pub async fn send_message(
     text: String,
     provider_id: Option<String>,
     workbench: Option<bool>,
+    model: Option<String>,
+    thinking: Option<String>,
 ) -> Result<SendResult, String> {
     let run_id = state.0.send_message_full(
         &session_id,
         &text,
         provider_id.as_deref(),
         workbench.unwrap_or(false),
+        model.as_deref(),
+        thinking.as_deref(),
     )?;
     Ok(SendResult { run_id })
 }
@@ -135,6 +139,16 @@ pub async fn fetch_models(
     provider_id: Option<String>,
 ) -> Result<Vec<String>, String> {
     state.0.fetch_models(provider_id.as_deref()).await
+}
+
+/// Preview a provider's live model list without persisting it. The settings
+/// wizard uses this before the provider is saved.
+#[tauri::command]
+pub async fn preview_models(
+    state: State<'_, AppStateHandle>,
+    provider_id: Option<String>,
+) -> Result<Vec<String>, String> {
+    state.0.preview_models(provider_id.as_deref()).await
 }
 
 /// Catalogue suggestions for the settings page. Pure metadata; saving the

@@ -292,7 +292,6 @@ fn zh(msgid: &str) -> Option<&'static str> {
 
         // Provider store
         "Unknown provider: {id}" => "未知 provider: {id}",
-        "Pricing cannot be negative" => "定价不能为负数",
         "maxOutputTokens must be greater than 0" => "maxOutputTokens 必须大于 0",
         "temperature must be between 0 and 2" => "temperature 必须在 0 到 2 之间",
         "Provider name cannot be empty" => "provider 名称不能为空",
@@ -346,8 +345,14 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "(stderr truncated at 1 MB; the rest was discarded)" => {
             "（stderr 超过 1 MB，已截断，其余内容已丢弃）"
         }
-        "The model response was truncated by the output token limit; the run stopped instead of reporting a partial result." => {
-            "模型响应因输出 token 上限被截断；运行已停止，不会把不完整结果当作成功。"
+        "The previous response was cut off by the output token limit. Continue exactly where you stopped, without repeating what you already wrote." => {
+            "上一条响应因输出 token 上限被截断。请从停下的地方继续，不要重复已经写过的内容。"
+        }
+        "The model response was truncated by the output token limit ({max_output_tokens} tokens) three times; the run stopped to avoid an endless loop." => {
+            "模型响应连续三次因输出 token 上限（{max_output_tokens} tokens）被截断；为避免无限循环，运行已停止。"
+        }
+        "The model repeatedly sent tool arguments that were not valid JSON; the run stopped without executing them." => {
+            "模型反复发送不是合法 JSON 的工具参数；运行已停止，这些工具均未执行。"
         }
         "Response was truncated before the tool call completed; the tool was not executed." => {
             "响应在工具调用完成前被截断；该工具未执行。"
@@ -384,6 +389,9 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Unknown session: {id}" => "未知会话: {id}",
         "Node is in {mode} mode: {reason}" => "节点处于 {mode} 模式：{reason}",
         "Message is empty" => "消息为空",
+        "Unknown thinking effort {effort}; expected off, low, medium or high" => {
+            "未知思考强度 {effort}；可选 off、low、medium、high"
+        }
         "Set a workspace first" => "请先设置工作区",
         "Workspace does not exist; set it again" => "工作区不存在，请重新设置",
         "Approval does not exist or was already handled" => "审批不存在或已处理",
@@ -408,7 +416,12 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Provider has no API key configured" => "provider 未配置 API Key",
         "(model returned no content)" => "（模型没有返回内容）",
         "Model response is missing choices" => "模型响应缺少 choices",
-        "Tool arguments are not valid JSON: {error}" => "工具参数不是合法 JSON: {error}",
+        "Model response failed: {error}" => "模型响应失败：{error}",
+        "network: stream ended before the model finished" => "网络：模型尚未结束，流就中断了",
+        "Tool arguments are not valid JSON" => "工具参数不是合法 JSON",
+        "Tool {tool} was not executed: the model sent arguments that are not valid JSON. Parser error: {error}. Raw arguments (truncated): {raw}. Re-issue the tool call with valid JSON arguments." => {
+            "工具 {tool} 未执行：模型发送的参数不是合法 JSON。解析错误：{error}。原始参数（已截断）：{raw}。请重新发起工具调用并提供合法的 JSON 参数。"
+        }
         "SSE data is not valid JSON: {error}" => "SSE 数据不是合法 JSON: {error}",
         "SSE error: {message}" => "SSE 错误: {message}",
         "SSE error: HTTP {status}" => "SSE 错误: HTTP {status}",
@@ -440,8 +453,6 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Missing id" => "缺少 id",
         "Unknown providers subcommand: {command}" => "未知 providers 子命令: {command}",
         "--model-map expects key=model: {pair}" => "--model-map 需要 key=model 形式: {pair}",
-        "--pricing-in is not a number: {value}" => "--pricing-in 不是数字: {value}",
-        "--pricing-out is not a number: {value}" => "--pricing-out 不是数字: {value}",
         "--max-output-tokens is not a number: {value}" => "--max-output-tokens 不是数字: {value}",
         "--temperature is not a number: {value}" => "--temperature 不是数字: {value}",
         "--sort-index is not a number: {value}" => "--sort-index 不是数字: {value}",
@@ -513,6 +524,12 @@ mod tests {
             "Memory record not found",
             "The candidate looks like a secret; sensitive values are not stored as memories",
             "memory forget requires --id, --scope, --project, --run or --all",
+            "Unknown thinking effort {effort}; expected off, low, medium or high",
+            "Tool arguments are not valid JSON",
+            "Tool {tool} was not executed: the model sent arguments that are not valid JSON. Parser error: {error}. Raw arguments (truncated): {raw}. Re-issue the tool call with valid JSON arguments.",
+            "The previous response was cut off by the output token limit. Continue exactly where you stopped, without repeating what you already wrote.",
+            "The model response was truncated by the output token limit ({max_output_tokens} tokens) three times; the run stopped to avoid an endless loop.",
+            "The model repeatedly sent tool arguments that were not valid JSON; the run stopped without executing them.",
         ] {
             assert!(zh(msgid).is_some(), "missing translation: {msgid}");
         }

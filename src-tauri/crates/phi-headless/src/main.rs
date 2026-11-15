@@ -15,7 +15,7 @@ use phi_contracts::memory::{
     ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryEpisodeInput, MemoryListFilter,
     MemoryQuery,
 };
-use phi_contracts::provider::{ModelSpec, Pricing, ProviderInput};
+use phi_contracts::provider::{ModelSpec, ProviderInput};
 use phi_contracts::stream::StreamPort;
 use phi_domain::memory::{EpisodeSource, MemoryScope, MemoryState, SourceTrust};
 use phi_domain::view::RunView;
@@ -60,6 +60,8 @@ struct RunArgs {
     message: Option<String>,
     session_id: Option<String>,
     provider: Option<String>,
+    model: Option<String>,
+    thinking: Option<String>,
     approval: ApprovalMode,
     stream: bool,
     title: Option<String>,
@@ -436,7 +438,14 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
         session_id.clone(),
         args.approval,
     ));
-    let run_id = node.send_message_full(&session_id, &message, None, args.workbench);
+    let run_id = node.send_message_full(
+        &session_id,
+        &message,
+        None,
+        args.workbench,
+        args.model.as_deref(),
+        args.thinking.as_deref(),
+    );
     let run_id = match run_id {
         Ok(run_id) => run_id,
         Err(error) => {
@@ -456,11 +465,12 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
         "run": run,
     }))?;
     eprintln!(
-        "[phi-headless] run {} {} steps={} cost=${:.4}{}",
+        "[phi-headless] run {} {} steps={} tokens_in={} tokens_out={}{}",
         run.id,
         run.state,
         run.steps,
-        run.cost_usd,
+        run.input_tokens,
+        run.output_tokens,
         run.error
             .as_deref()
             .map(|error| format!(" ({error})"))
@@ -674,6 +684,8 @@ fn parse_run(rest: &[String]) -> Result<RunArgs, String> {
         message: None,
         session_id: None,
         provider: None,
+        model: None,
+        thinking: None,
         approval: ApprovalMode::Deny,
         stream: true,
         title: None,
@@ -687,6 +699,10 @@ fn parse_run(rest: &[String]) -> Result<RunArgs, String> {
             args.session_id = Some(value);
         } else if let Some(value) = take_flag(rest, &mut index, "--provider")? {
             args.provider = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--model")? {
+            args.model = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--thinking")? {
+            args.thinking = Some(value);
         } else if let Some(value) = take_flag(rest, &mut index, "--title")? {
             args.title = Some(value);
         } else if let Some(value) = take_flag(rest, &mut index, "--approval")? {
@@ -1214,10 +1230,6 @@ fn parse_provider_input(
     let mut input = ProviderInput::default();
     let mut activate = false;
     let mut positional = Vec::new();
-    let mut pricing_in = None;
-    let mut pricing_out = None;
-    let mut pricing_cache_read = None;
-    let mut pricing_cache_write = None;
     let mut index = 0;
     while index < rest.len() {
         if let Some(value) = take_flag(rest, &mut index, "--id")? {
@@ -1255,34 +1267,6 @@ fn parse_provider_input(
                 map.insert(key.trim().to_string(), value.trim().to_string());
             }
             input.model_map = Some(map);
-        } else if let Some(value) = take_flag(rest, &mut index, "--pricing-in")? {
-            pricing_in = Some(value.parse::<f64>().map_err(|_| {
-                i18n::t_args(
-                    "--pricing-in is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
-        } else if let Some(value) = take_flag(rest, &mut index, "--pricing-out")? {
-            pricing_out = Some(value.parse::<f64>().map_err(|_| {
-                i18n::t_args(
-                    "--pricing-out is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
-        } else if let Some(value) = take_flag(rest, &mut index, "--pricing-cache-read")? {
-            pricing_cache_read = Some(value.parse::<f64>().map_err(|_| {
-                i18n::t_args(
-                    "--pricing-cache-read is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
-        } else if let Some(value) = take_flag(rest, &mut index, "--pricing-cache-write")? {
-            pricing_cache_write = Some(value.parse::<f64>().map_err(|_| {
-                i18n::t_args(
-                    "--pricing-cache-write is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
         } else if let Some(value) = take_flag(rest, &mut index, "--max-output-tokens")? {
             input.max_output_tokens = Some(value.parse().map_err(|_| {
                 i18n::t_args(
@@ -1343,18 +1327,6 @@ fn parse_provider_input(
     if require_id && input.id.is_none() {
         return Err(i18n::t("update requires a provider id"));
     }
-    if pricing_in.is_some()
-        || pricing_out.is_some()
-        || pricing_cache_read.is_some()
-        || pricing_cache_write.is_some()
-    {
-        input.pricing = Some(Pricing {
-            input_per_mtok: pricing_in.unwrap_or(0.0),
-            output_per_mtok: pricing_out.unwrap_or(0.0),
-            cache_read_per_mtok: pricing_cache_read,
-            cache_write_per_mtok: pricing_cache_write,
-        });
-    }
     Ok((input, activate))
 }
 
@@ -1389,6 +1361,7 @@ Usage:
 
 Commands:
   run --message TEXT [--session ID] [--provider ID]
+      [--model ID] [--thinking off|low|medium|high]
       [--approval deny|allow|prompt] [--no-stream] [--title TEXT]
       [--workbench]
   sessions list
@@ -1401,8 +1374,7 @@ Commands:
   providers show <id>
   providers add --name NAME --protocol P --base-url URL --model MODEL
       [--api-key env:NAME|literal:VALUE|VALUE] [--auth x_api_key|bearer|none]
-      [--pricing-in N] [--pricing-out N]
-      [--pricing-cache-read N] [--pricing-cache-write N] [--max-output-tokens N]
+      [--max-output-tokens N]
       [--temperature N] [--models a,b] [--model-map role=model]
       [--icon NAME] [--icon-color #hex] [--website URL] [--notes TEXT]
       [--sort-index N] [--activate] [--disabled]

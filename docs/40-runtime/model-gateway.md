@@ -34,7 +34,7 @@
 |---|---|
 | **Provider** | 一个模型来源（`provider.model` 扩展点实现）：鉴权、协议、错误码 |
 | **ModelSpec** | 一个具体模型：能力（工具调用/视觉/流式）、上下文窗口、**定价快照**、限速 |
-| **ModelCall** | 一次调用 + 用量（tokens/成本/延迟）+ 结束原因，产 `ModelCallIssued/Returned/Failed` 事件 |
+| **ModelCall** | 一次调用 + 用量（input/output/cache tokens、延迟）+ 结束原因，产 `ModelCallIssued/Returned/Failed` 事件 |
 
 **能力协商**：调用前校验「所需能力 ⊆ 模型能力」——如策略要求工具调用、但选中的模型不支持 → 换模型或失败，不静默降级（P9）。
 
@@ -91,7 +91,7 @@
 
 ## 5. 用量与预算：调用前预留，调用后结算
 
-> **2026-11-15 变更**：v1 已移除 Run 级预算硬上限。当前行为是**调用后按实际用量记录** `ModelCallReturned { usage, cost }`，Runbar 显示步数/成本/耗时；没有预留、结算或超限中止。下面的「调用前预留」保留为**可选目标态**的设计记录（见 `80-roadmap/scope-additions.md` §2.10）。
+> **2026-11-15 变更**：v1 已移除 Run 级预算硬上限，并进一步移除了价格计算。当前行为是**调用后按实际用量记录** `ModelCallReturned { usage }`，Runbar 显示步数/token/耗时；没有预留、结算、成本或超限中止。下面的「调用前预留」保留为**可选目标态**的设计记录（见 `80-roadmap/scope-additions.md` §2.10 与 §2.12）。
 
 > 「调用结束后扣费」保证不了「不超过成本预算」——一次调用本身就可能超掉剩余额度。硬上限必须在**发起之前**成立。
 
@@ -107,42 +107,57 @@
 
 ### 5.1 模型目录数据（可选）
 
-`src-tauri/assets/model-catalog.json` 是编译进二进制的可选目录，用于在设置页为模型 id 自动填充元数据。默认是空数组 `[]`：未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。
+`src-tauri/assets/model-catalog.json` 是编译进二进制的可选目录，用于在设置页为模型 id 自动填充元数据（名称、上下文、输出上限、规模）。目录只维护**当前**模型家族：GPT-6、Claude 5.x / Fable、GLM-5.x、DeepSeek-V4、Kimi-K3、Gemini 4。未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。所有当前模型都接受思考强度，不再维护「是否支持推理」标记。
+
+`patterns` 与 `requires` 允许略微模糊：`patterns` 匹配家族前缀（如 `gpt-6`、`claude-sonnet-5`），`requires` 再要求变体标记（如 `luna`、`flash`、`pro`），更具体（匹配串更长）的条目优先。`display` 是带 `{version}` 的显示模板，版本从 `anchor` 之后的数字读取（`.` 与 `-` 等价，最多两段），因此未记录的小版本 `gpt-6.5-luna` 仍显示为 `GPT-6.5 Luna`，带日期快照的 id 也不会把日期当成版本。厂商发布新模型时应同步更新本文件。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `patterns` | string[] | 小写子串，匹配时先去掉 vendor 前缀（如 `anthropic/`） |
-| `name` | string | 显示名 |
+| `patterns` | string[] | 小写子串，任一命中即可；匹配时先去掉 vendor 前缀（如 `anthropic/`） |
+| `requires` | string[]? | 必须同时命中的小写子串，用于区分变体 |
+| `name` | string | 显示名；无法解析版本时的回退值 |
+| `display` | string? | 显示模板，`{version}` 替换为从 id 解析出的版本 |
+| `anchor` | string? | 版本数字在 id 中的起始标记，如 `gpt-`、`claude-sonnet-` |
 | `description` | string | 一句话描述 |
-| `tags` | string[] | 如 `coding`、`reasoning`、`long-context`、`cheap` |
+| `tags` | string[] | 如 `coding`、`long-context`、`fast`、`agentic` |
 | `contextWindow` | number? | 上下文窗口（tokens） |
 | `maxOutputTokens` | number? | 单次输出上限 |
-| `pricing` | object? | `inputPerMtok` / `outputPerMtok` / `cacheReadPerMtok` / `cacheWritePerMtok`（每百万 token 价格） |
+| `scale` | number | 模型规模 1–5（1 轻量、5 前沿）；缺省按 3 处理，用于限制子代理调用比自己更大的模型 |
 
 示例：
 
 ```json
 [
   {
-    "patterns": ["claude-sonnet"],
-    "name": "Claude Sonnet",
-    "description": "Coding model.",
-    "tags": ["coding", "tools"],
-    "contextWindow": 200000,
-    "maxOutputTokens": 64000,
-    "pricing": {
-      "inputPerMtok": 3.0,
-      "outputPerMtok": 15.0,
-      "cacheReadPerMtok": 0.3,
-      "cacheWritePerMtok": 3.75
-    }
+    "patterns": ["gpt-6"],
+    "requires": ["luna"],
+    "name": "GPT-6 Luna",
+    "display": "GPT-{version} Luna",
+    "anchor": "gpt-",
+    "description": "Small, fast GPT-6 variant built for high-volume extraction, classification, structured summaries and routine interactions.",
+    "tags": ["fast", "high-volume", "extraction", "economic"],
+    "contextWindow": 1050000,
+    "maxOutputTokens": 128000,
+    "scale": 2
   }
 ]
 ```
 
-目录只填充用户留空的字段，显式值优先；未知 id 不会失败。缓存价格未提供时按普通输入价计入成本（宁可高估，不隐藏花费）。
+目录只填充用户留空的字段，显式值优先；未知 id 不会失败。目录不含价格：节点只记录 token 用量，不做计价。
 
-缓存用量：Anthropic 请求在 system 块上带 `cache_control: { type: "ephemeral" }`，usage 读取 `cache_creation_input_tokens` / `cache_read_input_tokens`；OpenAI / DeepSeek 的 `cached_tokens` / `prompt_cache_hit_tokens` 从普通输入中扣除，按缓存读取价计费。`ModelCallReturned` 记录 `cache_read_tokens` 与 `cache_write_tokens`。
+缓存用量：Anthropic 请求在 system 块上带 `cache_control: { type: "ephemeral" }`，usage 读取 `cache_creation_input_tokens` / `cache_read_input_tokens`；OpenAI / DeepSeek 的 `cached_tokens` / `prompt_cache_hit_tokens` 从普通输入中扣除。`ModelCallReturned` 记录 `cache_read_tokens` 与 `cache_write_tokens`，不计算金额。
+
+### 5.2 推理强度（thinking effort）
+
+输入框的模型选择器允许为下一条消息指定模型与思考强度（`off` / `low` / `medium` / `high`）。网关按协议翻译：
+
+| 协议 | 映射 |
+|---|---|
+| Anthropic Messages | `thinking: { type: "adaptive", display: "summarized" }` + `output_config: { effort }`；不发送 `temperature` |
+| OpenAI Chat Completions | 设置思考强度时发送 `reasoning_effort: low\|medium\|high` |
+| OpenAI Responses | 设置思考强度时发送 `reasoning: { effort: low\|medium\|high }` |
+
+`off` 或未选择时不发送任何思考字段。当前维护的模型都接受思考强度；不识别该字段的兼容供应商会忽略它，不需要额外的模型能力标记。Anthropic 返回的 `thinking` / `redacted_thinking` 块会原样保存在助手消息中；重放请求只保留最近一条助手消息的思考块（更早的块对工具续写无用，且会随历史裁剪失效），签名缺失的块不会回传。旧版 `budget_tokens` 形态不再支持。
 
 ---
 
@@ -153,7 +168,7 @@
 | 限速 / 临时错误 | 指数退避重试（有次数上限；消耗 token，预算硬上限为目标态） |
 | Provider 不可用 | 按策略**降级**到备用 provider/model（若配置） |
 | 上下文超长 | 触发压缩/裁剪（见 `context-and-memory.md`），而非直接失败 |
-| 输出不合法（工具参数坏） | 有限次「纠正重试」，仍不行则终止该步 |
+| 输出不合法（工具参数坏） | 不执行该工具；把助手文本与带工具名的 `tool_result` 错误写回历史，循环继续，由模型重新发起调用 |
 | 全部失败 | Run `Failed`，带可诊断错误 |
 
 **不静默降级**：从强模型掉到弱模型、从有工具能力掉到无——必须**显式**（事件留痕），否则质量悄悄退化无法察觉（对齐评测驱动的初衷）。
@@ -191,7 +206,7 @@
 **辅助模型不是 Agent**：它不跑行动循环、不调工具、无记忆，是一个**无状态判定/抽取器**。网关为它提供：
 
 - 一个**受约束的调用**（固定的短提示、低温度、严格输出 schema）。
-- 与主模型**共享**用量计量（可选预算；它的成本也算进 Run）。
+- 与主模型**共享** token 用量计量（可选预算为其目标态）。
 - 可被 `strategy.modelRouter` 单独指向「便宜快」的模型。
 
 它的用途：**权限审批**（`judge.approver`）、分类、抽取、轻量校验。

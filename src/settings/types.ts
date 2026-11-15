@@ -2,12 +2,7 @@
 // (`phi-contracts/src/provider.rs`). The settings page is the only writer;
 // the node validates every value before it is persisted.
 
-export type Pricing = {
-  inputPerMtok: number;
-  outputPerMtok: number;
-  cacheReadPerMtok?: number | null;
-  cacheWritePerMtok?: number | null;
-};
+export type ModelSource = "catalog" | "fetched" | "manual";
 
 export type ModelSpec = {
   id: string;
@@ -16,11 +11,12 @@ export type ModelSpec = {
   tags: string[];
   contextWindow?: number | null;
   maxOutputTokens?: number | null;
-  pricing?: Pricing | null;
   temperature?: number | null;
+  /** Capability scale from 1 (small, fast) to 5 (frontier); 3 when unknown. */
+  scale: number;
   enabled: boolean;
   /** `catalog`, `fetched` or `manual` — provenance for the editor. */
-  source: string;
+  source: ModelSource;
 };
 
 export type ProviderView = {
@@ -37,7 +33,6 @@ export type ProviderView = {
   hasKey: boolean;
   keyHint?: string;
   auth: string;
-  pricing: Pricing;
   maxOutputTokens?: number;
   temperature?: number;
   sortIndex: number;
@@ -61,10 +56,8 @@ export type ProviderInput = {
   modelMap?: Record<string, string>;
   auth?: string;
   headers?: Record<string, string>;
-  pricing?: Pricing;
   maxOutputTokens?: number;
   temperature?: number;
-  clearPricing?: boolean;
   clearMaxOutputTokens?: boolean;
   clearTemperature?: boolean;
   enabled?: boolean;
@@ -85,10 +78,15 @@ export type ProviderTestView = {
 export type Protocol = "anthropic_messages" | "openai_chat" | "openai_responses";
 
 export const PROTOCOLS: Protocol[] = [
-  "anthropic_messages",
   "openai_chat",
   "openai_responses",
+  "anthropic_messages",
 ];
+
+/** Provider APIs are inconsistent about id casing, so identity is normalized. */
+export function normalizeModelId(id: string): string {
+  return id.trim().toLowerCase();
+}
 
 export function modelFromId(id: string): ModelSpec {
   return {
@@ -98,8 +96,8 @@ export function modelFromId(id: string): ModelSpec {
     tags: [],
     contextWindow: null,
     maxOutputTokens: null,
-    pricing: null,
     temperature: null,
+    scale: 3,
     enabled: true,
     source: "manual",
   };
@@ -109,7 +107,6 @@ export function cloneModel(model: ModelSpec): ModelSpec {
   return {
     ...model,
     tags: [...model.tags],
-    pricing: model.pricing ? { ...model.pricing } : null,
   };
 }
 
@@ -124,13 +121,12 @@ export function mergeSuggestion(current: ModelSpec, suggested: ModelSpec): Model
     tags: current.tags.length > 0 ? current.tags : [...suggested.tags],
     contextWindow: current.contextWindow ?? suggested.contextWindow ?? null,
     maxOutputTokens: current.maxOutputTokens ?? suggested.maxOutputTokens ?? null,
-    pricing: current.pricing ?? (suggested.pricing ? { ...suggested.pricing } : null),
+    temperature: current.temperature ?? suggested.temperature ?? null,
+    scale: current.scale !== 3 ? current.scale : (suggested.scale ?? 3),
     source:
       suggested.source === "catalog" &&
-      (!current.description || current.tags.length === 0 || !current.pricing)
+      (!current.description || current.tags.length === 0 || current.source === "manual")
         ? "catalog"
         : current.source,
   };
 }
-
-export type SettingsSection = "providers" | "general";

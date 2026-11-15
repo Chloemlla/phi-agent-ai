@@ -85,6 +85,11 @@ fn message_chars(message: &ChatMessage) -> usize {
         .iter()
         .map(|block| match block {
             ContentBlock::Text { text } => text.chars().count(),
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => thinking.chars().count() + signature.chars().count(),
+            ContentBlock::RedactedThinking { data } => data.chars().count(),
             ContentBlock::ToolUse { name, input, .. } => {
                 name.chars().count() + input.to_string().chars().count()
             }

@@ -2,17 +2,52 @@
 // data should always line up and never jump when a value changes width.
 
 import { lang, t, tArgs } from "./i18n";
+import type { SessionDetail } from "./types";
 
 function locale(): string {
   return lang() === "zh-CN" ? "zh-CN" : "en-US";
 }
 
-export function formatMoney(value: number, digits = 3): string {
-  return `$${value.toFixed(digits)}`;
-}
-
 export function formatTokens(value: number): string {
   return value.toLocaleString(locale());
+}
+
+/** Compact token counts for the run bar: 999, 1.2k, 123k, 1.4M. */
+export function formatCompactTokens(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value < 1000) return String(Math.round(value));
+  if (value < 1_000_000) {
+    const scaled = value / 1000;
+    if (Math.round(scaled) >= 1000) {
+      return `${(value / 1_000_000).toFixed(1)}M`;
+    }
+    return `${scaled < 100 ? scaled.toFixed(1) : Math.round(scaled)}k`;
+  }
+  const scaled = value / 1_000_000;
+  return `${scaled < 100 ? scaled.toFixed(1) : Math.round(scaled)}M`;
+}
+
+/**
+ * The plain text of the last assistant message's text blocks. Used to decide
+ * whether the live stream already handed off to the durable transcript.
+ */
+export function lastAssistantText(detail: SessionDetail | null): string {
+  const messages = detail?.session.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    return message.blocks
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("");
+  }
+  return "";
+}
+
+export function streamMatchesDurable(stream: string, durable: string): boolean {
+  const live = stream.trim();
+  const saved = durable.trim();
+  if (!live || !saved) return false;
+  return saved === live || saved.includes(live);
 }
 
 export function formatClock(iso: string): string {

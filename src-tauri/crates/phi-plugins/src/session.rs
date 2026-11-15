@@ -29,7 +29,6 @@ struct RunRecord {
     turn_id: String,
     state: String,
     steps: u64,
-    cost_usd: f64,
     workbench_mode: bool,
     input_tokens: u64,
     output_tokens: u64,
@@ -515,7 +514,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                         turn_id,
                         state: "Scheduled".to_string(),
                         steps: 0,
-                        cost_usd: 0.0,
                         workbench_mode: workbench,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -570,7 +568,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         }
         DomainEvent::ModelCallReturned {
             run_id,
-            cost_usd,
             input_tokens,
             output_tokens,
             cache_read_tokens,
@@ -578,7 +575,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             ..
         } => {
             update_run(projection, record, &run_id, |run| {
-                run.cost_usd += cost_usd;
                 run.input_tokens += input_tokens;
                 run.output_tokens += output_tokens;
                 run.cache_read_tokens += cache_read_tokens;
@@ -669,7 +665,6 @@ fn run_view(r: &RunRecord) -> RunView {
         turn_id: r.turn_id.clone(),
         state: r.state.clone(),
         steps: r.steps,
-        cost_usd: r.cost_usd,
         workbench_mode: r.workbench_mode,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,

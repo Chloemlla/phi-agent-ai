@@ -312,7 +312,40 @@ fn scripted_response(request: &Value) -> Value {
     let lower = last_user_text.to_lowercase();
     let next_id = || format!("toolu_{}", TOOL_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
 
-    if lower.contains("truncate") {
+    if lower.contains("truncate forever") {
+        // Every request is cut off with a tool call, so the bounded recovery
+        // limit is exercised rather than a one-off truncation.
+        return message_response(
+            vec![
+                json!({ "type": "text", "text": "Still working." }),
+                json!({
+                    "type": "tool_use",
+                    "id": next_id(),
+                    "name": "fs_list",
+                    "input": { "path": "." }
+                }),
+            ],
+            "length",
+        );
+    }
+
+    if lower.contains("cut off by the output token limit") {
+        // The text-only continuation is injected into the next request but is
+        // not stored as a user message.
+        return message_response(
+            vec![json!({ "type": "text", "text": "Completed the rest." })],
+            "end_turn",
+        );
+    }
+
+    if lower.contains("truncate text") {
+        return message_response(
+            vec![json!({ "type": "text", "text": "Partial answer." })],
+            "length",
+        );
+    }
+
+    if lower.contains("truncate") && last_tool_result.is_none() {
         return message_response(
             vec![
                 json!({ "type": "text", "text": "Working on it." }),
@@ -426,6 +459,113 @@ fn scripted_view() -> Value {
     })
 }
 
+/// A local OpenAI Chat Completions endpoint that first returns assistant text
+/// plus a tool call with malformed JSON arguments, then a final answer once it
+/// sees the paired tool result. Used to prove the malformed-arguments
+/// regression end to end.
+struct MalformedArgsProvider {
+    port: u16,
+    requests: Arc<Mutex<Vec<Value>>>,
+}
+
+impl MalformedArgsProvider {
+    fn start() -> Self {
+        Self::with_recovery(true)
+    }
+
+    fn always_malformed() -> Self {
+        Self::with_recovery(false)
+    }
+
+    fn with_recovery(recover: bool) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind malformed provider");
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorder = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if let Ok(stream) = stream {
+                    let _ = handle_malformed_request(stream, recorder.clone(), recover);
+                }
+            }
+        });
+        Self { port, requests }
+    }
+
+    fn requests(&self) -> Vec<Value> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+fn handle_malformed_request(
+    mut stream: TcpStream,
+    requests: Arc<Mutex<Vec<Value>>>,
+    recover: bool,
+) -> std::io::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body)?;
+    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    if let Ok(mut log) = requests.lock() {
+        log.push(request.clone());
+    }
+
+    let saw_tool_result = request["messages"]
+        .as_array()
+        .is_some_and(|messages| messages.iter().any(|message| message["role"] == "tool"));
+    let response = if recover && saw_tool_result {
+        json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "The tool call was rejected, so I recovered without touching the file."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 30, "completion_tokens": 8 }
+        })
+    } else {
+        json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "I will inspect that file first.",
+                    "tool_calls": [{
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {
+                            "name": "fs_write",
+                            "arguments": "{\"path\": src/main.rs, \"content\": \"must not run\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": { "prompt_tokens": 20, "completion_tokens": 10 }
+        })
+    };
+    let payload = serde_json::to_vec(&response).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        payload.len()
+    )?;
+    stream.write_all(&payload)?;
+    stream.flush()
+}
+
 #[test]
 fn workbench_run_updates_the_session_view() {
     let env = TestEnv::new("workbench");
@@ -514,21 +654,88 @@ fn run_is_not_capped_at_twenty_steps() {
         "the run must continue past the old 20-step default: {}",
         result["run"]["steps"]
     );
-    assert!(
-        result["run"]["costUsd"].as_f64().unwrap() > 0.0,
-        "usage and cost are still recorded without a cap"
-    );
     assert!(result["run"]["inputTokens"].as_u64().unwrap() > 0);
+    assert!(result["run"]["outputTokens"].as_u64().unwrap() > 0);
+    assert!(
+        result["run"].get("costUsd").is_none(),
+        "pricing was removed; runs only record tokens"
+    );
 }
 
 #[test]
-fn truncated_response_fails_without_executing_the_tool() {
+fn run_forwards_model_and_thinking_to_the_provider() {
+    let env = TestEnv::new("thinking");
+    let provider = env.with_scripted_provider();
+    let result = env.run(
+        "inspect the workspace",
+        &[
+            "--approval",
+            "deny",
+            "--model",
+            "test-model",
+            "--thinking",
+            "high",
+        ],
+    );
+    assert_eq!(result["run"]["state"], "Succeeded");
+
+    let requests = provider.requests();
+    let first = &requests[0];
+    assert_eq!(first["model"], "test-model");
+    assert_eq!(first["thinking"]["type"], "adaptive");
+    assert_eq!(first["output_config"]["effort"], "high");
+    assert!(
+        first.get("temperature").is_none(),
+        "current Anthropic models reject temperature"
+    );
+
+    let output = env.command(&[
+        "run",
+        "--message",
+        "inspect the workspace",
+        "--no-stream",
+        "--thinking",
+        "extreme",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Unknown thinking effort"),
+        "an unknown effort must fail clearly: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn truncated_tool_call_is_not_executed_and_the_run_recovers() {
     let env = TestEnv::new("truncated");
+    let _provider = env.with_scripted_provider();
+    let result = env.run("truncate the response", &["--approval", "deny"]);
+    assert_eq!(result["run"]["state"], "Succeeded");
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let results = tool_result_text(&session);
+    assert!(
+        results.contains("truncated"),
+        "the truncated tool call must be reported: {results}"
+    );
+    assert!(
+        !env.workspace.join("PHI_TRUNCATED.md").exists(),
+        "a truncated tool call must not be executed"
+    );
+    let transcript = serde_json::to_string(&session["session"]["messages"]).unwrap();
+    assert!(
+        transcript.contains("Working on it."),
+        "the partial assistant text must be kept: {transcript}"
+    );
+}
+
+#[test]
+fn truncation_recovery_is_capped() {
+    let env = TestEnv::new("truncate-cap");
     let _provider = env.with_scripted_provider();
     let output = env.command(&[
         "run",
         "--message",
-        "truncate the response",
+        "truncate forever",
         "--no-stream",
         "--approval",
         "deny",
@@ -536,17 +743,156 @@ fn truncated_response_fails_without_executing_the_tool() {
     assert_eq!(
         output.status.code(),
         Some(4),
-        "expected failed exit code, stdout={} stderr={}",
+        "the run must eventually fail honestly, stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let result = last_json(&output.stdout);
     assert_eq!(result["run"]["state"], "Failed");
     let error = result["run"]["error"].as_str().unwrap_or("");
-    assert!(error.contains("truncated"), "unexpected error: {error}");
     assert!(
-        !env.workspace.join("PHI_TRUNCATED.md").exists(),
-        "a truncated tool call must not be executed"
+        error.contains("truncated") && error.contains("three times"),
+        "the failure must name the limit: {error}"
+    );
+    assert!(
+        error.contains("8192"),
+        "the failure must name the output token limit: {error}"
+    );
+}
+
+#[test]
+fn text_truncation_continuation_is_ephemeral() {
+    let env = TestEnv::new("truncate-text");
+    let _provider = env.with_scripted_provider();
+    let result = env.run("truncate text", &["--approval", "deny"]);
+    assert_eq!(result["run"]["state"], "Succeeded");
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let transcript = serde_json::to_string(&session["session"]["messages"]).unwrap();
+    assert!(
+        transcript.contains("Partial answer."),
+        "the partial answer must be persisted: {transcript}"
+    );
+    assert!(
+        transcript.contains("Completed the rest."),
+        "the continuation must complete the answer: {transcript}"
+    );
+    assert!(
+        !transcript.contains("Continue exactly where you stopped"),
+        "the continuation instruction must not appear as a human message: {transcript}"
+    );
+}
+
+#[test]
+fn malformed_tool_arguments_keep_text_and_do_not_execute_the_tool() {
+    let env = TestEnv::new("malformed-args");
+    let provider = MalformedArgsProvider::start();
+    std::fs::write(
+        env.data_dir.join("providers.json"),
+        serde_json::to_vec_pretty(&json!({
+            "version": 1,
+            "activeId": "scripted",
+            "providers": [{
+                "id": "scripted",
+                "name": "Malformed provider",
+                "protocol": "openai_chat",
+                "baseUrl": format!("http://127.0.0.1:{}", provider.port),
+                "auth": "none",
+                "model": "test-model",
+                "models": [{ "id": "test-model" }]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let result = env.run("inspect the file please", &["--approval", "deny"]);
+    assert_eq!(result["run"]["state"], "Succeeded");
+
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let transcript = serde_json::to_string(&session["session"]["messages"]).unwrap();
+    assert!(
+        transcript.contains("I will inspect that file first."),
+        "the assistant text before the malformed call must be kept: {transcript}"
+    );
+    assert!(
+        transcript.contains("The tool call was rejected"),
+        "the run must continue after the malformed call: {transcript}"
+    );
+
+    let results = tool_result_text(&session);
+    assert!(
+        results.contains("not valid JSON"),
+        "the tool result must explain the parse failure: {results}"
+    );
+    assert!(
+        results.contains("fs_write"),
+        "the tool result must name the tool: {results}"
+    );
+
+    assert!(
+        !env.workspace.join("src").exists(),
+        "a malformed tool call must never execute"
+    );
+    assert_eq!(
+        provider.requests().len(),
+        2,
+        "one malformed call and one recovery request"
+    );
+}
+
+#[test]
+fn endlessly_malformed_tool_arguments_stop_the_run() {
+    let env = TestEnv::new("malformed-cap");
+    let provider = MalformedArgsProvider::always_malformed();
+    std::fs::write(
+        env.data_dir.join("providers.json"),
+        serde_json::to_vec_pretty(&json!({
+            "version": 1,
+            "activeId": "scripted",
+            "providers": [{
+                "id": "scripted",
+                "name": "Malformed provider",
+                "protocol": "openai_chat",
+                "baseUrl": format!("http://127.0.0.1:{}", provider.port),
+                "auth": "none",
+                "model": "test-model",
+                "models": [{ "id": "test-model" }]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = env.command(&[
+        "run",
+        "--message",
+        "keep trying",
+        "--no-stream",
+        "--approval",
+        "deny",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "the run must eventually fail honestly, stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = last_json(&output.stdout);
+    assert_eq!(result["run"]["state"], "Failed");
+    let error = result["run"]["error"].as_str().unwrap_or("");
+    assert!(
+        error.contains("repeatedly sent tool arguments"),
+        "the failure must explain the repeated invalid calls: {error}"
+    );
+    assert_eq!(
+        provider.requests().len(),
+        5,
+        "the loop must stop after the bounded number of recoveries"
+    );
+    assert!(
+        !env.workspace.join("src").exists(),
+        "a malformed tool call must never execute"
     );
 }
 

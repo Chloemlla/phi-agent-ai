@@ -37,5 +37,5 @@ phi-agent is an agent that can edit files and run shell commands. Its current bo
 ## Known limitations
 
 - The sandbox is a path jail plus process termination, not OS-level isolation.
-- Run-level spending is not capped. Token usage and estimated cost are recorded per call, and any run can be cancelled.
+- Run-level spending is not capped. Input/output token usage is recorded per call, and any run can be cancelled.
 - After cancellation, side effects may already have occurred; such results are marked unknown and require manual review.

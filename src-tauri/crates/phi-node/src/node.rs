@@ -23,7 +23,7 @@ use phi_contracts::memory::{
     ForgetReport, ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryHit, MemoryListFilter,
     MemoryPort, MemoryQuery, MemoryStats, MemoryStore, Principal,
 };
-use phi_contracts::ports::{ModelStatus, RunStatus, SessionPort, StartRunRequest};
+use phi_contracts::ports::{ModelStatus, RunStatus, SessionPort, StartRunRequest, ThinkingEffort};
 use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_contracts::services::Services;
 use phi_contracts::stream::{StreamHub, StreamPort};
@@ -106,6 +106,9 @@ pub struct Bootstrap {
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
     pub language: String,
+    /// Host platform (`windows`, `macos`, `linux`, `android`, `ios`). The
+    /// desktop title bar uses it to match the window chrome.
+    pub platform: String,
 }
 
 #[derive(Serialize)]
@@ -499,6 +502,7 @@ impl Node {
             providers: self.provider_views(),
             active_provider_id: self.active_provider_id(),
             language: i18n::current().code().to_string(),
+            platform: std::env::consts::OS.to_string(),
         })
     }
 
@@ -593,7 +597,7 @@ impl Node {
         text: &str,
         provider_id: Option<&str>,
     ) -> Result<String, String> {
-        self.send_message_full(session_id, text, provider_id, false)
+        self.send_message_full(session_id, text, provider_id, false, None, None)
     }
 
     pub fn send_message_full(
@@ -602,6 +606,8 @@ impl Node {
         text: &str,
         provider_id: Option<&str>,
         workbench: bool,
+        model: Option<&str>,
+        thinking: Option<&str>,
     ) -> Result<String, String> {
         self.require_writable()?;
         if self.kernel.mode() != RunMode::Normal {
@@ -617,6 +623,21 @@ impl Node {
         if text.is_empty() {
             return Err(i18n::t("Message is empty"));
         }
+        let model = model
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let thinking = match thinking {
+            Some(value) if !value.trim().is_empty() => {
+                Some(ThinkingEffort::parse(value).ok_or_else(|| {
+                    i18n::t_args(
+                        "Unknown thinking effort {effort}; expected off, low, medium or high",
+                        &[("effort", value.trim().to_string())],
+                    )
+                })?)
+            }
+            _ => None,
+        };
         let workspace = self
             .config
             .snapshot()
@@ -652,6 +673,8 @@ impl Node {
             turn_id: turn.turn_id,
             workspace,
             workbench,
+            model,
+            thinking,
         })
     }
 
@@ -727,7 +750,6 @@ impl Node {
             session_id,
             state: run.state,
             steps: run.steps,
-            cost_usd: run.cost_usd,
         })
     }
 
@@ -870,5 +892,11 @@ impl Node {
     pub async fn fetch_models(&self, id: Option<&str>) -> Result<Vec<String>, String> {
         let (_, models) = self.model_gateway.list_models(id).await?;
         Ok(models)
+    }
+
+    /// Fetch the provider's live model list without persisting it. The
+    /// settings wizard previews models before the provider is saved.
+    pub async fn preview_models(&self, id: Option<&str>) -> Result<Vec<String>, String> {
+        self.model_gateway.preview_models(id).await
     }
 }

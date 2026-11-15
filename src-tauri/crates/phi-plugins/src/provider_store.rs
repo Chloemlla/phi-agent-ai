@@ -49,11 +49,14 @@ impl ProviderStore {
         }
         // Repair a dangling active id instead of carrying it forward.
         if let Some(active) = file.active_id.clone() {
-            if !file.providers.iter().any(|provider| provider.id == active) {
+            let valid = file.providers.iter().any(|provider| {
+                provider.id == active && provider.enabled && !provider.model.trim().is_empty()
+            });
+            if !valid {
                 file.active_id = file
                     .providers
                     .iter()
-                    .find(|provider| provider.enabled)
+                    .find(|provider| provider.enabled && !provider.model.trim().is_empty())
                     .map(|provider| provider.id.clone());
             }
         }
@@ -61,7 +64,7 @@ impl ProviderStore {
             file.active_id = file
                 .providers
                 .iter()
-                .find(|provider| provider.enabled)
+                .find(|provider| provider.enabled && !provider.model.trim().is_empty())
                 .map(|provider| provider.id.clone());
         }
         Self {
@@ -178,7 +181,6 @@ impl ProviderStore {
                     model_map: HashMap::new(),
                     auth: None,
                     headers: HashMap::new(),
-                    pricing: None,
                     max_output_tokens: None,
                     temperature: None,
                     enabled: true,
@@ -223,7 +225,15 @@ impl ProviderStore {
             profile.auth = Some(AuthMode::parse(auth)?);
         }
         if let Some(api_key) = input.api_key.as_deref() {
-            profile.api_key = SecretRef::normalize(api_key);
+            let normalized = SecretRef::normalize(api_key);
+            // A newly supplied key re-enables authentication even when an
+            // earlier save explicitly stored "none"; otherwise the key would
+            // be silently unused.
+            if normalized.is_some() && input.auth.is_none() && profile.auth == Some(AuthMode::None)
+            {
+                profile.auth = None;
+            }
+            profile.api_key = normalized;
             if profile.api_key.is_none() && input.auth.is_none() {
                 // Clearing the credential also drops the requirement for one;
                 // an explicit auth mode in the same input still wins below.
@@ -233,12 +243,6 @@ impl ProviderStore {
         if let Some(headers) = input.headers {
             validate_headers(&headers)?;
             profile.headers = headers;
-        }
-        if let Some(pricing) = input.pricing {
-            if pricing.input_per_mtok < 0.0 || pricing.output_per_mtok < 0.0 {
-                return Err(i18n::t("Pricing cannot be negative"));
-            }
-            profile.pricing = Some(pricing);
         }
         if let Some(max_output_tokens) = input.max_output_tokens {
             if max_output_tokens == 0 {
@@ -251,9 +255,6 @@ impl ProviderStore {
                 return Err(i18n::t("temperature must be between 0 and 2"));
             }
             profile.temperature = Some(temperature);
-        }
-        if input.clear_pricing {
-            profile.pricing = None;
         }
         if input.clear_max_output_tokens {
             profile.max_output_tokens = None;
@@ -341,6 +342,20 @@ impl ProviderStore {
         if file.active_id.is_none() && profile.enabled && !profile.model.is_empty() {
             file.active_id = Some(profile.id.clone());
         }
+        // A saved draft (no model) must never keep the active slot when a
+        // usable provider exists.
+        let active_valid = file
+            .active_id
+            .as_deref()
+            .and_then(|id| file.providers.iter().find(|provider| provider.id == id))
+            .is_some_and(|provider| provider.enabled && !provider.model.trim().is_empty());
+        if !active_valid {
+            file.active_id = file
+                .providers
+                .iter()
+                .find(|provider| provider.enabled && !provider.model.trim().is_empty())
+                .map(|provider| provider.id.clone());
+        }
         self.save(&file)?;
         let active = file.active_id.as_deref() == Some(profile.id.as_str());
         Ok(view_of(&profile, active))
@@ -357,7 +372,7 @@ impl ProviderStore {
             file.active_id = file
                 .providers
                 .iter()
-                .find(|provider| provider.enabled)
+                .find(|provider| provider.enabled && !provider.model.trim().is_empty())
                 .map(|provider| provider.id.clone());
         }
         self.save(&file)?;
@@ -432,8 +447,8 @@ impl ProviderStore {
             .iter_mut()
             .find(|provider| provider.id == id)
             .ok_or_else(|| i18n::t_args("Unknown provider: {id}", &[("id", id.to_string())]))?;
-        // Merge instead of replacing: fetched ids must not wipe descriptions,
-        // limits or prices the user already edited.
+        // Merge instead of replacing: fetched ids must not wipe descriptions
+        // or limits the user already edited.
         for model_id in models {
             let model_id = model_id.trim();
             if model_id.is_empty() {
@@ -594,7 +609,6 @@ fn view_of(profile: &ProviderProfile, active: bool) -> ProviderView {
         has_key: profile.has_key(),
         key_hint: profile.api_key.as_ref().map(SecretRef::hint),
         auth: profile.auth_mode().as_str().to_string(),
-        pricing: profile.pricing_or_default(),
         max_output_tokens: profile.max_output_tokens,
         temperature: profile.temperature,
         sort_index: profile.sort_index,
@@ -853,5 +867,24 @@ mod tests {
         assert!(store.resolve_for_listing(&view.id).is_ok());
         assert!(store.resolve(&view.id).is_err());
         assert!(store.set_active(&view.id).is_err());
+    }
+
+    #[test]
+    fn draft_provider_never_holds_the_active_slot() {
+        let store = store("draft-active");
+        let draft = store
+            .upsert(ProviderInput {
+                model: Some(String::new()),
+                api_key: Some("literal:test-key".to_string()),
+                ..input("Draft")
+            })
+            .unwrap();
+        assert!(!draft.active);
+
+        let valid = store.upsert(input("Valid")).unwrap();
+        assert!(valid.active, "a usable provider must take the active slot");
+
+        let reloaded = ProviderStore::load(store.path().to_path_buf());
+        assert_eq!(reloaded.active_id(), Some(valid.id));
     }
 }

@@ -37,6 +37,7 @@ pub fn run() {
             api::set_active_provider,
             api::test_provider,
             api::fetch_models,
+            api::preview_models,
             api::describe_models,
             api::list_memories,
             api::search_memories,

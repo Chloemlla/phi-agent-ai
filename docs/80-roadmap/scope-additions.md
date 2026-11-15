@@ -29,7 +29,12 @@
 | 8 | 视觉设计规格 v1 | 界面 | 已实现 | `docs/design/SPEC.md`、`src/App.css` |
 | 9 | 记忆 MVP 的落地增量 | 运行时 + 界面 | 已实现（工具、设置页、CLI、golden 集） | `phi-plugins/src/memory/`、`phi-adapters/src/memory_sqlite.rs`、`src/settings/MemoryPage.tsx` |
 | 10 | 移除 Run 级预算硬上限 | 运行时 + 界面 | 已移除（保留用量计量与取消） | `loop_plugin.rs`、`src/components/Runbar.tsx` |
-| 11 | 模型目录改为可替换数据 | 模型 | 已实现（数据文件当前为空） | `src-tauri/assets/model-catalog.json`、`model_catalog.rs` |
+| 11 | 模型目录改为可替换数据 | 模型 | 已实现（维护当前模型家族） | `src-tauri/assets/model-catalog.json`、`model_catalog.rs` |
+| 12 | 只记 token，不再计价 | 运行时 + 界面 | 已实现（移除全部价格字段） | `phi-contracts`、`model_gateway.rs`、`src/components/Runbar.tsx` |
+| 13 | 工具参数损坏与截断的单轮恢复 | 运行时 | 已实现（含无头回归测试） | `model_protocol.rs`、`loop_plugin.rs` |
+| 14 | 供应商接入向导 | 设置 / 协议 | 已实现（两步、预览模型、手动勾选） | `src/settings/`、`preview_models` 命令 |
+| 15 | 平台原生标题栏与移动端适配 | 界面 | 已实现（Windows/Linux/macOS/Android） | `src/components/Titlebar.tsx`、`src/App.css`、`gen/android/` |
+| 16 | 聊天体验重构 | 界面 | 已实现（模型选择、toast、Markdown、流式交接） | `src/components/`、`src/toast.ts` |
 
 ---
 
@@ -100,12 +105,12 @@
 
 ### 2.8 视觉设计规格 v1
 
-- **是什么**：桌面界面的唯一视觉权威（`docs/design/SPEC.md`）：design tokens、字体与数字排版、间距/圆角/阴影、三栏布局、风险分级审批、runbar 用量条（原为预算条，2026-11-15 改为步数/成本/耗时读数）、workbench 组件与动效语言。
+- **是什么**：桌面界面的唯一视觉权威（`docs/design/SPEC.md`）：design tokens、字体与数字排版、间距/圆角/阴影、三栏布局、风险分级审批、runbar 用量条（原为预算条，2026-11-15 改为步数/token/耗时读数，随后不再计价）、workbench 组件与动效语言。
 - **新增于**：2026-11-14。
 - **落地内容**：
   - 自绘无边框标题栏（窗口控制、拖拽区、节点状态 pill、设置入口）。
   - 风险分级的审批卡（low 单行 / medium 卡片 / high 危险边 + 红色倒计时 + 本次批准约束说明）。
-  - 常驻 runbar：步数、成本、时间三条硬上限与消耗 meter，颜色随占比变化。
+  - 常驻 runbar：步数、token、时间三条读数（早期版本曾为预算 meter，2026-11-15 移除）。
   - 工作台视图新增 `steps` 节点（计划/步骤 stepper），与 `ui_update` 协议 v1 同步；`workbench-system-prompt.txt` 已记录该 kind。
   - 字体本地打包：Figtree、Noto Sans SC、Cascadia Code 经 npm 依赖随构建产物一起分发，不访问 CDN。
   - 设置独立成页：模型供应商管理（完整 model-gateway 面）、工作区与界面语言。
@@ -140,8 +145,8 @@
 - **原始设计**：`40-runtime/agent-loop.md` §3、`70-quality/quality-attributes.md` QAS-6 与 `20-domain/domain-model.md` 把步数/成本/墙钟三重硬上限写成发行基线的不变量，模型网关在调用前预留、调用后结算。
 - **为什么移除**（2026-11-15）：默认 20 步 / $0.50 / 600 秒会中止正常任务——一次 Rust 冷编译或完整测试就可能超过 10 分钟；成本预留用字符/字节估算 token，英文场景高估约 4 倍，$0.50 往往几次调用就耗尽；失败调用也按整笔预留结算，一次限流即可触发中止。普通用户关心的是模型能否完成任务，而不是被默认阈值截断。
 - **移除内容**：`RunLimits` 与 per-run 上限、`Bootstrap/RunStatus/RunView/RunScheduled` 的 max 字段、`BudgetReserved/BudgetSettled/BudgetExceeded` 事件、`Ledger` 预留/结算、`ModelPort::estimate_cost`、CLI 的 `--max-steps/--max-cost/--max-wall`、Runbar 的三条 meter 与 Composer 的预算提示。
-- **保留内容**：每次调用的 `max_output_tokens`；`shell_exec` 的单命令 timeout；审批自身的 `PHI_APPROVAL_TIMEOUT_SECS`；用户取消；`ModelCallReturned` 的 token 与成本记录，Runbar 改为「步数 / 成本 / 耗时」读数。
-- **运行终止条件**：模型不再调用工具；响应被输出上限截断；用户取消；模型请求失败且不可重试。
+- **保留内容**：每次调用的 `max_output_tokens`；`shell_exec` 的单命令 timeout；审批自身的 `PHI_APPROVAL_TIMEOUT_SECS`；用户取消；`ModelCallReturned` 的 token 记录，Runbar 改为「步数 / token / 耗时」读数（成本记录随后在 §2.12 移除）。
+- **运行终止条件**：模型不再调用工具；连续三次被输出上限截断；用户取消；模型请求失败且不可重试。
 - **设计记录**：预留/结算与三重上限的设计文本保留在 `agent-loop.md`、`model-gateway.md`、`quality-attributes.md`，标注为历史/可选目标态；如果未来重新引入，必须是显式 opt-in，而不是默认闸门。
 - **文档影响**：README（中英）、SECURITY、AGENT.md 的 Runtime loop 一节、`design/SPEC.md` 的 Runbar 规范同步更新。
 
@@ -149,9 +154,66 @@
 
 - **原状**：`model_catalog.rs` 内置一份按模型名匹配的名称/描述/标签/上下文/价格表，设置页 presets 也硬编码了模型 id。
 - **为什么改**（2026-11-15）：这些条目已经过时，继续自动填充会误导用户；用户将提供最新的模型清单。
-- **当前实现**：目录数据移到 `src-tauri/assets/model-catalog.json`，编译进二进制；默认内容为空 `[]`。未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。presets 不再预填模型 id。
-- **数据字段**：`patterns`（大小写不敏感的子串，匹配时会去掉 vendor 前缀）、`name`、`description`、`tags`、`contextWindow`、`maxOutputTokens`、`pricing`（`inputPerMtok` / `outputPerMtok` / `cacheReadPerMtok` / `cacheWritePerMtok`）。
+- **当前实现**：目录数据移到 `src-tauri/assets/model-catalog.json`，编译进二进制。目录只维护**当前**模型家族（GPT-6、Claude 5.x / Fable、GLM-5.x、DeepSeek-V4、Kimi-K3、Gemini 4）；未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。匹配用家族 `patterns` 加变体 `requires`，`display` + `anchor` 从 id 解析版本，因此未记录的小版本（如 `gpt-6.5-luna`）显示为 `GPT-6.5 Luna`，Fable 5 / 5.1 / 5.2 共用一条记录。当前模型都支持思考强度，不再维护 `reasoning` 标记与旧模型推断列表。`scale` 为 1–5 的模型规模（Fable / Astra / Carbon / K3.1-Pro 为 5），用于限制子代理调用比自己更大的模型。厂商发布新模型时同步更新本文件。
+- **数据字段**：`patterns`（任一命中的大小写不敏感子串，匹配时去掉 vendor 前缀）、`requires`（必须同时命中的变体标记）、`name`（版本解析失败时的回退显示名）、`display`（`{version}` 模板）、`anchor`（版本数字起点）、`description`、`tags`、`contextWindow`、`maxOutputTokens`、`scale`（1–5，缺省 3；`pricing` 已在 §2.12 移除）。
 - **文档影响**：`40-runtime/model-gateway.md` 增加目录数据说明；`scope-additions` 记录本变更。
+
+### 2.12 只记 token，不再计价
+
+- **原状**：Provider、`ModelSpec`、模型目录与 Runbar 都有每百万 token 价格；每次调用按价格快照计算 `cost_usd`，写入 `ModelCallReturned`、`RunView` 与 Runbar。
+- **为什么改**（2026-11-15）：价格随供应商、缓存与促销频繁变化，内置价格容易过时并误导用户；用户明确要求「去掉定价，只记 token」。token 用量是客观事实，价格不是。
+- **移除内容**：`Pricing` 类型及所有 `pricing` / `clearPricing` 字段、`Protocol::default_pricing`、网关的 `compute_cost`、`ModelResponse.cost_usd`、`RunStatus/RunView/ModelCallReturned.cost_usd`、无头 CLI 的 `--pricing-*` 参数与成本输出、设置页全部价格输入、模型目录的 `pricing` 字段。
+- **保留内容**：输入/输出 token、缓存读取/写入 token、`estimated_usage`；Runbar 显示输入/输出 token。旧日志里的 `costUsd` 字段在反序列化时被忽略，历史会话仍可打开。
+- **当前状态**：桌面与无头共用同一契约；无头 `run` 汇总输出 `tokens_in` / `tokens_out`。
+- **文档影响**：README（中英）、SECURITY、AGENT.md、`40-runtime/model-gateway.md`、`70-quality/*`、`design/SPEC.md` 的 Runbar 规范同步更新。
+
+### 2.13 工具参数损坏与截断的单轮恢复
+
+- **原状**：模型流式返回的工具参数只要不是合法 JSON，整个模型响应解析失败，运行终止，已流式输出的助手文本也不会落盘；`length`/`max_tokens` 截断同样立即终止整轮。
+- **为什么改**（2026-11-15）：真实模型会偶发输出损坏的 JSON 或被输出上限截断；一次工具参数解析失败不应吞掉已有输出，更不应结束整个会话。用户明确报告「工具参数不是合法 JSON」导致输出被吞。
+- **当前实现**：
+  - 参数解析永不使整个响应失败：先直接解析，失败后剥离 Markdown 代码围栏并提取最外层平衡的 `{...}`/`[...]`，仍失败则记录 `InvalidToolCall { id, name, rawArguments, error }`，工具块保留（`input` 为空对象）以维持协议历史有效。
+  - 循环对非法调用不执行工具，写入带工具名、解析错误与截断原文的成对 `tool_result` 错误，模型可重新发起；同时发 `ToolInvokeFailed` 审计事件。同一运行累计 5 次非法参数后以明确错误终止，避免模型无限重试。
+  - 模型调用失败并重试时，被放弃那次的流式文本会从界面移除，避免与重试输出重复；最终失败仍保留已生成的文本。
+  - 截断恢复：截断的工具调用不执行，回写成对错误；纯文本截断通过一条**仅注入上下文、不写入会话**的续写指令继续生成。最多恢复 3 次，之后以指明输出上限的错误终止。
+  - 模型调用最终失败但已流式输出文本时，把该部分文本作为助手消息持久化，避免输出被吞。
+- **测试**：`phi-headless/tests/headless.rs` 覆盖非法参数不执行且恢复、截断工具调用、纯文本续写不出现为人类消息、恢复次数上限；`model_protocol.rs` 覆盖三协议解析与围栏恢复。
+- **文档影响**：`AGENT.md` Runtime loop、`40-runtime/model-gateway.md` §6、`40-runtime/agent-loop.md` 的终止条件。
+
+### 2.14 供应商接入向导
+
+- **原状**：新建供应商先展示五张预设卡片；表单同时要求协议/认证/供应商默认值/模型角色/价格；拉取模型会立刻把所有模型写盘，用户无法先选择。
+- **为什么改**（2026-11-15）：预设卡片与实际字段重复，价格与默认值过时，模型角色对普通用户是噪音；用户要求先填写连接信息，再自动拉取并手动勾选模型。
+- **当前实现**：
+  - 删除 `src/settings/presets.ts`、模型角色、供应商默认值与全部价格输入。
+  - 两步向导：第一步名称、备注（单行）、官网、API Key、请求地址、请求格式（OpenAI Chat 默认）；认证由协议与密钥推导（空密钥 = 无认证，否则 Anthropic 用 x-api-key、OpenAI 用 Bearer），不再单独选择。
+  - 第二步自动调用新增的 `preview_models`（只预览、不落盘），展示全部模型、大小写不敏感的去重与目录映射结果（`Mapped` / `Defaults`），支持搜索、全选/全不选、手动补充；只保存用户勾选的模型，主模型取第一个勾选项；不再有「启用哪个模型」的开关。
+  - 编辑页保留连接字段、模型列表与「高级」折叠区（自定义请求头、清除密钥）；未完成的草稿在取消/切换时删除，避免残留。
+- **当前状态**：后端新增 `preview_models` Tauri 命令；`fetch_models` 保留给 CLI/兼容用途（仍会落盘）。
+- **文档影响**：README（中英）「自带模型」、`40-runtime/model-gateway.md` §5.1。
+
+### 2.15 平台原生标题栏与移动端适配
+
+- **原状**：所有平台都渲染 macOS 红绿灯；窗口最小宽度 760；没有移动端断点、安全区或抽屉侧栏；Android 主题是 DayNight，状态栏图标在浅色界面上不可读。
+- **为什么改**（2026-11-15）：项目以 Windows 与 Android 优先，标题栏与交互必须符合平台预期；用户报告「没有移动端适配」。
+- **当前实现**：
+  - `Bootstrap.platform` 暴露宿主平台。Windows/Linux 使用右侧标准最小化/最大化/关闭按钮（46×32 命中区、关闭红色悬停）；macOS 保留左侧红绿灯；Android/iOS 使用无窗口控件的应用栏（抽屉按钮、标题、设置）。
+  - 响应式：≤900px 侧栏变为带遮罩的抽屉，会话选择/新建后自动关闭，Esc 关闭；设置页导航在窄屏变为横向标签；输入区、Workbench、审批卡与工具栏重排；触摸设备命中区 ≥40px；`viewport-fit=cover` 与 `env(safe-area-inset-*)` 覆盖刘海/手势区域。
+  - Android：edge-to-edge 透明状态栏/导航栏、强制浅色图标、`adjustResize` 避免键盘遮挡输入框；主题固定为浅色（v1 无深色模式）。
+- **文档影响**：README 快速开始/体验描述；`design/SPEC.md` 的标题栏与响应式规范。
+
+### 2.16 聊天体验重构
+
+- **原状**：输入框没有模型选择；错误以卡片堆叠在消息流顶部；助手回复是纯文本；流式文本在 `done`/终止事件后被定时清空，而持久消息尚未刷新，造成闪烁/空白；工具失败只显示通用「工具错误」；Runbar 显示价格。
+- **为什么改**（2026-11-15）：用户要求模型选择器、悬浮思考强度子菜单、Markdown 渲染、通知而不是卡片堆叠，并报告输出完成时空白闪烁、工具失败看不出是哪一个。
+- **当前实现**：
+  - Composer 左下角模型选择器：列出当前供应商启用的模型；桌面悬浮模型弹出思考强度子菜单（off/low/medium/high），触摸设备内联展开；选择按供应商写入 localStorage；发送时携带 `model` 与 `thinking`。当前模型都支持思考强度，因此不再维护「是否支持推理」标记，子菜单对所有模型可用。
+  - 通知：`src/toast.ts` + `Toasts.tsx`，按消息去重、最多 4 条、6 秒自动消失；全局错误走 toast，表单错误留在原地，运行失败只保留一条可展开、可复制的紧凑提示。
+  - Markdown：安全 JSX 渲染（标题、段落、列表、引用、表格、链接、行内代码、代码块与复制按钮），从不注入 HTML；流式输出同样渲染。
+  - 流式交接：`done` 不再清空文本；仅在刷新后的持久助手消息与流式文本匹配时一次性交接，终止后 2 秒兜底刷新；无法匹配时保留文本并标记「Stopped」，不再出现空白。
+  - 工具错误：从配对的 `tool_use` 解析工具名，显示「Tool failed: <name>」、可展开正文与复制按钮。
+  - Runbar：步数 / token（输入↑ 输出↓）/ 耗时，不再显示成本。
+- **文档影响**：README（中英）、`design/SPEC.md`、`AGENT.md`。
 
 ---
 
