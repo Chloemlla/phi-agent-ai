@@ -4,6 +4,7 @@
 //! `phi-contracts` depends on `phi-domain`; plugin implementations depend on
 //! both. Nothing here may reference a concrete plugin or a shell type.
 
+pub mod memory;
 pub mod ports;
 pub mod provider;
 pub mod services;
@@ -19,6 +20,7 @@ pub const SLOT_POLICY_EVALUATE: &str = "policy.evaluate";
 pub const SLOT_SANDBOX_EXECUTE: &str = "sandbox.execute";
 pub const SLOT_APPROVAL_DECIDE: &str = "approval.decide";
 pub const SLOT_MODEL_INVOKE: &str = "model.invoke";
+pub const SLOT_MEMORY_STORE: &str = "memory.store";
 pub const SLOT_TOOL_PROVIDER: &str = "provider.tool";
 pub const SLOT_CONTEXT_CONTRIBUTOR: &str = "context.contributor";
 

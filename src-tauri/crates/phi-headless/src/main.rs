@@ -11,9 +11,14 @@ use std::time::{Duration, Instant};
 
 use phi_adapters::control;
 use phi_adapters::jsonl_sink::{JsonlEventSink, JsonlStreamSink};
+use phi_contracts::memory::{
+    ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryEpisodeInput, MemoryListFilter,
+    MemoryQuery,
+};
 use phi_contracts::ports::RunLimits;
 use phi_contracts::provider::{ModelSpec, Pricing, ProviderInput};
 use phi_contracts::stream::StreamPort;
+use phi_domain::memory::{EpisodeSource, MemoryScope, MemoryState, SourceTrust};
 use phi_domain::view::RunView;
 use phi_i18n as i18n;
 use phi_kernel::event_bus::EventSink;
@@ -89,6 +94,29 @@ enum Command {
     ProvidersUse(String),
     ProvidersTest(Option<String>),
     ProvidersModels(Option<String>),
+    MemoryList(MemoryListFilter),
+    MemorySearch(MemoryQuery),
+    MemoryShow(String),
+    MemoryAdd(MemoryAddRequest),
+    MemoryInvalidate {
+        id: String,
+        reason: String,
+    },
+    MemoryCorrect {
+        id: String,
+        fact: String,
+        reason: String,
+    },
+    MemorySupersede {
+        id: String,
+        request: MemoryAddRequest,
+        reason: String,
+    },
+    MemoryForget {
+        selector: ForgetSelector,
+        reason: Option<String>,
+    },
+    MemoryStats,
     Help,
 }
 
@@ -246,6 +274,100 @@ async fn execute(global: GlobalOptions, command: Command) -> Result<i32, String>
             }))?;
             Ok(0)
         }
+        Command::MemoryList(filter) => {
+            let node = open_node(&global, false)?;
+            let memories = node.memory_list(filter)?;
+            print_json(&serde_json::json!({
+                "type": "memories",
+                "memories": memories,
+            }))?;
+            Ok(0)
+        }
+        Command::MemorySearch(query) => {
+            let node = open_node(&global, false)?;
+            let text = query.text.clone();
+            let hits = node.memory_search(query)?;
+            print_json(&serde_json::json!({
+                "type": "memory_search",
+                "query": text,
+                "hits": hits,
+            }))?;
+            Ok(0)
+        }
+        Command::MemoryShow(id) => {
+            let node = open_node(&global, false)?;
+            let record = node
+                .memory_get(&id)?
+                .ok_or_else(|| i18n::t("Memory record not found"))?;
+            let episode = match record.episode_id.as_deref() {
+                Some(episode_id) => node.memory_episode(episode_id)?,
+                None => None,
+            };
+            print_json(&serde_json::json!({
+                "type": "memory",
+                "record": record,
+                "episode": episode,
+            }))?;
+            Ok(0)
+        }
+        Command::MemoryAdd(request) => {
+            let node = open_node(&global, true)?;
+            let outcome = node.memory_add(request)?;
+            print_json(&outcome)?;
+            Ok(memory_outcome_exit_code(&outcome))
+        }
+        Command::MemoryInvalidate { id, reason } => {
+            let node = open_node(&global, true)?;
+            node.memory_invalidate(&id, &reason)?;
+            print_json(&serde_json::json!({
+                "type": "memory_invalidated",
+                "id": id,
+                "reason": reason,
+            }))?;
+            Ok(0)
+        }
+        Command::MemoryCorrect { id, fact, reason } => {
+            let node = open_node(&global, true)?;
+            let outcome = node.memory_correct(&id, &fact, &reason)?;
+            print_json(&outcome)?;
+            Ok(memory_outcome_exit_code(&outcome))
+        }
+        Command::MemorySupersede {
+            id,
+            request,
+            reason,
+        } => {
+            let node = open_node(&global, true)?;
+            let outcome = node.memory_supersede(&id, request, &reason)?;
+            print_json(&outcome)?;
+            Ok(memory_outcome_exit_code(&outcome))
+        }
+        Command::MemoryForget { selector, reason } => {
+            let node = open_node(&global, true)?;
+            let report = node.memory_forget(selector, reason.as_deref().unwrap_or(""))?;
+            print_json(&serde_json::json!({
+                "type": "memory_forgotten",
+                "records": report.records,
+                "episodes": report.episodes,
+            }))?;
+            Ok(0)
+        }
+        Command::MemoryStats => {
+            let node = open_node(&global, false)?;
+            let stats = node.memory_stats()?;
+            print_json(&serde_json::json!({
+                "type": "memory_stats",
+                "stats": stats,
+            }))?;
+            Ok(0)
+        }
+    }
+}
+
+fn memory_outcome_exit_code(outcome: &MemoryAddOutcome) -> i32 {
+    match outcome {
+        MemoryAddOutcome::Rejected { .. } => 4,
+        _ => 0,
     }
 }
 
@@ -554,6 +676,7 @@ fn parse_cli(raw: Vec<String>) -> Result<(GlobalOptions, Command), String> {
         "status" => Command::Status(parse_id(rest, 0)?),
         "bootstrap" => Command::Bootstrap,
         "providers" => parse_providers(rest)?,
+        "memory" => parse_memory(rest)?,
         other => {
             return Err(i18n::t_args(
                 "Unknown command: {command}",
@@ -720,6 +843,408 @@ fn optional_id(rest: &[String]) -> Result<Option<String>, String> {
         Ok(id) => Ok(Some(id)),
         Err(_) => Ok(None),
     }
+}
+
+// ─────────────────────────── memory parsing ───────────────────────────
+
+fn parse_memory(rest: &[String]) -> Result<Command, String> {
+    let Some(sub) = rest.first().map(String::as_str) else {
+        return Ok(Command::MemoryList(MemoryListFilter::default()));
+    };
+    // `memory --text foo` is accepted as `memory list --text foo`.
+    if sub.starts_with('-') {
+        return Ok(Command::MemoryList(parse_memory_list(rest)?));
+    }
+    let args = &rest[1..];
+    match sub {
+        "list" | "ls" => Ok(Command::MemoryList(parse_memory_list(args)?)),
+        "search" | "find" => Ok(Command::MemorySearch(parse_memory_search(args)?)),
+        "show" => Ok(Command::MemoryShow(parse_id(args, 0)?)),
+        "add" | "remember" => Ok(Command::MemoryAdd(parse_memory_add(args)?)),
+        "invalidate" => parse_memory_invalidate(args),
+        "correct" | "fix" => parse_memory_correct(args),
+        "supersede" | "replace" => parse_memory_supersede(args),
+        "forget" | "delete" => parse_memory_forget(args),
+        "stats" => Ok(Command::MemoryStats),
+        other => Err(i18n::t_args(
+            "Unknown memory subcommand: {command}",
+            &[("command", other.to_string())],
+        )),
+    }
+}
+
+fn parse_memory_scope(raw: &str) -> Result<MemoryScope, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "user" => Ok(MemoryScope::User),
+        "project" => Ok(MemoryScope::Project),
+        "agent" => Ok(MemoryScope::Agent),
+        "run" => Ok(MemoryScope::Run),
+        other => Err(i18n::t_args(
+            "Unknown memory scope {scope}; expected user, project, agent or run",
+            &[("scope", other.to_string())],
+        )),
+    }
+}
+
+fn parse_memory_trust(raw: &str) -> Result<SourceTrust, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "user" => Ok(SourceTrust::User),
+        "system" => Ok(SourceTrust::System),
+        "tool" => Ok(SourceTrust::Tool),
+        "model" => Ok(SourceTrust::Model),
+        "external" => Ok(SourceTrust::External),
+        other => Err(i18n::t_args(
+            "Unknown memory source {source}; expected user, system, tool, model or external",
+            &[("source", other.to_string())],
+        )),
+    }
+}
+
+fn parse_memory_state(raw: &str) -> Result<MemoryState, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "active" => Ok(MemoryState::Active),
+        "invalidated" => Ok(MemoryState::Invalidated),
+        "superseded" => Ok(MemoryState::Superseded),
+        other => Err(i18n::t_args(
+            "Unknown memory state {state}; expected active, invalidated or superseded",
+            &[("state", other.to_string())],
+        )),
+    }
+}
+
+fn parse_episode_source(raw: &str) -> Result<EpisodeSource, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "user_input" | "user" => Ok(EpisodeSource::UserInput),
+        "tool_result" | "tool" => Ok(EpisodeSource::ToolResult),
+        "model_output" | "model" => Ok(EpisodeSource::ModelOutput),
+        "external" => Ok(EpisodeSource::External),
+        other => Err(i18n::t_args(
+            "Unknown episode source {source}; expected user_input, tool_result, model_output or external",
+            &[("source", other.to_string())],
+        )),
+    }
+}
+
+fn parse_memory_list(rest: &[String]) -> Result<MemoryListFilter, String> {
+    let mut filter = MemoryListFilter::default();
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--text")? {
+            filter.text = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--scope")? {
+            filter.scopes.push(parse_memory_scope(&value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--state")? {
+            filter.states.push(parse_memory_state(&value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--project")? {
+            filter.project_id = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--run")? {
+            filter.run_id = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--limit")? {
+            filter.limit = value.parse().map_err(|_| {
+                i18n::t_args(
+                    "--limit is not a number: {value}",
+                    &[("value", value.clone())],
+                )
+            })?;
+        } else if let Some(value) = take_flag(rest, &mut index, "--offset")? {
+            filter.offset = value.parse().map_err(|_| {
+                i18n::t_args(
+                    "--offset is not a number: {value}",
+                    &[("value", value.clone())],
+                )
+            })?;
+        } else if !rest[index].starts_with('-') {
+            filter.text = Some(rest[index].clone());
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory list argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    Ok(filter)
+}
+
+fn parse_memory_search(rest: &[String]) -> Result<MemoryQuery, String> {
+    let mut query = MemoryQuery {
+        limit: 10,
+        ..Default::default()
+    };
+    let mut parts: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--scope")? {
+            query.scopes.push(parse_memory_scope(&value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--limit")? {
+            query.limit = value.parse().map_err(|_| {
+                i18n::t_args(
+                    "--limit is not a number: {value}",
+                    &[("value", value.clone())],
+                )
+            })?;
+        } else if let Some(value) = take_flag(rest, &mut index, "--min-score")? {
+            query.min_score = parse_finite_f64("--min-score", &value)?;
+        } else if rest[index] == "--include-inactive" {
+            query.include_inactive = true;
+            index += 1;
+        } else if !rest[index].starts_with('-') {
+            parts.push(rest[index].clone());
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory search argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    if parts.is_empty() {
+        return Err(i18n::t("memory search requires a query"));
+    }
+    query.text = parts.join(" ");
+    Ok(query)
+}
+
+fn parse_memory_add(rest: &[String]) -> Result<MemoryAddRequest, String> {
+    let mut fact = None;
+    let mut scope = MemoryScope::User;
+    let mut trust = SourceTrust::User;
+    let mut confidence = None;
+    let mut valid_from = None;
+    let mut valid_to = None;
+    let mut episode = None;
+    let mut episode_source = EpisodeSource::UserInput;
+    let mut episode_label = None;
+    let mut reason = None;
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--fact")? {
+            fact = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--scope")? {
+            scope = parse_memory_scope(&value)?;
+        } else if let Some(value) = take_flag(rest, &mut index, "--source")? {
+            trust = parse_memory_trust(&value)?;
+        } else if let Some(value) = take_flag(rest, &mut index, "--confidence")? {
+            confidence = Some(parse_finite_f64("--confidence", &value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--valid-from")? {
+            valid_from = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--valid-to")? {
+            valid_to = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--episode")? {
+            episode = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--episode-source")? {
+            episode_source = parse_episode_source(&value)?;
+        } else if let Some(value) = take_flag(rest, &mut index, "--episode-label")? {
+            episode_label = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--reason")? {
+            reason = Some(value);
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory add argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    let fact = fact.ok_or_else(|| i18n::t("memory add requires --fact TEXT"))?;
+    if scope == MemoryScope::Run {
+        return Err(i18n::t(
+            "Run-scoped memories are written by the agent inside a run",
+        ));
+    }
+    Ok(MemoryAddRequest {
+        fact,
+        scope,
+        source_trust: trust,
+        confidence,
+        valid_from,
+        valid_to,
+        episode: episode.map(|content| MemoryEpisodeInput {
+            content,
+            source: episode_source,
+            source_label: episode_label,
+            session_id: None,
+        }),
+        reason,
+    })
+}
+
+fn require_reason(value: Option<String>) -> Result<String, String> {
+    value.ok_or_else(|| i18n::t("This memory command requires --reason TEXT"))
+}
+
+fn parse_finite_f64(flag: &str, value: &str) -> Result<f64, String> {
+    let parsed: f64 = value.parse().map_err(|_| {
+        i18n::t_args(
+            "{flag} is not a number: {value}",
+            &[("flag", flag.to_string()), ("value", value.to_string())],
+        )
+    })?;
+    if !parsed.is_finite() {
+        return Err(i18n::t_args(
+            "{flag} must be a finite number: {value}",
+            &[("flag", flag.to_string()), ("value", value.to_string())],
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_memory_invalidate(rest: &[String]) -> Result<Command, String> {
+    let id = parse_id(rest, 0)?;
+    let mut reason = None;
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--reason")? {
+            reason = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--id")? {
+            if value != id {
+                return Err(i18n::t("Conflicting memory ids"));
+            }
+        } else if rest[index] == id {
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory invalidate argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    Ok(Command::MemoryInvalidate {
+        id,
+        reason: require_reason(reason)?,
+    })
+}
+
+fn parse_memory_correct(rest: &[String]) -> Result<Command, String> {
+    let id = parse_id(rest, 0)?;
+    let mut fact = None;
+    let mut reason = None;
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--fact")? {
+            fact = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--reason")? {
+            reason = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--id")? {
+            if value != id {
+                return Err(i18n::t("Conflicting memory ids"));
+            }
+        } else if rest[index] == id {
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory correct argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    Ok(Command::MemoryCorrect {
+        id,
+        fact: fact.ok_or_else(|| i18n::t("memory correct requires --fact TEXT"))?,
+        reason: require_reason(reason)?,
+    })
+}
+
+fn parse_memory_supersede(rest: &[String]) -> Result<Command, String> {
+    let id = parse_id(rest, 0)?;
+    let mut fact = None;
+    let mut scope = None;
+    let mut trust = SourceTrust::User;
+    let mut confidence = None;
+    let mut valid_from = None;
+    let mut valid_to = None;
+    let mut reason = None;
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--fact")? {
+            fact = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--scope")? {
+            scope = Some(parse_memory_scope(&value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--source")? {
+            trust = parse_memory_trust(&value)?;
+        } else if let Some(value) = take_flag(rest, &mut index, "--confidence")? {
+            confidence = Some(parse_finite_f64("--confidence", &value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--valid-from")? {
+            valid_from = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--valid-to")? {
+            valid_to = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--reason")? {
+            reason = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--id")? {
+            if value != id {
+                return Err(i18n::t("Conflicting memory ids"));
+            }
+        } else if rest[index] == id {
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory supersede argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    let fact = fact.ok_or_else(|| i18n::t("memory supersede requires --fact TEXT"))?;
+    let scope = scope.ok_or_else(|| i18n::t("memory supersede requires --scope"))?;
+    if scope == MemoryScope::Run {
+        return Err(i18n::t(
+            "Run-scoped memories are written by the agent inside a run",
+        ));
+    }
+    Ok(Command::MemorySupersede {
+        id,
+        request: MemoryAddRequest {
+            fact,
+            scope,
+            source_trust: trust,
+            confidence,
+            valid_from,
+            valid_to,
+            episode: None,
+            reason: None,
+        },
+        reason: require_reason(reason)?,
+    })
+}
+
+fn parse_memory_forget(rest: &[String]) -> Result<Command, String> {
+    let mut selector = ForgetSelector::default();
+    let mut all = false;
+    let mut reason = None;
+    let mut index = 0;
+    while index < rest.len() {
+        if let Some(value) = take_flag(rest, &mut index, "--id")? {
+            selector.ids.push(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--scope")? {
+            selector.scopes.push(parse_memory_scope(&value)?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--project")? {
+            selector.project_id = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--run")? {
+            selector.run_id = Some(value);
+        } else if let Some(value) = take_flag(rest, &mut index, "--reason")? {
+            reason = Some(value);
+        } else if rest[index] == "--all" {
+            all = true;
+            index += 1;
+        } else if !rest[index].starts_with('-') {
+            selector.ids.push(rest[index].clone());
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown memory forget argument: {arg}",
+                &[("arg", rest[index].clone())],
+            ));
+        }
+    }
+    let has_selector = selector.has_selector();
+    if all && has_selector {
+        return Err(i18n::t("Do not combine --all with other forget selectors"));
+    }
+    if !all && !has_selector {
+        return Err(i18n::t(
+            "memory forget requires --id, --scope, --project, --run or --all",
+        ));
+    }
+    selector.all = all;
+    Ok(Command::MemoryForget { selector, reason })
 }
 
 fn parse_provider_input(
@@ -903,6 +1428,22 @@ Commands:
   providers use <id>
   providers test [id]
   providers models [id]
+  memory list [--text TEXT] [--scope user|project|agent|run] [--state STATE]
+      [--project ID] [--run ID] [--limit N] [--offset N]
+  memory search QUERY [--scope SCOPE] [--limit N] [--min-score N]
+      [--include-inactive]
+  memory show <id>
+  memory add --fact TEXT [--scope user|project|agent]
+      [--source user|system|tool|model|external] [--confidence N]
+      [--valid-from RFC3339] [--valid-to RFC3339] [--episode TEXT]
+      [--episode-source SOURCE] [--episode-label TEXT] [--reason TEXT]
+  memory invalidate <id> --reason TEXT
+  memory correct <id> --fact TEXT --reason TEXT
+  memory supersede <id> --fact TEXT --scope user|project|agent --reason TEXT
+      [--source TRUST] [--confidence N] [--valid-from T] [--valid-to T]
+  memory forget <id>... | --id ID | --scope SCOPE | --project ID | --run ID | --all
+      [--reason TEXT]
+  memory stats
 
 Global options:
   --data-dir DIR    default $PHI_DATA_DIR or ./.phi

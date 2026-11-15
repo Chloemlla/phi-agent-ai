@@ -94,6 +94,13 @@ jobs:
       - name: Unit tests without the desktop shell
         run: cargo test --workspace --exclude phi-agent
 
+      # The quality baseline is tracked but does not block merges at MVP stage
+      # (docs/70-quality/evaluation.md §3). Deterministic memory safety tests
+      # run in the suite above; this step only measures retrieval quality.
+      - name: Memory retrieval golden set (non-blocking baseline)
+        continue-on-error: true
+        run: cargo test -p phi-plugins --test memory_golden -- --ignored --nocapture
+
       - name: Headless binary smoke tests
         run: cargo test -p phi-headless --test headless
 

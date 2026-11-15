@@ -223,6 +223,43 @@ const ZH: Record<string, string> = {
   "Normal": "正常",
   "Degraded": "降级",
   "Maintenance": "维护",
+
+  // settings: memory
+  "Memory": "记忆",
+  "Facts the agent remembers across runs, stored in the local data directory. Deleting a fact erases it and its stored source excerpt from memory; past conversations are not rewritten.":
+    "Agent 跨运行记住的事实在本地数据目录中。删除一条事实会同时从记忆中删除它的原文；过去的对话记录不会被改写。",
+  "{total} facts · {active} active · {episodes} source excerpts":
+    "{total} 条事实 · {active} 条有效 · {episodes} 条原文",
+  "Add a stable fact the agent should remember":
+    "添加一条 Agent 应记住的稳定事实",
+  "Project": "项目",
+  "User": "用户",
+  "Run": "运行",
+  "Add": "添加",
+  "Search memories": "搜索记忆",
+  "Search": "搜索",
+  "Clear": "清除",
+  "Delete": "删除",
+  "Confirm delete": "确认删除",
+  "Click delete again to confirm permanent deletion.":
+    "再次点击删除以确认永久删除。",
+  "Deleted {records} fact(s) and {episodes} source excerpt(s).":
+    "已删除 {records} 条事实和 {episodes} 条原文。",
+  "Memory saved.": "记忆已保存。",
+  "This fact is already stored.": "这条事实已经存在。",
+  "No memories match this search.": "没有匹配的记忆。",
+  "No memories yet. The agent can save facts with its memory tool.":
+    "还没有记忆。Agent 可以用记忆工具保存事实。",
+  "Redacted": "已脱敏",
+  "Confidence": "置信度",
+  "From user": "来自用户",
+  "From system": "来自系统",
+  "From tool": "来自工具",
+  "From model": "来自模型",
+  "From external": "来自外部",
+  "State active": "有效",
+  "State invalidated": "已失效",
+  "State superseded": "已取代",
 };
 
 export function t(key: string): string {

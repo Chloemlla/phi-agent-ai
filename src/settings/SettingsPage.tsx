@@ -1,14 +1,15 @@
-// Full-page settings shell: a local navigation rail and the two panes. Both
+// Full-page settings shell: a local navigation rail and the section panes. All
 // panes stay mounted so switching sections never discards a provider draft.
 
 import { createSignal } from "solid-js";
 import { t } from "../i18n";
-import { IconArrowLeft, IconServer, IconSettings } from "../components/Icons";
+import { IconArrowLeft, IconBrain, IconServer, IconSettings } from "../components/Icons";
 import { GeneralPage } from "./GeneralPage";
+import { MemoryPage } from "./MemoryPage";
 import { ProvidersPage } from "./ProvidersPage";
 import "./Settings.css";
 
-type Section = "providers" | "general";
+type Section = "providers" | "memory" | "general";
 
 export function SettingsPage(props: {
   workspace: string;
@@ -34,6 +35,13 @@ export function SettingsPage(props: {
           {t("Model providers")}
         </button>
         <button
+          classList={{ "settings-nav-item": true, active: section() === "memory" }}
+          onClick={() => setSection("memory")}
+        >
+          <IconBrain size={15} />
+          {t("Memory")}
+        </button>
+        <button
           classList={{ "settings-nav-item": true, active: section() === "general" }}
           onClick={() => setSection("general")}
         >
@@ -47,6 +55,9 @@ export function SettingsPage(props: {
         <div class="settings-content-inner">
           <div classList={{ "settings-pane": true, hidden: section() !== "providers" }}>
             <ProvidersPage onRefresh={props.onRefresh} />
+          </div>
+          <div classList={{ "settings-pane": true, hidden: section() !== "memory" }}>
+            <MemoryPage onRefresh={props.onRefresh} />
           </div>
           <div classList={{ "settings-pane": true, hidden: section() !== "general" }}>
             <GeneralPage

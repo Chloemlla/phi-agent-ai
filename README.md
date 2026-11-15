@@ -68,6 +68,14 @@ Without a provider, a run fails with a clear message instead of inventing output
 
 The main surface is a task workbench. When a visual layout helps, the agent lays out the workbench beside the conversation — plans, tables, charts, forms and buttons you can act on directly. Clicking a button or submitting a form sends that instruction back to the same agent, so the task keeps moving instead of restarting. The agent receives the workbench tool on every run and decides when to use it; the panel opens automatically when the view changes. Approvals and tool calls work exactly the same way.
 
+## Memory you can inspect
+
+The agent can save durable facts — preferences, project conventions, decisions — and recall them in later runs. Every fact records where it came from and how much that source is trusted; unverified sources carry lower confidence and are labelled.
+
+Open **Settings → Memory** to search what the agent remembers, add a fact yourself, or delete one permanently. Deleting a fact also erases its stored source excerpt and search index from memory. Past conversation transcripts are a separate record and are not rewritten. Values that look like credentials are redacted before a fact is stored in memory, and a bare secret is refused.
+
+Memory is stored on your machine — there is no separate memory service. Recalled facts are shared with the model provider you configured, just like the rest of the conversation. If recall fails, the agent continues without it rather than blocking the task.
+
 ## Quick start
 
 phi-agent is in early access. There are no packaged installers yet — build it from source.
@@ -101,7 +109,8 @@ Giving an agent the ability to edit files and run commands is serious. phi-agent
 ## Roadmap
 
 - [x] **v0.1 — Desktop** · real coding tasks, approvals, budget caps, cancellation, crash recovery
-- [ ] **v1 — Beyond one window** · work from more than one device, installable extensions, basic memory
+- [x] **Memory MVP** · durable facts the agent can recall; inspect, search and delete them in Settings
+- [ ] **v1 — Beyond one window** · work from more than one device, installable extensions, richer memory
 - [ ] **Later** · task handoff across devices, extensions marketplace
 
 ## FAQ

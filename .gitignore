@@ -39,3 +39,8 @@
 # Desktop core
 !/src-tauri/
 !/src-tauri/**
+
+# Local runtime data (journal, blobs, providers, memory) must never be
+# committed, even though the shell directories are whitelisted above.
+/.phi/
+/src-tauri/.phi/

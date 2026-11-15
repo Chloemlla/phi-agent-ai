@@ -38,6 +38,11 @@ pub fn run() {
             api::test_provider,
             api::fetch_models,
             api::describe_models,
+            api::list_memories,
+            api::search_memories,
+            api::get_memory_stats,
+            api::add_memory,
+            api::forget_memories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

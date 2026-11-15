@@ -216,6 +216,80 @@ fn zh(msgid: &str) -> Option<&'static str> {
             "命令执行不可逆，需要人工审批"
         }
         "No policy matches {tool}; denied by default" => "没有匹配 {tool} 的策略，默认拒绝",
+        "Reading long-term memory does not touch the workspace" => "读取长期记忆不会触碰工作区",
+        "Memory writes pass the admission barrier and can be forgotten later" => {
+            "记忆写入会经过准入，之后可以遗忘"
+        }
+
+        // Memory
+        "The candidate fact is empty or has no meaningful content" => "候选事实为空或没有实质内容",
+        "The candidate fact is too long ({max} characters max)" => {
+            "候选事实过长（最多 {max} 个字符）"
+        }
+        "This memory scope needs a project, agent or run context" => {
+            "该记忆作用域需要项目、Agent 或运行上下文"
+        }
+        "The validity window is invalid" => "有效期区间无效",
+        "The confidence must be a finite number between 0 and 1" => {
+            "置信度必须是 0 到 1 之间的有限数字"
+        }
+        "The candidate looks like a secret; sensitive values are not stored as memories" => {
+            "候选内容疑似密钥；敏感值不会写入记忆"
+        }
+        "An identical fact already exists" => "已存在相同的事实",
+        "Unknown memory scope: {scope}" => "未知记忆作用域: {scope}",
+        "Run-scoped memories are written by the agent inside a run" => {
+            "运行作用域的记忆由 Agent 在运行中写入"
+        }
+        "Memory record not found" => "记忆记录不存在",
+        "Memory record is already inactive" => "记忆记录已失效",
+        "User requested deletion" => "用户请求删除",
+        "Deleted from settings" => "从设置中删除",
+        "Select which memories to forget" => "请选择要遗忘哪些记忆",
+        "No memory ids were provided" => "没有提供记忆 id",
+        "Missing query argument" => "缺少 query 参数",
+        "No matching memories." => "没有匹配的记忆。",
+        "Memory search failed: {error}" => "记忆检索失败: {error}",
+        "Missing scope argument" => "缺少 scope 参数",
+        "Memory write failed: {error}" => "记忆写入失败: {error}",
+        "Memory is not available" => "记忆功能不可用",
+        "Unknown memory subcommand: {command}" => "未知 memory 子命令: {command}",
+        "Unknown memory scope {scope}; expected user, project, agent or run" => {
+            "未知记忆作用域 {scope}；应为 user、project、agent 或 run"
+        }
+        "Unknown memory source {source}; expected user, system, tool, model or external" => {
+            "未知记忆来源 {source}；应为 user、system、tool、model 或 external"
+        }
+        "Unknown memory state {state}; expected active, invalidated or superseded" => {
+            "未知记忆状态 {state}；应为 active、invalidated 或 superseded"
+        }
+        "Unknown episode source {source}; expected user_input, tool_result, model_output or external" => {
+            "未知原文来源 {source}；应为 user_input、tool_result、model_output 或 external"
+        }
+        "--limit is not a number: {value}" => "--limit 不是数字: {value}",
+        "--offset is not a number: {value}" => "--offset 不是数字: {value}",
+        "{flag} is not a number: {value}" => "{flag} 不是数字: {value}",
+        "{flag} must be a finite number: {value}" => "{flag} 必须是有限数字: {value}",
+        "Conflicting memory ids" => "记忆 id 冲突",
+        "memory search requires a query" => "memory search 需要一个查询词",
+        "memory add requires --fact TEXT" => "memory add 需要 --fact TEXT",
+        "This memory command requires --reason TEXT" => "该 memory 命令需要 --reason TEXT",
+        "Unknown memory list argument: {arg}" => "未知 memory list 参数: {arg}",
+        "Unknown memory search argument: {arg}" => "未知 memory search 参数: {arg}",
+        "Unknown memory add argument: {arg}" => "未知 memory add 参数: {arg}",
+        "Unknown memory invalidate argument: {arg}" => "未知 memory invalidate 参数: {arg}",
+        "Unknown memory correct argument: {arg}" => "未知 memory correct 参数: {arg}",
+        "memory correct requires --fact TEXT" => "memory correct 需要 --fact TEXT",
+        "Unknown memory supersede argument: {arg}" => "未知 memory supersede 参数: {arg}",
+        "memory supersede requires --fact TEXT" => "memory supersede 需要 --fact TEXT",
+        "memory supersede requires --scope" => "memory supersede 需要 --scope",
+        "Unknown memory forget argument: {arg}" => "未知 memory forget 参数: {arg}",
+        "Do not combine --all with other forget selectors" => {
+            "不要将 --all 与其他遗忘选择器组合使用"
+        }
+        "memory forget requires --id, --scope, --project, --run or --all" => {
+            "memory forget 需要 --id、--scope、--project、--run 或 --all"
+        }
 
         // Provider store
         "Unknown provider: {id}" => "未知 provider: {id}",
@@ -450,6 +524,9 @@ mod tests {
             "The node is read-only",
             "Another phi-agent process is using this data directory",
             "Failed to record the step start: {error}",
+            "Memory record not found",
+            "The candidate looks like a secret; sensitive values are not stored as memories",
+            "memory forget requires --id, --scope, --project, --run or --all",
         ] {
             assert!(zh(msgid).is_some(), "missing translation: {msgid}");
         }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::memory::{MemoryScope, SourceTrust};
 use super::message::Role;
 
 /// Domain event catalog (MVP subset).
@@ -204,5 +205,38 @@ pub enum DomainEvent {
     },
     ApprovalExpired {
         approval_id: String,
+    },
+
+    // ── memory ────────────────────────────────────────────────────────
+    // Memory events are metadata only. The fact text lives in the memory
+    // store so `forget` can erase it completely; the journal keeps an
+    // audit trail that survives the deletion without retaining content.
+    MemoryAdmitted {
+        memory_id: String,
+        scope: MemoryScope,
+        source_trust: SourceTrust,
+        confidence: f64,
+        fact_chars: u64,
+    },
+    MemoryRejected {
+        candidate_id: String,
+        scope: MemoryScope,
+        reason: String,
+    },
+    MemoryInvalidated {
+        memory_id: String,
+        reason: String,
+    },
+    MemorySuperseded {
+        old_id: String,
+        new_id: String,
+        reason: String,
+    },
+    MemoryForgotten {
+        /// Selector summary (for example `all`, `ids:3` or `run:run_x`).
+        scope: String,
+        records: u64,
+        episodes: u64,
+        reason: String,
     },
 }

@@ -9,4 +9,5 @@ pub mod fs_blob;
 pub mod fs_journal;
 pub mod jsonl_sink;
 pub mod lock;
+pub mod memory_sqlite;
 pub mod system;

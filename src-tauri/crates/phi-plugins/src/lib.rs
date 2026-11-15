@@ -3,6 +3,7 @@
 pub mod approver;
 pub mod context;
 pub mod loop_plugin;
+pub mod memory;
 pub mod model_catalog;
 pub mod model_gateway;
 pub mod model_protocol;

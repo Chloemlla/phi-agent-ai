@@ -1,9 +1,15 @@
 use tauri::State;
 
 use crate::app::AppStateHandle;
+use phi_contracts::memory::{
+    ForgetReport, ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryHit, MemoryListFilter,
+    MemoryQuery, MemoryStats,
+};
 use phi_contracts::ports::{ModelStatus, RunStatus};
 use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
+use phi_domain::memory::{MemoryRecord, MemoryScope, SourceTrust};
 use phi_domain::view::SessionSummary;
+use phi_i18n as i18n;
 use phi_node::{Bootstrap, SendResult, SessionDetail};
 
 #[tauri::command]
@@ -137,4 +143,70 @@ pub async fn fetch_models(
 #[tauri::command]
 pub fn describe_models(state: State<'_, AppStateHandle>, model_ids: Vec<String>) -> Vec<ModelSpec> {
     state.0.describe_models(&model_ids)
+}
+
+// ─────────────────────────── memory (settings surface) ──────────────────────
+
+#[tauri::command]
+pub fn list_memories(
+    state: State<'_, AppStateHandle>,
+    text: Option<String>,
+) -> Result<Vec<MemoryRecord>, String> {
+    state.0.memory_list(MemoryListFilter {
+        text: text.filter(|value| !value.trim().is_empty()),
+        limit: 200,
+        ..Default::default()
+    })
+}
+
+#[tauri::command]
+pub fn search_memories(
+    state: State<'_, AppStateHandle>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryHit>, String> {
+    state.0.memory_search(MemoryQuery {
+        text: query,
+        limit: limit.unwrap_or(10).clamp(1, 50),
+        ..Default::default()
+    })
+}
+
+#[tauri::command]
+pub fn get_memory_stats(state: State<'_, AppStateHandle>) -> Result<MemoryStats, String> {
+    state.0.memory_stats()
+}
+
+#[tauri::command]
+pub fn add_memory(
+    state: State<'_, AppStateHandle>,
+    fact: String,
+    scope: String,
+) -> Result<MemoryAddOutcome, String> {
+    let scope = match scope.as_str() {
+        "user" => MemoryScope::User,
+        "project" => MemoryScope::Project,
+        other => {
+            return Err(i18n::t_args(
+                "Unknown memory scope: {scope}",
+                &[("scope", other.to_string())],
+            ));
+        }
+    };
+    state
+        .0
+        .memory_add(MemoryAddRequest::new(fact, scope, SourceTrust::User))
+}
+
+#[tauri::command]
+pub fn forget_memories(
+    state: State<'_, AppStateHandle>,
+    ids: Vec<String>,
+) -> Result<ForgetReport, String> {
+    if ids.is_empty() {
+        return Err(i18n::t("No memory ids were provided"));
+    }
+    state
+        .0
+        .memory_forget(ForgetSelector::ids(ids), &i18n::t("Deleted from settings"))
 }

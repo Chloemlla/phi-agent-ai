@@ -4,5 +4,6 @@
 //! it, never the other way around.
 
 pub mod events;
+pub mod memory;
 pub mod message;
 pub mod view;

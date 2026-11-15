@@ -17,12 +17,18 @@ use phi_adapters::control;
 use phi_adapters::fs_blob::FsBlobStore;
 use phi_adapters::fs_journal::JsonlJournal;
 use phi_adapters::lock::DataDirLock;
+use phi_adapters::memory_sqlite::SqliteMemoryStore;
 use phi_adapters::system::{StderrLog, SystemClock, UuidIds};
+use phi_contracts::memory::{
+    ForgetReport, ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryHit, MemoryListFilter,
+    MemoryPort, MemoryQuery, MemoryStats, MemoryStore, Principal,
+};
 use phi_contracts::ports::{ModelStatus, RunLimits, RunStatus, SessionPort, StartRunRequest};
 use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_contracts::services::Services;
 use phi_contracts::stream::{StreamHub, StreamPort};
 use phi_contracts::{REQUIRED_SLOTS, SLOT_PERSISTENCE_JOURNAL};
+use phi_domain::memory::{Episode, MemoryRecord};
 use phi_domain::message::{ContentBlock, Role};
 use phi_domain::view::{PendingApprovalView, SessionSummary, SessionView};
 use phi_i18n as i18n;
@@ -33,6 +39,7 @@ use phi_kernel::registry::Registry;
 use phi_plugins::approver::HumanApprover;
 use phi_plugins::context::DefaultContextPlugin;
 use phi_plugins::loop_plugin::LoopPlugin;
+use phi_plugins::memory::MemoryPlugin;
 use phi_plugins::model_gateway::ModelGateway;
 use phi_plugins::policy::DefaultPolicyPlugin;
 use phi_plugins::provider_store::ProviderStore;
@@ -73,6 +80,13 @@ pub struct Node {
     providers: Arc<ProviderStore>,
     model_gateway: Arc<ModelGateway>,
     data_dir: PathBuf,
+    /// Workspace resolved for this process. An explicit `--workspace` wins over
+    /// the persisted setting, so memory attribution must use this value rather
+    /// than re-reading the config snapshot.
+    workspace: PathBuf,
+    /// An explicit shell selection. `None` means the workspace can still change
+    /// through the settings surface while the node is running.
+    explicit_workspace: Option<PathBuf>,
     writable: bool,
     // Stop the watcher before releasing the data-directory lock.
     _control_watcher: Option<ControlWatcher>,
@@ -218,6 +232,39 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     ));
     let context = Arc::new(DefaultContextPlugin::new(sandbox.clone()));
 
+    // Memory is optional: if the database cannot be opened the node still
+    // starts and retrieval degrades to "no memories" instead of pretending.
+    let memory_path = memory_database_path(&config.data_dir);
+    let memory_store: Option<Arc<dyn MemoryStore>> = if config.writable {
+        match SqliteMemoryStore::open(&memory_path, true) {
+            Ok(store) => Some(Arc::new(store)),
+            Err(error) => {
+                log.warn(&format!("memory is unavailable: {error}"));
+                None
+            }
+        }
+    } else if memory_path.exists() {
+        match SqliteMemoryStore::open(&memory_path, false) {
+            Ok(store) => Some(Arc::new(store)),
+            Err(error) => {
+                log.warn(&format!("memory is unavailable: {error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let memory = memory_store.map(|store| {
+        Arc::new(MemoryPlugin::new(
+            store,
+            clock.clone(),
+            ids.clone(),
+            bus.clone(),
+            log.clone(),
+            node_id.clone(),
+        ))
+    });
+
     let services = Arc::new(Services::new());
     services.set_session(session.clone());
     services.set_model(model_gateway.clone());
@@ -226,6 +273,10 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     services.set_approver(approver.clone());
     services.set_context(context.clone());
     services.add_tool_provider(tools.clone());
+    if let Some(memory) = &memory {
+        services.set_memory(memory.clone());
+        services.add_tool_provider(memory.clone());
+    }
 
     let runtime = Arc::new(LoopPlugin::new(
         bus.clone(),
@@ -247,6 +298,9 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     kernel.add_plugin(tools.clone());
     kernel.add_plugin(context.clone());
     kernel.add_plugin(runtime.clone());
+    if let Some(memory) = &memory {
+        kernel.add_plugin(memory.clone());
+    }
 
     if config.writable {
         kernel.activate_all();
@@ -302,6 +356,8 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
         providers,
         model_gateway,
         data_dir: config.data_dir,
+        workspace,
+        explicit_workspace: config.workspace.clone(),
         writable: config.writable,
         _data_lock: data_lock,
         _control_watcher: control_watcher,
@@ -383,6 +439,10 @@ fn persist_workspace(
     let display = workspace.to_string_lossy().to_string();
     app_config.update(|config| config.workspace = Some(display))?;
     Ok(())
+}
+
+fn memory_database_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("memory").join("memory.db")
 }
 
 impl Node {
@@ -699,6 +759,118 @@ impl Node {
     /// Best-effort catalogue metadata for model ids. Pure: no I/O, no lock.
     pub fn describe_models(&self, ids: &[String]) -> Vec<ModelSpec> {
         phi_plugins::model_catalog::describe_many(ids)
+    }
+
+    // ── memory ────────────────────────────────────────────────────────
+
+    fn principal(&self) -> Principal {
+        let project = self
+            .explicit_workspace
+            .clone()
+            .or_else(|| self.config.snapshot().workspace.map(PathBuf::from))
+            .unwrap_or_else(|| self.workspace.clone());
+        Principal {
+            user_id: self.node_id.clone(),
+            project_id: Some(project.to_string_lossy().to_string()),
+            agent_id: Some("main".to_string()),
+            run_id: None,
+        }
+    }
+
+    fn memory_port(&self) -> Result<Arc<dyn MemoryPort>, String> {
+        self.services
+            .memory()
+            .ok_or_else(|| i18n::t("Memory is not available"))
+    }
+
+    /// Read paths degrade to an empty memory when the data directory has never
+    /// created a memory database. Writes still fail honestly.
+    fn memory_read_port(&self) -> Result<Option<Arc<dyn MemoryPort>>, String> {
+        if let Some(port) = self.services.memory() {
+            return Ok(Some(port));
+        }
+        if !self.writable && !memory_database_path(&self.data_dir).exists() {
+            return Ok(None);
+        }
+        Err(i18n::t("Memory is not available"))
+    }
+
+    pub fn memory_add(&self, request: MemoryAddRequest) -> Result<MemoryAddOutcome, String> {
+        self.require_writable()?;
+        self.memory_port()?.add(&self.principal(), request)
+    }
+
+    pub fn memory_search(&self, query: MemoryQuery) -> Result<Vec<MemoryHit>, String> {
+        match self.memory_read_port()? {
+            Some(port) => port.search(&self.principal(), &query),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn memory_list(&self, filter: MemoryListFilter) -> Result<Vec<MemoryRecord>, String> {
+        match self.memory_read_port()? {
+            Some(port) => port.list(&self.principal(), &filter),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub fn memory_get(&self, id: &str) -> Result<Option<MemoryRecord>, String> {
+        match self.memory_read_port()? {
+            Some(port) => port.get(&self.principal(), id),
+            None => Ok(None),
+        }
+    }
+
+    pub fn memory_episode(&self, id: &str) -> Result<Option<Episode>, String> {
+        match self.memory_read_port()? {
+            Some(port) => port.episode(&self.principal(), id),
+            None => Ok(None),
+        }
+    }
+
+    pub fn memory_invalidate(&self, id: &str, reason: &str) -> Result<(), String> {
+        self.require_writable()?;
+        self.memory_port()?
+            .invalidate(&self.principal(), id, reason)
+    }
+
+    pub fn memory_supersede(
+        &self,
+        old_id: &str,
+        request: MemoryAddRequest,
+        reason: &str,
+    ) -> Result<MemoryAddOutcome, String> {
+        self.require_writable()?;
+        self.memory_port()?
+            .supersede(&self.principal(), old_id, request, reason)
+    }
+
+    pub fn memory_correct(
+        &self,
+        id: &str,
+        corrected_fact: &str,
+        reason: &str,
+    ) -> Result<MemoryAddOutcome, String> {
+        self.require_writable()?;
+        self.memory_port()?
+            .correct(&self.principal(), id, corrected_fact, reason)
+    }
+
+    pub fn memory_forget(
+        &self,
+        selector: ForgetSelector,
+        reason: &str,
+    ) -> Result<ForgetReport, String> {
+        self.require_writable()?;
+        self.memory_port()?
+            .forget(&self.principal(), selector, reason)
+    }
+
+    pub fn memory_stats(&self) -> Result<MemoryStats, String> {
+        match self.memory_read_port()? {
+            Some(port) => port.stats(&self.principal()),
+            None => Ok(MemoryStats::default()),
+        }
     }
 
     pub async fn test_provider(&self, id: Option<&str>) -> ProviderTestView {

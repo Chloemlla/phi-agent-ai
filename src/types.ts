@@ -113,3 +113,54 @@ export type Bootstrap = {
   activeProviderId: string | null;
   language: string;
 };
+
+export type MemoryScope = "user" | "project" | "agent" | "run";
+export type MemoryTrust = "user" | "system" | "tool" | "model" | "external";
+export type MemoryState = "active" | "invalidated" | "superseded";
+
+export type MemoryRecord = {
+  id: string;
+  fact: string;
+  scope: MemoryScope;
+  userId: string;
+  projectId: string | null;
+  agentId: string | null;
+  runId: string | null;
+  sourceTrust: MemoryTrust;
+  confidence: number;
+  validFrom: string | null;
+  validTo: string | null;
+  recordedAt: string;
+  invalidatedAt: string | null;
+  supersededBy: string | null;
+  reason: string | null;
+  state: MemoryState;
+  episodeId: string | null;
+  redacted: boolean;
+};
+
+export type MemoryHit = {
+  record: MemoryRecord;
+  score: number;
+  matchedTerms: string[];
+};
+
+export type MemoryStats = {
+  total: number;
+  active: number;
+  invalidated: number;
+  superseded: number;
+  userScope: number;
+  projectScope: number;
+  agentScope: number;
+  runScope: number;
+  episodes: number;
+  redacted: number;
+};
+
+export type MemoryAddOutcome =
+  | { status: "admitted"; recordId: string; redacted: boolean }
+  | { status: "duplicate"; recordId: string }
+  | { status: "rejected"; candidateId: string; reason: string; message: string };
+
+export type ForgetReport = { records: number; episodes: number };

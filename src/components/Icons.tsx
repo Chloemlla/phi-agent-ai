@@ -4,6 +4,7 @@
 export {
   ArrowLeft as IconArrowLeft,
   ArrowUp as IconArrowUp,
+  Brain as IconBrain,
   Check as IconCheck,
   ChevronRight as IconChevron,
   CircleAlert as IconCircleAlert,
@@ -13,6 +14,7 @@ export {
   PanelLeft as IconPanel,
   Plus as IconPlus,
   RefreshCw as IconRefresh,
+  Search as IconSearch,
   Server as IconServer,
   Settings as IconSettings,
   Trash2 as IconTrash,

@@ -107,6 +107,54 @@ Three wire protocols are supported: `anthropic_messages`, `openai_chat` and
 `openai_responses`, each with SSE streaming. Streaming deltas are transient and
 go to the shell sink; only the final assistant message is journaled.
 
+## Memory
+
+Long-term memory is an optional built-in plugin (`memory.store` slot). A node
+starts without it; retrieval degrades to no memory and writes fail honestly.
+
+- Facts, source episodes and the inverted index live in
+  `<data-dir>/memory/memory.db` (SQLite, WAL). The session journal only receives
+  metadata-only `Memory*` events (id, scope, trust, counts, reason) — fact text
+  never enters the journal.
+- Every write passes the admission barrier: scope context, length bounds, valid
+  interval, secret redaction, then a duplicate check. A bare secret is rejected;
+  a secret embedded in a larger fact is redacted and the record is marked
+  `redacted`.
+- Retrieval is BM25 over a deterministic tokenizer (Latin words plus CJK
+  bigrams). Visibility comes from the host-built `Principal`; scope filters can
+  only narrow it. Agent memories are project-bound, run memories are run-bound,
+  and user memories cross projects for the same user. The local user is the
+  node id; project identity is the resolved workspace path (an explicit
+  `--workspace` wins for that process).
+- The agent receives `memory_search` and `memory_write` tools. Recalled facts are
+  injected into the system prompt as labelled, untrusted data with a 500 ms
+  deadline; retrieval failure degrades to no memory.
+- Agent-authored facts are stored with trust `model`; admission checks form and
+  secrets, not truth. The prompt labels all recalled facts as data, never as
+  instructions. Tool audit previews for memory tools omit or redact the fact;
+  the assistant tool-use message itself remains conversation data.
+- `forget` is a full-chain delete: facts, index rows and episodes. The audit
+  event keeps scope, counts and reason, never content. Conversation history is
+  separate session data and is not rewritten.
+- `search` applies execution-scope visibility. `list`, `get`, `invalidate`,
+  `supersede`, `correct` and `forget` are owner-level management operations
+  authorized by the principal's user id; the settings page and CLI may manage
+  the owner's memories across projects and runs.
+- Memory writes take the same single-writer data-directory lock as every other
+  write; read-only memory commands do not lock.
+- Retrieval quality is tracked by a golden set:
+  `cargo test -p phi-plugins --test memory_golden -- --ignored --nocapture`.
+  CI runs it non-blocking at MVP stage; scope leakage is a hard zero in the
+  regular suite.
+
+```bash
+phi-headless memory add --fact "The user prefers pnpm" --scope project
+phi-headless memory search "package manager"
+phi-headless memory list --state active
+phi-headless memory forget <id> --reason "outdated"
+phi-headless memory stats
+```
+
 ## Workbench view
 
 The main surface is a task workbench, not a chat log. The agent can call the

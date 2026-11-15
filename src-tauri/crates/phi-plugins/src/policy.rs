@@ -121,6 +121,16 @@ impl PolicyPort for DefaultPolicyPlugin {
                 effect: PolicyEffect::Allow,
                 rationale: i18n::t("Workbench views are declarative data and cannot execute code"),
             },
+            "memory_search" => PolicyDecision {
+                effect: PolicyEffect::Allow,
+                rationale: i18n::t("Reading long-term memory does not touch the workspace"),
+            },
+            "memory_write" => PolicyDecision {
+                effect: PolicyEffect::Allow,
+                rationale: i18n::t(
+                    "Memory writes pass the admission barrier and can be forgotten later",
+                ),
+            },
             other => PolicyDecision {
                 effect: PolicyEffect::Deny,
                 rationale: i18n::t_args(

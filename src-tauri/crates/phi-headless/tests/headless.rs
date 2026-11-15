@@ -10,6 +10,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -89,6 +90,44 @@ impl TestEnv {
             String::from_utf8_lossy(&output.stderr)
         );
         last_json(&output.stdout)
+    }
+
+    fn memory_add(&self, fact: &str, scope: &str) -> Value {
+        let output = self.command(&["memory", "add", "--fact", fact, "--scope", scope]);
+        assert!(
+            output.status.success(),
+            "memory add failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        last_json(&output.stdout)
+    }
+
+    fn memory_search(&self, query: &str) -> Value {
+        let output = self.command(&["memory", "search", query]);
+        assert!(
+            output.status.success(),
+            "memory search failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        last_json(&output.stdout)
+    }
+
+    fn memory_list(&self, text: Option<&str>) -> Vec<Value> {
+        let mut args = vec!["memory", "list"];
+        if let Some(text) = text {
+            args.extend_from_slice(&["--text", text]);
+        }
+        let output = self.command(&args);
+        assert!(
+            output.status.success(),
+            "memory list failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        last_json(&output.stdout)["memories"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Point the node at a deterministic local model endpoint. The provider
@@ -190,24 +229,34 @@ fn tool_result_text(session: &Value) -> String {
 /// history decides which tool to call, and a tool result always ends the run.
 struct ScriptedProvider {
     port: u16,
+    requests: Arc<Mutex<Vec<Value>>>,
 }
 
 impl ScriptedProvider {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind scripted provider");
         let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorder = requests.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if let Ok(stream) = stream {
-                    let _ = handle_model_request(stream);
+                    let _ = handle_model_request(stream, recorder.clone());
                 }
             }
         });
-        Self { port }
+        Self { port, requests }
+    }
+
+    fn requests(&self) -> Vec<Value> {
+        self.requests.lock().unwrap().clone()
     }
 }
 
-fn handle_model_request(mut stream: TcpStream) -> std::io::Result<()> {
+fn handle_model_request(
+    mut stream: TcpStream,
+    requests: Arc<Mutex<Vec<Value>>>,
+) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut content_length = 0usize;
     loop {
@@ -224,6 +273,9 @@ fn handle_model_request(mut stream: TcpStream) -> std::io::Result<()> {
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
     let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    if let Ok(mut log) = requests.lock() {
+        log.push(request.clone());
+    }
     let payload = serde_json::to_vec(&scripted_response(&request)).unwrap();
     write!(
         stream,
@@ -277,6 +329,13 @@ fn scripted_response(request: &Value) -> Value {
             "shell_exec",
             json!({ "command": "echo phi-agent-shell-demo", "timeout_secs": 30 }),
         )
+    } else if lower.contains("remember") {
+        (
+            "memory_write",
+            json!({ "fact": "The user prefers dark mode", "scope": "user" }),
+        )
+    } else if lower.contains("recall") {
+        ("memory_search", json!({ "query": "deploy target" }))
     } else if lower.contains("dashboard") || lower.contains("plan") {
         ("ui_update", json!({ "view": scripted_view() }))
     } else {
@@ -669,4 +728,178 @@ fn provider_add_fills_catalogue_metadata_and_picks_a_primary_model() {
     assert_eq!(models.len(), 2);
     assert_eq!(models[0]["name"], "Claude Sonnet");
     assert_eq!(models[1]["name"], "GPT-5 mini");
+}
+
+#[test]
+fn memory_is_injected_into_the_system_prompt() {
+    let env = TestEnv::new("memory-inject");
+    let provider = env.with_scripted_provider();
+    env.memory_add("The user prefers dark mode in every editor", "user");
+    let result = env.run("which editor theme does the user prefer", &[]);
+    assert_eq!(result["run"]["state"], "Succeeded");
+    let requests = provider.requests();
+    assert!(!requests.is_empty());
+    let first = serde_json::to_string(&requests[0]).unwrap();
+    assert!(first.contains("Long-term memory"), "system prompt: {first}");
+    assert!(first.contains("dark mode"), "system prompt: {first}");
+}
+
+#[test]
+fn agent_can_recall_memory_with_the_tool() {
+    let env = TestEnv::new("memory-recall");
+    env.with_scripted_provider();
+    env.memory_add("The deploy target is fly.io", "project");
+    let hits = env.memory_search("deploy target");
+    assert_eq!(hits["hits"].as_array().unwrap().len(), 1);
+    let result = env.run("please recall the deployment target", &[]);
+    assert_eq!(result["run"]["state"], "Succeeded");
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let text = tool_result_text(&session);
+    assert!(text.contains("fly.io"), "tool result: {text}");
+    assert!(text.contains("unverified data"), "tool result: {text}");
+}
+
+#[test]
+fn agent_can_write_memory_with_the_tool() {
+    let env = TestEnv::new("memory-write");
+    env.with_scripted_provider();
+    let result = env.run("remember that the user prefers dark mode", &[]);
+    assert_eq!(result["run"]["state"], "Succeeded");
+    let memories = env.memory_list(Some("dark mode"));
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0]["sourceTrust"], "model");
+    assert_eq!(memories[0]["scope"], "user");
+    assert_eq!(memories[0]["state"], "active");
+}
+
+#[test]
+fn explicit_workspace_scopes_memory_queries() {
+    let env = TestEnv::new("memory-workspace");
+    env.memory_add("The deploy target is fly.io", "project");
+    let other = std::env::temp_dir().join(format!("phi-other-ws-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&other).unwrap();
+    let output = env.command(&[
+        "--workspace",
+        other.to_str().unwrap(),
+        "memory",
+        "search",
+        "deploy target",
+    ]);
+    assert!(
+        output.status.success(),
+        "search failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = last_json(&output.stdout);
+    assert!(
+        result["hits"].as_array().unwrap().is_empty(),
+        "project memory must follow the explicit workspace: {result}"
+    );
+    let _ = std::fs::remove_dir_all(other);
+}
+
+#[test]
+fn memory_reads_degrade_on_a_fresh_data_dir() {
+    let env = TestEnv::new("memory-fresh");
+    let list = env.command(&["memory", "list"]);
+    assert!(
+        list.status.success(),
+        "list failed: {}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    assert!(
+        last_json(&list.stdout)["memories"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let stats = env.command(&["memory", "stats"]);
+    assert!(stats.status.success());
+    assert_eq!(last_json(&stats.stdout)["stats"]["total"], 0);
+
+    let search = env.command(&["memory", "search", "anything"]);
+    assert!(search.status.success());
+    assert!(
+        last_json(&search.stdout)["hits"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn memory_cli_forgets_and_rejects_secrets() {
+    let env = TestEnv::new("memory-cli");
+    let added = env.memory_add("The user prefers tabs", "user");
+    let id = added["recordId"].as_str().unwrap().to_string();
+
+    let secret = env.command(&[
+        "memory",
+        "add",
+        "--fact",
+        "sk-test0000000000000000",
+        "--scope",
+        "user",
+    ]);
+    assert_eq!(secret.status.code(), Some(4));
+    let rejected = last_json(&secret.stdout);
+    assert_eq!(rejected["reason"], "secret");
+
+    let run_scope = env.command(&[
+        "memory",
+        "add",
+        "--fact",
+        "only the agent writes run memories",
+        "--scope",
+        "run",
+    ]);
+    assert_eq!(run_scope.status.code(), Some(2));
+
+    let bare_forget = env.command(&["memory", "forget"]);
+    assert_eq!(bare_forget.status.code(), Some(2));
+
+    let nan_confidence = env.command(&[
+        "memory",
+        "add",
+        "--fact",
+        "uses pnpm",
+        "--scope",
+        "user",
+        "--confidence",
+        "NaN",
+    ]);
+    assert_eq!(nan_confidence.status.code(), Some(2));
+
+    let flag_invalidate = env.command(&[
+        "memory",
+        "invalidate",
+        "--id",
+        id.as_str(),
+        "--reason",
+        "flag form",
+    ]);
+    assert!(
+        flag_invalidate.status.success(),
+        "flag-form invalidate failed: {}",
+        String::from_utf8_lossy(&flag_invalidate.stderr)
+    );
+    let shown = env.command(&["memory", "show", id.as_str()]);
+    assert!(shown.status.success());
+    assert_eq!(last_json(&shown.stdout)["record"]["state"], "invalidated");
+
+    let forget = env.command(&[
+        "memory",
+        "forget",
+        "--id",
+        id.as_str(),
+        "--reason",
+        "test cleanup",
+    ]);
+    assert!(
+        forget.status.success(),
+        "forget failed: {}",
+        String::from_utf8_lossy(&forget.stderr)
+    );
+    assert!(env.memory_list(Some("tabs")).is_empty());
 }

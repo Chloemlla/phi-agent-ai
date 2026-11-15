@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 
+use super::memory::MemoryPort;
 use super::ports::{
     ApproverPort, ContextPort, ModelPort, PolicyPort, RuntimePort, SandboxPort, SessionPort,
     ToolPort,
@@ -19,6 +20,7 @@ pub struct Services {
     approver: RwLock<Option<Arc<dyn ApproverPort>>>,
     context: RwLock<Option<Arc<dyn ContextPort>>>,
     runtime: RwLock<Option<Arc<dyn RuntimePort>>>,
+    memory: RwLock<Option<Arc<dyn MemoryPort>>>,
     tools: RwLock<Vec<Arc<dyn ToolPort>>>,
 }
 
@@ -78,6 +80,12 @@ impl Services {
     pub fn set_runtime(&self, value: Arc<dyn RuntimePort>) {
         *self.runtime.write().unwrap() = Some(value);
     }
+    pub fn memory(&self) -> Option<Arc<dyn MemoryPort>> {
+        self.memory.read().unwrap().clone()
+    }
+    pub fn set_memory(&self, value: Arc<dyn MemoryPort>) {
+        *self.memory.write().unwrap() = Some(value);
+    }
     pub fn tool_providers(&self) -> Vec<Arc<dyn ToolPort>> {
         self.tools.read().unwrap().clone()
     }
@@ -112,6 +120,7 @@ impl Services {
                 crate::SLOT_SANDBOX_EXECUTE => self.sandbox().is_some(),
                 crate::SLOT_APPROVAL_DECIDE => self.approver().is_some(),
                 crate::SLOT_MODEL_INVOKE => self.model().is_some(),
+                crate::SLOT_MEMORY_STORE => self.memory().is_some(),
                 crate::SLOT_PERSISTENCE_JOURNAL => true,
                 _ => false,
             };
