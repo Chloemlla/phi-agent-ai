@@ -18,7 +18,7 @@ env:
 jobs:
   fmt:
     name: Rust (format)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: src-tauri
@@ -34,7 +34,7 @@ jobs:
 
   frontend:
     name: Frontend (typecheck + build)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -72,7 +72,7 @@ jobs:
 
   headless:
     name: Headless (no desktop features)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: src-tauri
@@ -100,7 +100,7 @@ jobs:
   prepare:
     name: Prepare release
     needs: [fmt, frontend, rust, headless]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     outputs:
@@ -323,7 +323,7 @@ jobs:
     name: Publish GitHub Release
     needs: [prepare, release-desktop, release-android]
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
