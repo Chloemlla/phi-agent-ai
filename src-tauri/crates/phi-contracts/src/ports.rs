@@ -73,7 +73,7 @@ pub trait ToolPort: Send + Sync {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
-    /// Human-facing provider name (`mock` when no provider is configured).
+    /// Human-facing provider name (`none` when no provider is configured).
     pub provider: String,
     pub model: String,
     pub configured: bool,

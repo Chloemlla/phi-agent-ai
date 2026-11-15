@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::model_protocol::{
@@ -21,7 +21,6 @@ use phi_contracts::SLOT_MODEL_INVOKE;
 use phi_contracts::ports::{ModelError, ModelPort, ModelRequest, ModelResponse, ModelStatus};
 use phi_contracts::provider::{AuthMode, ProviderProfile};
 use phi_contracts::stream::{ModelStreamEvent, StreamHub};
-use phi_domain::message::{ContentBlock, Role};
 use phi_i18n as i18n;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::registry::Contribution;
@@ -266,137 +265,6 @@ impl ModelGateway {
         self.streams.publish(&event);
     }
 
-    /// Deterministic local provider so the loop, policy and tools can be
-    /// exercised without an API key.
-    fn mock_invoke(&self, req: &ModelRequest) -> Result<ModelResponse, ModelError> {
-        let mut tool_results = Vec::new();
-        let mut last_user_text = String::new();
-        for message in &req.messages {
-            for block in &message.blocks {
-                match block {
-                    ContentBlock::ToolResult { content, .. } => tool_results.push(content.clone()),
-                    ContentBlock::Text { text } if message.role == Role::User => {
-                        last_user_text = text.clone()
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let (blocks, finish_reason) = if let Some(result) = tool_results.last() {
-            (
-                vec![ContentBlock::text(i18n::t_args(
-                    "(Mock model; no provider configured)\nCompleted one tool call. Latest tool result summary:\n{summary}",
-                    &[("summary", truncate(result, 1200))],
-                ))],
-                "end_turn",
-            )
-        } else if req.workbench {
-            (
-                vec![
-                    ContentBlock::text(i18n::t(
-                        "(Mock model; no provider configured) I will build a workbench view for this task.",
-                    )),
-                    ContentBlock::ToolUse {
-                        id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                        name: "ui_update".to_string(),
-                        input: json!({ "view": mock_workbench_view() }),
-                    },
-                ],
-                "tool_use",
-            )
-        } else {
-            let lowercase = last_user_text.to_lowercase();
-            let wants_demo_write = lowercase.contains("demo write")
-                || lowercase.contains(&i18n::t("demo write").to_lowercase());
-            let wants_demo_shell = lowercase.contains("demo shell")
-                || lowercase.contains(&i18n::t("demo shell").to_lowercase());
-            let call = if wants_demo_write {
-                ContentBlock::ToolUse {
-                    id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                    name: "fs_write".to_string(),
-                    input: json!({
-                        "path": "PHI_DEMO.md",
-                        "content": i18n::t(
-                            "# phi-agent demo\n\nWritten by the mock model to demonstrate human approval.\n"
-                        )
-                    }),
-                }
-            } else if wants_demo_shell {
-                ContentBlock::ToolUse {
-                    id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                    name: "shell_exec".to_string(),
-                    input: json!({
-                        "command": "echo phi-agent-shell-demo",
-                        "timeout_secs": 30
-                    }),
-                }
-            } else {
-                ContentBlock::ToolUse {
-                    id: format!("call_{}", uuid::Uuid::new_v4().simple()),
-                    name: "fs_list".to_string(),
-                    input: json!({ "path": "." }),
-                }
-            };
-            (
-                vec![
-                    ContentBlock::text(i18n::t(
-                        "(Mock model; no provider configured) I will call a tool to inspect the workspace. Configure a provider to run real coding tasks.",
-                    )),
-                    call,
-                ],
-                "tool_use",
-            )
-        };
-
-        if req.stream && self.streams.is_enabled() {
-            let mut index = 0u32;
-            for block in &blocks {
-                match block {
-                    ContentBlock::Text { text } => {
-                        self.publish_delta(
-                            req,
-                            StreamDelta::Text {
-                                index,
-                                text: text.clone(),
-                            },
-                        );
-                    }
-                    ContentBlock::ToolUse { id, name, input } => {
-                        self.publish_delta(
-                            req,
-                            StreamDelta::ToolStart {
-                                index,
-                                id: id.clone(),
-                                name: name.clone(),
-                            },
-                        );
-                        self.publish_delta(
-                            req,
-                            StreamDelta::ToolArgs {
-                                index,
-                                delta: input.to_string(),
-                            },
-                        );
-                        self.publish_delta(req, StreamDelta::ToolEnd { index });
-                    }
-                    _ => {}
-                }
-                index += 1;
-            }
-            self.publish_delta(req, StreamDelta::Done);
-        }
-
-        Ok(ModelResponse {
-            blocks,
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_usd: 0.0,
-            finish_reason: finish_reason.to_string(),
-            estimated_usage: false,
-        })
-    }
-
     fn resolve_for_listing(&self, id: Option<&str>) -> Result<ResolvedProvider, String> {
         match id {
             Some(id) => self.providers.resolve_for_listing(id),
@@ -494,70 +362,6 @@ impl ModelGateway {
     }
 }
 
-/// A small but complete view tree, so the workbench path is exercised without
-/// a provider: layout, card, text, progress, badge, button and table.
-fn mock_workbench_view() -> Value {
-    json!({
-        "version": 1,
-        "title": i18n::t("Workbench"),
-        "root": {
-            "kind": "stack",
-            "props": { "gap": "md" },
-            "children": [
-                {
-                    "kind": "card",
-                    "props": {
-                        "title": i18n::t("Task overview"),
-                        "subtitle": i18n::t("Mock workbench")
-                    },
-                    "children": [
-                        {
-                            "kind": "text",
-                            "props": {
-                                "text": i18n::t("This view is plain data. The agent can replace it with tables, charts, forms and actions as the task progresses.")
-                            }
-                        },
-                        {
-                            "kind": "progress",
-                            "props": { "value": 40, "label": i18n::t("Example progress") }
-                        },
-                        {
-                            "kind": "row",
-                            "props": { "gap": "sm" },
-                            "children": [
-                                { "kind": "badge", "props": { "text": i18n::t("offline"), "tone": "neutral" } },
-                                {
-                                    "kind": "button",
-                                    "props": {
-                                        "label": i18n::t("Inspect workspace"),
-                                        "action": {
-                                            "kind": "message",
-                                            "text": i18n::t("List the workspace and summarize it.")
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                },
-                {
-                    "kind": "card",
-                    "props": { "title": i18n::t("Recent tool calls") },
-                    "children": [
-                        {
-                            "kind": "table",
-                            "props": {
-                                "columns": [i18n::t("Step"), i18n::t("Status")],
-                                "rows": [["1", i18n::t("ok")], ["2", i18n::t("pending")]]
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-    })
-}
-
 impl Plugin for ModelGateway {
     fn id(&self) -> &'static str {
         "plugin-model-gw"
@@ -593,11 +397,11 @@ impl ModelPort for ModelGateway {
                 }
             }
             None => ModelStatus {
-                provider: "mock".to_string(),
-                model: "mock".to_string(),
+                provider: "none".to_string(),
+                model: String::new(),
                 configured: false,
                 provider_id: None,
-                protocol: "mock".to_string(),
+                protocol: String::new(),
                 base_url: None,
                 has_key: false,
             },
@@ -631,10 +435,14 @@ impl ModelPort for ModelGateway {
     ) -> Result<ModelResponse, ModelError> {
         let resolved = match self.providers.resolve_active() {
             Ok(Some(resolved)) => resolved,
-            Ok(None) => return self.mock_invoke(&req),
+            Ok(None) => {
+                return Err(model_error(i18n::t(
+                    "No provider is configured; add one in Settings",
+                )));
+            }
             Err(error) => {
-                // A configured-but-broken provider must be visible, not
-                // silently replaced by the mock.
+                // A configured-but-broken provider must be visible; never
+                // silently substitute another path.
                 return Err(model_error(format!("provider: {error}")));
             }
         };
@@ -714,16 +522,6 @@ fn parse_frame(frame: &[u8]) -> Option<(String, String)> {
     }
 }
 
-fn truncate(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        text.to_string()
-    } else {
-        let mut out: String = text.chars().take(max_chars).collect();
-        out.push('…');
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,7 +552,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_runs_without_provider() {
+    async fn missing_provider_is_an_honest_error() {
         let dir = std::env::temp_dir().join(format!("phi-gateway-{}", uuid::Uuid::new_v4()));
         let providers = Arc::new(ProviderStore::load(dir.join("providers.json")));
         let gateway = ModelGateway::new(providers, Arc::new(StreamHub::default()));
@@ -769,12 +567,14 @@ mod tests {
             stream: false,
             workbench: false,
         };
-        let response = gateway.invoke(req, CancellationToken::new()).await.unwrap();
+        let error = gateway
+            .invoke(req, CancellationToken::new())
+            .await
+            .expect_err("a missing provider must fail, not fabricate a response");
         assert!(
-            response
-                .blocks
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+            error.message.contains("No provider is configured"),
+            "unexpected error: {}",
+            error.message
         );
     }
 

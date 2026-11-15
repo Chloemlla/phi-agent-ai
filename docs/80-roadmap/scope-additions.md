@@ -23,7 +23,7 @@
 | 2 | 工作台视图（Workbench view） | 界面 + 协议 | 已实现 | `phi-contracts/src/ui.rs`、`src/workbench/` |
 | 3 | Provider 管理面 | 设置 / CLI | 已实现（后端、CLI、桌面设置页） | `provider_store.rs`、`model_catalog.rs`、`src/settings/` |
 | 4 | 多语言（i18n） | 基础设施 | 已实现（含桌面切换入口） | `phi-i18n`、`src/i18n.ts`、设置 → 通用 |
-| 5 | 离线演示模型 | 模型 | 已实现 | `model_gateway.rs` |
+| 5 | 离线演示模型 | 模型 | **已移除**（2026-11-15，被真实 Provider 与测试夹具取代） | 无（测试用进程内脚本化 HTTP provider） |
 | 6 | 无头 CLI | 外壳 | 已实现 | `phi-headless` |
 | 7 | 文档增补规则 | 流程 | 已生效 | `AGENT.md` 第 6 条、本文件 |
 | 8 | 视觉设计规格 v1 | 界面 | 已实现 | `docs/design/SPEC.md`、`src/App.css` |
@@ -73,12 +73,15 @@
 - **当前状态**：现有界面文案均有中英对照；桌面设置 → 通用提供语言切换，切换后节点与所有外壳同步。
 - **约束**：源码、注释、标识符为英文；中文只能出现在翻译目录。
 
-### 2.5 离线演示模型
+### 2.5 离线演示模型（已移除）
 
 - **原始设计**：本地模型列入路线图，但未描述没有 Provider 时的体验。
-- **新增内容**：内置 mock 模型。未配置任何 Provider 时，它可以跑通完整的模型调用、工具执行与审批流程，并能在 workbench 模式下产出一份示例视图。
-- **2026-11-15 增补**：mock 模型支持 `demo shell` 提示词，发出一次 `shell_exec`（`echo`），用于演示并测试不可逆工具的高风险审批链路；原有的 `demo write` 继续演示可逆写入。
+- **是什么**：内置 mock 模型；未配置任何 Provider 时，它可以跑通模型调用、工具执行与审批流程，并产出示例工作台视图（含 `demo write` / `demo shell` 触发词）。
 - **为什么加**：让「无 Key 也能离线体验」成为 README 承诺的一部分，同时保证无头测试不依赖网络。
+- **为什么移除**（2026-11-15）：产品此时已有完整的真实 Provider 管理面（多协议、凭据、模型目录）。用固定的演示输出冒充模型结果，会让「未配置 Provider」这一状态对用户不可见，也违背「诚实」原则；测试依赖产品内的 mock 分支，等于没有验证真实协议路径。
+- **移除范围**：`model_gateway.rs` 的 `mock_invoke` / `mock_workbench_view`、`ModelStatus` 的 `mock` 标识、mock 专用 i18n 文案与触发词全部删除。未配置 Provider 时，运行如实失败并提示到设置中添加。
+- **替代方案**：真实 Provider（Anthropic Messages / OpenAI Chat / OpenAI Responses）；离线场景由本地 OpenAI 兼容运行时承担。无头测试改用测试进程内的脚本化 Anthropic HTTP provider，走真实请求/响应与流式解析路径。
+- **文档影响**：README（中英）删除「内置演示模型」承诺；`AGENT.md` 无头示例注明需要 Provider；桌面空状态与设置页文案改为提示添加 Provider。
 
 ### 2.6 无头 CLI
 

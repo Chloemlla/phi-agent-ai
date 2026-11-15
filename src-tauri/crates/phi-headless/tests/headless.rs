@@ -1,11 +1,15 @@
 //! Headless smoke tests.
 //!
 //! These run the real `phi-headless` binary, which is also how the desktop
-//! shell is exercised in CI. The mock model makes them deterministic: no
-//! network, no API key, no UI.
+//! shell is exercised in CI. Each test points the node at a scripted local
+//! Anthropic-compatible HTTP server, so the real protocol path is exercised
+//! without network access or a product-side mock.
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -87,6 +91,31 @@ impl TestEnv {
         last_json(&output.stdout)
     }
 
+    /// Point the node at a deterministic local model endpoint. The provider
+    /// file is written directly so every run uses the real wire protocol.
+    fn with_scripted_provider(&self) -> ScriptedProvider {
+        let provider = ScriptedProvider::start();
+        let file = json!({
+            "version": 1,
+            "activeId": "scripted",
+            "providers": [{
+                "id": "scripted",
+                "name": "Scripted provider",
+                "protocol": "anthropic_messages",
+                "baseUrl": format!("http://127.0.0.1:{}", provider.port),
+                "auth": "none",
+                "model": "test-model",
+                "models": [{ "id": "test-model" }]
+            }]
+        });
+        std::fs::write(
+            self.data_dir.join("providers.json"),
+            serde_json::to_vec_pretty(&file).unwrap(),
+        )
+        .unwrap();
+        provider
+    }
+
     /// Poll the journal through read-only shells until the latest run reaches
     /// `wanted`. Read-only commands never take the writer lock, so this is
     /// safe while the run process is still alive.
@@ -157,9 +186,152 @@ fn tool_result_text(session: &Value) -> String {
     out
 }
 
+/// A local Anthropic Messages endpoint with a scripted policy: the request
+/// history decides which tool to call, and a tool result always ends the run.
+struct ScriptedProvider {
+    port: u16,
+}
+
+impl ScriptedProvider {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind scripted provider");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if let Ok(stream) = stream {
+                    let _ = handle_model_request(stream);
+                }
+            }
+        });
+        Self { port }
+    }
+}
+
+fn handle_model_request(mut stream: TcpStream) -> std::io::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body)?;
+    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let payload = serde_json::to_vec(&scripted_response(&request)).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        payload.len()
+    )?;
+    stream.write_all(&payload)?;
+    stream.flush()
+}
+
+static TOOL_CALL_SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn scripted_response(request: &Value) -> Value {
+    let mut last_user_text = String::new();
+    let mut last_tool_result = None;
+    for message in request["messages"].as_array().into_iter().flatten() {
+        for block in message["content"].as_array().into_iter().flatten() {
+            match block["type"].as_str() {
+                Some("text") if message["role"] == "user" => {
+                    if let Some(text) = block["text"].as_str() {
+                        last_user_text = text.to_string();
+                    }
+                }
+                Some("tool_result") => {
+                    last_tool_result = block["content"].as_str().map(str::to_string);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(result) = last_tool_result {
+        let summary: String = result.chars().take(200).collect();
+        return message_response(
+            vec![json!({ "type": "text", "text": format!("Done. {summary}") })],
+            "end_turn",
+        );
+    }
+
+    let lower = last_user_text.to_lowercase();
+    let (name, input) = if lower.contains("write") {
+        (
+            "fs_write",
+            json!({
+                "path": "PHI_DEMO.md",
+                "content": "# phi-agent demo\n\nWritten for the approval test.\n"
+            }),
+        )
+    } else if lower.contains("shell") || lower.contains("echo") {
+        (
+            "shell_exec",
+            json!({ "command": "echo phi-agent-shell-demo", "timeout_secs": 30 }),
+        )
+    } else if lower.contains("dashboard") || lower.contains("plan") {
+        ("ui_update", json!({ "view": scripted_view() }))
+    } else {
+        ("fs_list", json!({ "path": "." }))
+    };
+    let call_id = format!("toolu_{}", TOOL_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
+    message_response(
+        vec![
+            json!({ "type": "text", "text": "Working on it." }),
+            json!({ "type": "tool_use", "id": call_id, "name": name, "input": input }),
+        ],
+        "tool_use",
+    )
+}
+
+fn message_response(content: Vec<Value>, stop_reason: &str) -> Value {
+    json!({
+        "id": "msg_scripted",
+        "type": "message",
+        "role": "assistant",
+        "model": "test-model",
+        "content": content,
+        "stop_reason": stop_reason,
+        "usage": { "input_tokens": 12, "output_tokens": 6 }
+    })
+}
+
+fn scripted_view() -> Value {
+    json!({
+        "version": 1,
+        "title": "Task plan",
+        "root": {
+            "kind": "stack",
+            "props": { "gap": "md" },
+            "children": [
+                { "kind": "text", "props": { "text": "A deterministic workbench view." } },
+                {
+                    "kind": "steps",
+                    "props": {
+                        "items": [
+                            { "title": "Read", "status": "done" },
+                            { "title": "Change", "status": "current" },
+                            { "title": "Verify", "status": "todo" }
+                        ]
+                    }
+                }
+            ]
+        }
+    })
+}
+
 #[test]
 fn workbench_run_updates_the_session_view() {
     let env = TestEnv::new("workbench");
+    let _provider = env.with_scripted_provider();
     let result = env.run("show me a small dashboard", &["--workbench"]);
     assert_eq!(result["run"]["state"], "Succeeded");
     assert_eq!(result["run"]["workbenchMode"], json!(true));
@@ -168,14 +340,15 @@ fn workbench_run_updates_the_session_view() {
     let view = &session["session"]["uiView"];
     assert_eq!(view["version"], json!(1));
     assert_eq!(view["root"]["kind"], "stack");
-    // The mock model's view is a full tree, not an opaque program string.
+    // The view is a full tree, not an opaque program string.
     assert!(view["root"]["children"].as_array().unwrap().len() >= 2);
 }
 
 #[test]
 fn write_approval_allow_creates_the_file() {
     let env = TestEnv::new("allow");
-    env.run("demo write", &["--approval", "allow"]);
+    let _provider = env.with_scripted_provider();
+    env.run("write the demo file", &["--approval", "allow"]);
     let path = env.workspace.join("PHI_DEMO.md");
     assert!(path.is_file(), "approved write should create {path:?}");
     let content = std::fs::read_to_string(path).unwrap();
@@ -185,7 +358,8 @@ fn write_approval_allow_creates_the_file() {
 #[test]
 fn write_approval_deny_leaves_the_workspace_untouched() {
     let env = TestEnv::new("deny");
-    env.run("demo write", &["--approval", "deny"]);
+    let _provider = env.with_scripted_provider();
+    env.run("write the demo file", &["--approval", "deny"]);
     assert!(
         !env.workspace.join("PHI_DEMO.md").exists(),
         "denied write must not touch the workspace"
@@ -195,6 +369,7 @@ fn write_approval_deny_leaves_the_workspace_untouched() {
 #[test]
 fn sessions_and_journal_survive_a_restart() {
     let env = TestEnv::new("restart");
+    let _provider = env.with_scripted_provider();
     let result = env.run("inspect the workspace", &["--approval", "deny"]);
     let session_id = result["sessionId"].as_str().unwrap().to_string();
 
@@ -212,6 +387,7 @@ fn sessions_and_journal_survive_a_restart() {
 #[test]
 fn status_reads_a_finished_run_from_a_different_process() {
     let env = TestEnv::new("status");
+    let _provider = env.with_scripted_provider();
     let result = env.run("inspect the workspace", &["--approval", "deny"]);
     let run_id = result["runId"].as_str().unwrap();
 
@@ -229,6 +405,7 @@ fn status_reads_a_finished_run_from_a_different_process() {
 #[test]
 fn step_limit_aborts_the_run() {
     let env = TestEnv::new("steps");
+    let _provider = env.with_scripted_provider();
     let output = env.command(&[
         "run",
         "--message",
@@ -317,7 +494,8 @@ fn cost_budget_aborts_before_the_model_call() {
 #[test]
 fn cancel_while_waiting_for_approval_aborts_the_run() {
     let env = TestEnv::new("cancel");
-    let mut child = env.spawn_run("demo write", &["--approval", "prompt"]);
+    let _provider = env.with_scripted_provider();
+    let mut child = env.spawn_run("write the demo file", &["--approval", "prompt"]);
     let run = env.wait_for_run_state("WaitingApproval");
     let run_id = run["id"].as_str().unwrap().to_string();
 
@@ -344,7 +522,8 @@ fn cancel_while_waiting_for_approval_aborts_the_run() {
 #[test]
 fn a_killed_run_is_marked_for_reconciliation_on_restart() {
     let env = TestEnv::new("crash");
-    let mut child = env.spawn_run("demo write", &["--approval", "prompt"]);
+    let _provider = env.with_scripted_provider();
+    let mut child = env.spawn_run("write the demo file", &["--approval", "prompt"]);
     let run = env.wait_for_run_state("WaitingApproval");
     let run_id = run["id"].as_str().unwrap().to_string();
 
@@ -393,7 +572,8 @@ fn a_killed_run_is_marked_for_reconciliation_on_restart() {
 #[test]
 fn shell_exec_runs_only_after_approval() {
     let env = TestEnv::new("shell-allow");
-    let result = env.run("demo shell", &["--approval", "allow"]);
+    let _provider = env.with_scripted_provider();
+    let result = env.run("run an echo command", &["--approval", "allow"]);
     assert_eq!(result["run"]["state"], "Succeeded");
     let session = env.show(result["sessionId"].as_str().unwrap());
     let results = tool_result_text(&session);
@@ -406,7 +586,8 @@ fn shell_exec_runs_only_after_approval() {
 #[test]
 fn denying_shell_exec_does_not_run_the_command() {
     let env = TestEnv::new("shell-deny");
-    let result = env.run("demo shell", &["--approval", "deny"]);
+    let _provider = env.with_scripted_provider();
+    let result = env.run("run an echo command", &["--approval", "deny"]);
     let session = env.show(result["sessionId"].as_str().unwrap());
     let results = tool_result_text(&session);
     assert!(

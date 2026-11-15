@@ -383,7 +383,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
                   <h2>{t("No providers yet")}</h2>
                   <p class="hint">
                     {t(
-                      "Add a provider to call a real model. Without one, runs use the built-in demo model.",
+                      "Add a provider to call a model. The agent cannot run without one.",
                     )}
                   </p>
                   <button class="btn primary" onClick={startNew}>

@@ -114,7 +114,7 @@ function EmptyState(props: { modelConfigured: boolean }) {
       <Show when={!props.modelConfigured}>
         <p class="empty-note">
           {t(
-            "No provider is configured. Runs use the built-in demo model; add one in Settings.",
+            "No provider is configured. Add one in Settings to start a task.",
           )}
         </p>
       </Show>

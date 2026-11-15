@@ -394,7 +394,7 @@ impl ProviderStore {
 
     /// First-run convenience: mirror the legacy environment variables into a
     /// provider profile. Only runs when no profile exists and a key is set,
-    /// so the offline mock path stays the default.
+    /// so it never overrides a user's explicit provider choice.
     pub fn seed_from_env(&self) -> Result<(), String> {
         {
             let file = self.inner.read().unwrap();

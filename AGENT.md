@@ -79,7 +79,7 @@ higher one.
 ## Headless workflow
 
 ```bash
-# One-shot run (mock model when no provider is configured)
+# One-shot run (a provider must be configured first; without one the run fails honestly)
 phi-headless --data-dir .phi --workspace . --message "list the workspace"
 
 # Pick a provider and a language

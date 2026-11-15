@@ -62,7 +62,7 @@ Cancel at any time. Every run has hard caps — 20 steps, $0.50, and 10 minutes 
 
 phi-agent works with Anthropic Messages and OpenAI-compatible endpoints. Add one or more providers in **Settings → Model providers**; keys stay on your machine and are sent only to the endpoints you configure. Each provider can list several models with descriptions, context limits and prices, and one provider is active at a time.
 
-No key? A built-in demo model takes over, so you can try the full tool-and-approval flow offline.
+Without a provider, a run fails with a clear message instead of inventing output. Point a provider at a local OpenAI-compatible runtime (Ollama, LM Studio, vLLM) to stay fully offline.
 
 ## A workbench, not a chat window
 
@@ -115,7 +115,7 @@ No. Sessions and API keys are local by default. Network traffic goes only to the
 <details>
 <summary><b>Can I use it offline?</b></summary>
 
-Yes, except for calls to a remote model. Without an API key, the built-in demo model lets you exercise the full loop and approval flow offline.
+The app itself runs offline. Model calls need a provider; point one at a local OpenAI-compatible runtime (for example Ollama or LM Studio) and nothing leaves your machine.
 </details>
 
 <details>

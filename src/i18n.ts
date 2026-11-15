@@ -48,8 +48,8 @@ const ZH: Record<string, string> = {
     "描述你希望 Agent 做的事。它可以读取并修改你的文件、执行命令——每一步都需要你的批准。",
   "“Map the repository and explain how the app is structured.”": "“理清仓库结构，并说明这个应用是怎么组织的。”",
   "“Find the failing test and fix it.”": "“找到失败的测试并修复它。”",
-  "No provider is configured. Runs use the built-in demo model; add one in Settings.":
-    "当前没有配置供应商。运行将使用内置的演示模型；可以在设置中添加。",
+  "No provider is configured. Add one in Settings to start a task.":
+    "当前没有配置供应商。请先在设置中添加一个。",
   "The node is not in normal mode; sending is disabled": "节点未处于正常模式，发送消息已被禁用",
   "Call {name}": "调用 {name}",
   "Tool result": "工具结果",
@@ -113,8 +113,8 @@ const ZH: Record<string, string> = {
   "Add provider": "添加供应商",
   "No providers yet.": "还没有供应商。",
   "No providers yet": "还没有供应商",
-  "Add a provider to call a real model. Without one, runs use the built-in demo model.":
-    "添加一个供应商以调用真实模型。未添加时，运行将使用内置演示模型。",
+  "Add a provider to call a model. The agent cannot run without one.":
+    "添加一个供应商以调用模型；没有供应商时 Agent 无法运行。",
   "Active": "当前",
   "{count} models": "{count} 个模型",
   "Key configured": "已配置密钥",

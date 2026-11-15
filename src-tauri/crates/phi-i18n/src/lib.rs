@@ -145,7 +145,6 @@ fn zh(msgid: &str) -> Option<&'static str> {
         // Workbench view
         "Workbench" => "工作台",
         "Task overview" => "任务总览",
-        "Mock workbench" => "演示工作台",
         "This view is plain data. The agent can replace it with tables, charts, forms and actions as the task progresses." => {
             "这个视图只是纯数据。随着任务推进，Agent 可以把它替换为表格、图表、表单和操作按钮。"
         }
@@ -158,9 +157,6 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Status" => "状态",
         "ok" => "正常",
         "pending" => "等待中",
-        "(Mock model; no provider configured) I will build a workbench view for this task." => {
-            "（Mock 模型；未配置模型服务）我会为这个任务布置一个工作台视图。"
-        }
         "Missing view argument" => "缺少 view 参数",
         "Invalid workbench view: {error}" => "工作台视图无效：{error}",
         "Failed to record the workbench view: {error}" => "记录工作台视图失败：{error}",
@@ -354,18 +350,8 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "SSE error: {message}" => "SSE 错误: {message}",
         "SSE error: HTTP {status}" => "SSE 错误: HTTP {status}",
 
-        // Mock model
-        "demo write" => "演示写",
-        "demo shell" => "演示命令",
-        "(Mock model; no provider configured)\nCompleted one tool call. Latest tool result summary:\n{summary}" => {
-            "（Mock 模型，未配置模型提供方）\n已跑通一次工具调用。最近一次工具结果摘要：\n{summary}"
-        }
-        "# phi-agent demo\n\nWritten by the mock model to demonstrate human approval.\n" => {
-            "# phi-agent demo\n\n由 Mock 模型写入，用于演示人工审批。\n"
-        }
-        "(Mock model; no provider configured) I will call a tool to inspect the workspace. Configure a provider to run real coding tasks." => {
-            "（Mock 模型，未配置模型提供方）我先调用一个工具看看工作区。配置 provider 后可执行真实编码任务。"
-        }
+        // Model gateway
+        "No provider is configured; add one in Settings" => "还没有配置模型供应商；请在设置中添加",
 
         // Headless CLI
         "Message is empty (use --message or pipe text through stdin)" => {
