@@ -1,5 +1,6 @@
-// Run bar: the three hard caps stay visible, with a meter whose color moves
-// from accent to warn to danger as consumption approaches the limit.
+// Run bar: live usage for the current run. There is no budget meter; these
+// numbers are informational, and the run ends when the task is done or the
+// user cancels.
 
 import { Show } from "solid-js";
 import { formatElapsed, formatMoney } from "../format";
@@ -7,65 +8,11 @@ import { t } from "../i18n";
 import { isActiveState, runTone, stateLabel } from "../status";
 import type { Run } from "../types";
 
-type MeterTone = "accent" | "warn" | "danger";
-
-function meterTone(ratio: number): MeterTone {
-  if (ratio < 0.5) return "accent";
-  if (ratio < 0.8) return "warn";
-  return "danger";
-}
-
-function ratio(value: number, max: number): number {
-  if (max <= 0) return 0;
-  return Math.min(1, Math.max(0, value / max));
-}
-
-function Meter(props: {
-  label: string;
-  value: number;
-  max: number;
-  text: string;
-}) {
-  const fraction = () => ratio(props.value, props.max);
-  return (
-    <div class="meter">
-      <div class="meter-head">
-        <span class="meter-label">{props.label}</span>
-        <span class="meter-value mono">{props.text}</span>
-      </div>
-      <div
-        class="meter-track"
-        role="progressbar"
-        aria-label={props.label}
-        aria-valuemin={0}
-        aria-valuemax={props.max}
-        aria-valuenow={props.value}
-        aria-valuetext={props.text}
-      >
-        <div
-          classList={{
-            "meter-fill": true,
-            [`tone-${meterTone(fraction())}`]: true,
-          }}
-          style={{ width: `${fraction() * 100}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
 export function Runbar(props: {
   run: Run | null;
-  maxSteps: number;
-  maxCostUsd: number;
-  maxWallSecs: number;
   now: number;
   onCancel: (runId: string) => void;
 }) {
-  const maxSteps = () => props.run?.maxSteps ?? props.maxSteps;
-  const maxCost = () => props.run?.maxCostUsd ?? props.maxCostUsd;
-  const maxWall = () => props.run?.maxWallSecs ?? props.maxWallSecs;
-
   const steps = () => props.run?.steps ?? 0;
   const cost = () => props.run?.costUsd ?? 0;
 
@@ -111,25 +58,19 @@ export function Runbar(props: {
         )}
       </Show>
 
-      <div class="meters">
-        <Meter
-          label={t("Steps")}
-          value={steps()}
-          max={maxSteps()}
-          text={`${steps()} / ${maxSteps()}`}
-        />
-        <Meter
-          label={t("Cost")}
-          value={cost()}
-          max={maxCost()}
-          text={`${formatMoney(cost())} / ${formatMoney(maxCost(), 2)}`}
-        />
-        <Meter
-          label={t("Time")}
-          value={elapsed()}
-          max={maxWall()}
-          text={`${formatElapsed(elapsed())} / ${formatElapsed(maxWall())}`}
-        />
+      <div class="run-stats">
+        <span class="run-stat">
+          <span class="run-stat-label">{t("Steps")}</span>
+          <span class="mono">{steps()}</span>
+        </span>
+        <span class="run-stat">
+          <span class="run-stat-label">{t("Cost")}</span>
+          <span class="mono">{formatMoney(cost())}</span>
+        </span>
+        <span class="run-stat">
+          <span class="run-stat-label">{t("Time")}</span>
+          <span class="mono">{formatElapsed(elapsed())}</span>
+        </span>
       </div>
 
       <Show when={props.run && isActiveState(props.run.state)}>

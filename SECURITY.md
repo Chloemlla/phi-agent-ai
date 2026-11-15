@@ -12,7 +12,7 @@ Use the repository's “Security → Report a vulnerability” flow (GitHub Secu
 
 - Affected versions and platforms
 - Reproduction steps or a minimal proof of concept
-- Impact assessment (for example: approval bypass, workspace escape, key leakage, unbounded spending)
+- Impact assessment (for example: approval bypass, workspace escape, key leakage, unexpected model spending)
 - Any disclosure timeline you would like us to follow
 
 We will acknowledge reports within 7 days and coordinate disclosure once a fix is available.
@@ -25,7 +25,6 @@ phi-agent is an agent that can edit files and run shell commands. Its current bo
 - **Human approval** — writes and command execution ask by default; approvals bind an action digest and are re-checked before execution.
 - **Workspace isolation** — file tools stay inside the configured workspace; cancellation terminates the process tree.
 - **Dangerous command filtering** — common destructive command patterns are denied outright.
-- **Hard budget caps** — step, cost, and wall-clock limits; cost is reserved before each call.
 - **Untrusted input** — tool results, search results, and web content do not gain privileges.
 - **Audit trail** — policy decisions and tool calls are persisted as local events.
 
@@ -33,9 +32,10 @@ phi-agent is an agent that can edit files and run shell commands. Its current bo
 
 - Do not use a directory containing secrets, credentials, or sensitive data as the workspace; reads inside the workspace are allowed automatically.
 - Read the approval card's argument preview carefully; execution binds the full argument digest.
-- The API key is kept in memory only and is never written to disk.
+- Credentials are references. `env:NAME` resolves from the environment; `literal:VALUE` is stored in the local provider file for development. The `keychain:` adapter is not implemented yet and fails honestly.
 
 ## Known limitations
 
 - The sandbox is a path jail plus process termination, not OS-level isolation.
+- Run-level spending is not capped. Token usage and estimated cost are recorded per call, and any run can be cancelled.
 - After cancellation, side effects may already have occurred; such results are marked unknown and require manual review.

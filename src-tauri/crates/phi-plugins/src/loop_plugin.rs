@@ -13,7 +13,7 @@ use phi_contracts::ports::{
     StartRunRequest, ToolCall, ToolContext,
 };
 use phi_contracts::util::{
-    ResourceIdentity, action_digest, args_preview, resource_fingerprint, truncate_chars,
+    ResourceIdentity, action_digest, args_preview, resource_identity, truncate_chars,
 };
 use phi_domain::events::DomainEvent;
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
@@ -91,18 +91,6 @@ impl RuntimePort for LoopPlugin {
 
         let run_id = self.ids.new_id("run");
         let task_id = self.ids.new_id("task");
-        let max_steps = req
-            .limits
-            .max_steps
-            .unwrap_or_else(|| env_u64("PHI_MAX_STEPS", 20));
-        let max_cost_usd = req
-            .limits
-            .max_cost_usd
-            .unwrap_or_else(|| env_f64("PHI_MAX_COST_USD", 0.50));
-        let max_wall_secs = req
-            .limits
-            .max_wall_secs
-            .unwrap_or_else(|| env_u64("PHI_MAX_WALL_SECS", 600));
 
         self.bus.publish(
             &req.session_id,
@@ -122,9 +110,6 @@ impl RuntimePort for LoopPlugin {
                 session_id: req.session_id.clone(),
                 turn_id: req.turn_id.clone(),
                 task_id,
-                max_steps,
-                max_cost_usd,
-                max_wall_secs,
                 workbench: req.workbench,
             },
         )?;
@@ -134,9 +119,7 @@ impl RuntimePort for LoopPlugin {
             session_id: req.session_id.clone(),
             state: "Scheduled".to_string(),
             steps: 0,
-            max_steps,
             cost_usd: 0.0,
-            max_cost_usd,
         }));
         let cancel = CancellationToken::new();
         {
@@ -161,10 +144,7 @@ impl RuntimePort for LoopPlugin {
             turn_id: req.turn_id,
             workspace: req.workspace,
             cancel,
-            deadline: Instant::now() + Duration::from_secs(max_wall_secs),
             status,
-            max_steps,
-            max_cost_usd,
             workbench_mode: req.workbench,
         };
         tokio::spawn(run_loop(ctx));
@@ -203,11 +183,7 @@ struct RunContext {
     turn_id: String,
     workspace: PathBuf,
     cancel: CancellationToken,
-    /// Unified wall-clock deadline shared by model calls, approvals and tools.
-    deadline: Instant,
     status: Arc<Mutex<RunStatus>>,
-    max_steps: u64,
-    max_cost_usd: f64,
     workbench_mode: bool,
 }
 
@@ -218,40 +194,6 @@ enum RunOutcome {
     Succeeded,
     Failed(String),
     Aborted { reason: String, stop: String },
-}
-
-struct Ledger {
-    max_cost: f64,
-    spent: f64,
-    reserved: f64,
-}
-
-impl Ledger {
-    fn new(max_cost: f64) -> Self {
-        Self {
-            max_cost,
-            spent: 0.0,
-            reserved: 0.0,
-        }
-    }
-
-    fn reserve(&mut self, amount: f64) -> bool {
-        if self.spent + self.reserved + amount > self.max_cost + 1e-9 {
-            false
-        } else {
-            self.reserved += amount;
-            true
-        }
-    }
-
-    fn release(&mut self, amount: f64) {
-        self.reserved = (self.reserved - amount).max(0.0);
-    }
-
-    fn settle(&mut self, reserved: f64, actual: f64) {
-        self.release(reserved);
-        self.spent += actual;
-    }
 }
 
 async fn run_loop(ctx: RunContext) {
@@ -330,15 +272,20 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         },
     );
 
-    let mut ledger = Ledger::new(ctx.max_cost_usd);
     let mut tools = ctx.services.tool_definitions();
     if !ctx.workbench_mode {
         // The UI tool is noise for plain chat runs; keep the prompt focused.
         tools.retain(|tool| tool.id != "ui_update");
     }
-    let max_output_tokens = env_u64("PHI_MAX_OUTPUT_TOKENS", 4096) as u32;
+    let max_output_tokens = env_u64("PHI_MAX_OUTPUT_TOKENS", 8192) as u32;
+    let context_budget = history_char_budget(model.status().context_window, max_output_tokens);
+    // Actual spend, recorded per model call. There is no run-level cap; the
+    // loop ends when the model stops calling tools or the user cancels.
+    let mut spent = 0.0_f64;
+    let mut step_index = 0_u64;
 
-    for step_index in 1..=ctx.max_steps {
+    loop {
+        step_index += 1;
         if ctx.cancel.is_cancelled() {
             return aborted(
                 ctx,
@@ -346,26 +293,11 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 &i18n::t("Stopped: the in-flight request was aborted."),
             );
         }
-        if Instant::now() >= ctx.deadline {
-            let _ = ctx.bus.publish(
-                &ctx.session_id,
-                "plugin-loop",
-                &DomainEvent::BudgetExceeded {
-                    run_id: ctx.run_id.clone(),
-                    dimension: "wall_time".to_string(),
-                },
-            );
-            return aborted(
-                ctx,
-                &i18n::t("Wall-clock limit exceeded"),
-                &i18n::t("Stopped: the run exceeded the time limit."),
-            );
-        }
 
         let history = session.messages(&ctx.session_id);
         let memory_query = last_user_text(&history);
         let mut assembled = match ctx.services.context() {
-            Some(assembler) => assembler.assemble(history, &ctx.workspace),
+            Some(assembler) => assembler.assemble(history, &ctx.workspace, context_budget),
             None => fallback_context(history, &ctx.workspace),
         };
         if ctx.workbench_mode {
@@ -389,63 +321,12 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 &[("error", error)],
             ));
         }
-        set_status_progress(ctx, step_index, ledger.spent);
+        set_status_progress(ctx, step_index, spent);
 
         let mut response = None;
         let mut attempt = 0;
         while attempt < 2 {
             attempt += 1;
-            if Instant::now() >= ctx.deadline {
-                let _ = ctx.bus.publish(
-                    &ctx.session_id,
-                    "plugin-loop",
-                    &DomainEvent::BudgetExceeded {
-                        run_id: ctx.run_id.clone(),
-                        dimension: "wall_time".to_string(),
-                    },
-                );
-                return aborted(
-                    ctx,
-                    &i18n::t("Wall-clock limit exceeded"),
-                    &i18n::t("Stopped: the run exceeded the time limit."),
-                );
-            }
-            let input_chars = estimate_chars(&assembled.system, &assembled.messages, &tools);
-            let input_bytes = estimate_bytes(&assembled.system, &assembled.messages, &tools);
-            let estimate = model.estimate_cost(input_chars, input_bytes, max_output_tokens);
-            if !ledger.reserve(estimate) {
-                let _ = ctx.bus.publish(
-                    &ctx.session_id,
-                    "plugin-loop",
-                    &DomainEvent::BudgetExceeded {
-                        run_id: ctx.run_id.clone(),
-                        dimension: "cost".to_string(),
-                    },
-                );
-                return aborted(
-                    ctx,
-                    &i18n::t("Cost budget exceeded (reservation failed before the call)"),
-                    &i18n::t("Stopped: the budget is insufficient for the next model call."),
-                );
-            }
-            if let Err(error) = ctx.bus.publish(
-                &ctx.session_id,
-                "plugin-loop",
-                &DomainEvent::BudgetReserved {
-                    run_id: ctx.run_id.clone(),
-                    dimension: "cost".to_string(),
-                    amount: estimate,
-                    note: i18n::t("Reservation before model call"),
-                },
-            ) {
-                // If the reservation cannot be made durable, calling the
-                // model would spend money without a reliable record.
-                ledger.release(estimate);
-                return RunOutcome::Failed(i18n::t_args(
-                    "Failed to record the budget reservation: {error}",
-                    &[("error", error)],
-                ));
-            }
             let call_id = ctx.ids.new_id("call");
             if let Err(error) = ctx.bus.publish(
                 &ctx.session_id,
@@ -458,7 +339,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     max_output_tokens,
                 },
             ) {
-                ledger.release(estimate);
                 return RunOutcome::Failed(i18n::t_args(
                     "Failed to record the model call: {error}",
                     &[("error", error)],
@@ -479,58 +359,11 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 workbench: ctx.workbench_mode,
             };
 
-            // The unified deadline applies to the model request too.
-            let result = match tokio::time::timeout_at(
-                tokio::time::Instant::from_std(ctx.deadline),
-                model.invoke(request, ctx.cancel.clone()),
-            )
-            .await
-            {
-                Err(_) => {
-                    ledger.release(estimate);
-                    let _ = ctx.bus.publish(
-                        &ctx.session_id,
-                        "plugin-loop",
-                        &DomainEvent::BudgetExceeded {
-                            run_id: ctx.run_id.clone(),
-                            dimension: "wall_time".to_string(),
-                        },
-                    );
-                    return aborted(
-                        ctx,
-                        &i18n::t("Wall-clock limit exceeded"),
-                        &i18n::t("Stopped: model request exceeded the wall-clock limit."),
-                    );
-                }
-                Ok(result) => result,
-            };
+            let result = model.invoke(request, ctx.cancel.clone()).await;
 
             match result {
                 Ok(resp) => {
-                    // Providers that omit usage must be settled at the
-                    // reserved amount, not at zero.
-                    let settled = if resp.estimated_usage {
-                        estimate
-                    } else {
-                        resp.cost_usd
-                    };
-                    ledger.settle(estimate, settled);
-                    if let Err(publish_error) = ctx.bus.publish(
-                        &ctx.session_id,
-                        "plugin-loop",
-                        &DomainEvent::BudgetSettled {
-                            run_id: ctx.run_id.clone(),
-                            cost_usd: settled,
-                            input_tokens: resp.input_tokens,
-                            output_tokens: resp.output_tokens,
-                            estimated: resp.estimated_usage,
-                        },
-                    ) {
-                        return RunOutcome::Failed(i18n::t_args(
-                            "Failed to record the budget settlement: {error}",
-                            &[("error", publish_error)],
-                        ));
-                    }
+                    spent += resp.cost_usd;
                     if let Err(publish_error) = ctx.bus.publish(
                         &ctx.session_id,
                         "plugin-loop",
@@ -539,7 +372,9 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             run_id: ctx.run_id.clone(),
                             input_tokens: resp.input_tokens,
                             output_tokens: resp.output_tokens,
-                            cost_usd: settled,
+                            cache_read_tokens: resp.cache_read_tokens,
+                            cache_write_tokens: resp.cache_write_tokens,
+                            cost_usd: resp.cost_usd,
                             finish_reason: resp.finish_reason.clone(),
                         },
                     ) {
@@ -548,68 +383,11 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             &[("error", publish_error)],
                         ));
                     }
-                    set_status_progress(ctx, step_index, ledger.spent);
-                    // Enforce the cost ceiling immediately after settlement;
-                    // the estimate can be exceeded by actual usage.
-                    if ledger.spent > ctx.max_cost_usd + 1e-9 {
-                        let _ = ctx.bus.publish(
-                            &ctx.session_id,
-                            "plugin-loop",
-                            &DomainEvent::BudgetExceeded {
-                                run_id: ctx.run_id.clone(),
-                                dimension: "cost".to_string(),
-                            },
-                        );
-                        return aborted(
-                            ctx,
-                            &i18n::t("Cost limit exceeded"),
-                            &i18n::t("Stopped: cost limit exceeded after settlement."),
-                        );
-                    }
-                    if Instant::now() >= ctx.deadline {
-                        let _ = ctx.bus.publish(
-                            &ctx.session_id,
-                            "plugin-loop",
-                            &DomainEvent::BudgetExceeded {
-                                run_id: ctx.run_id.clone(),
-                                dimension: "wall_time".to_string(),
-                            },
-                        );
-                        return aborted(
-                            ctx,
-                            &i18n::t("Wall-clock limit exceeded"),
-                            &i18n::t(
-                                "Stopped: model response arrived after the wall-clock deadline.",
-                            ),
-                        );
-                    }
+                    set_status_progress(ctx, step_index, spent);
                     response = Some(resp);
                     break;
                 }
                 Err(error) => {
-                    // Failed calls may still have cost; be conservative.
-                    let charged = if error.message == "cancelled" {
-                        0.0
-                    } else {
-                        estimate
-                    };
-                    ledger.settle(estimate, charged);
-                    if let Err(publish_error) = ctx.bus.publish(
-                        &ctx.session_id,
-                        "plugin-loop",
-                        &DomainEvent::BudgetSettled {
-                            run_id: ctx.run_id.clone(),
-                            cost_usd: charged,
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            estimated: true,
-                        },
-                    ) {
-                        return RunOutcome::Failed(i18n::t_args(
-                            "Failed to record the budget settlement: {error}",
-                            &[("error", publish_error)],
-                        ));
-                    }
                     if let Err(publish_error) = ctx.bus.publish(
                         &ctx.session_id,
                         "plugin-loop",
@@ -624,21 +402,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             &[("error", publish_error)],
                         ));
                     }
-                    if ledger.spent > ctx.max_cost_usd + 1e-9 {
-                        let _ = ctx.bus.publish(
-                            &ctx.session_id,
-                            "plugin-loop",
-                            &DomainEvent::BudgetExceeded {
-                                run_id: ctx.run_id.clone(),
-                                dimension: "cost".to_string(),
-                            },
-                        );
-                        return aborted(
-                            ctx,
-                            &i18n::t("Cost limit exceeded"),
-                            &i18n::t("Stopped: cost limit exceeded after settlement."),
-                        );
-                    }
                     if error.message == "cancelled" || ctx.cancel.is_cancelled() {
                         return aborted(
                             ctx,
@@ -649,10 +412,8 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                         );
                     }
                     if error.retryable && attempt == 1 {
-                        let backoff = Duration::from_secs(1)
-                            .min(ctx.deadline.saturating_duration_since(Instant::now()));
                         tokio::select! {
-                            _ = tokio::time::sleep(backoff) => {}
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                             _ = ctx.cancel.cancelled() => {
                                 return aborted(
                                     ctx,
@@ -704,6 +465,43 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             ));
         }
 
+        if matches!(response.finish_reason.as_str(), "length" | "max_tokens") {
+            // Never execute tool calls from a response cut off by the output
+            // limit: the arguments may be incomplete. Emit paired results for
+            // any tool_use blocks so the stored history remains valid.
+            let mut blocks = Vec::new();
+            for (call_id, _, _) in &tool_calls {
+                blocks.push(ContentBlock::tool_result(
+                    call_id.clone(),
+                    i18n::t(
+                        "Response was truncated before the tool call completed; the tool was not executed.",
+                    ),
+                    true,
+                ));
+            }
+            if !blocks.is_empty() {
+                if let Err(error) =
+                    session.append_message(&ctx.session_id, Some(&ctx.turn_id), Role::User, blocks)
+                {
+                    return RunOutcome::Failed(i18n::t_args(
+                        "Failed to save tool results: {error}",
+                        &[("error", error)],
+                    ));
+                }
+            }
+            let _ = ctx.bus.publish(
+                &ctx.session_id,
+                "plugin-loop",
+                &DomainEvent::StepCompleted {
+                    run_id: ctx.run_id.clone(),
+                    step_id,
+                },
+            );
+            return RunOutcome::Failed(i18n::t(
+                "The model response was truncated by the output token limit; the run stopped instead of reporting a partial result.",
+            ));
+        }
+
         if tool_calls.is_empty() {
             if let Err(error) = ctx.bus.publish(
                 &ctx.session_id,
@@ -724,25 +522,14 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         let mut result_blocks = Vec::new();
         let mut unknown_side_effect = false;
         let mut cancelled = false;
-        let mut wall_exceeded = false;
         for (call_id, tool_id, input) in tool_calls {
-            // Once cancellation or the wall deadline is observed, never start
-            // another tool. Still emit a paired result so the history stays
-            // valid for the provider.
+            // Once cancellation is observed, never start another tool. Still
+            // emit a paired result so the history stays valid for the provider.
             if cancelled || ctx.cancel.is_cancelled() {
                 cancelled = true;
                 result_blocks.push(ContentBlock::tool_result(
                     call_id,
                     i18n::t("Run cancelled; action was not executed."),
-                    true,
-                ));
-                continue;
-            }
-            if wall_exceeded || Instant::now() >= ctx.deadline {
-                wall_exceeded = true;
-                result_blocks.push(ContentBlock::tool_result(
-                    call_id,
-                    i18n::t("Wall-clock limit exceeded; action was not executed."),
                     true,
                 ));
                 continue;
@@ -762,9 +549,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             }
             if outcome.unknown_side_effect {
                 unknown_side_effect = true;
-            }
-            if Instant::now() >= ctx.deadline {
-                wall_exceeded = true;
             }
             result_blocks.push(outcome.block);
         }
@@ -795,24 +579,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             ));
         }
 
-        if wall_exceeded {
-            let _ = ctx.bus.publish(
-                &ctx.session_id,
-                "plugin-loop",
-                &DomainEvent::BudgetExceeded {
-                    run_id: ctx.run_id.clone(),
-                    dimension: "wall_time".to_string(),
-                },
-            );
-            return aborted(
-                ctx,
-                &i18n::t("Wall-clock limit exceeded"),
-                &i18n::t(
-                    "Stopped: wall-clock limit reached. A command that was still running may have produced partial side effects; verify the workspace.",
-                ),
-            );
-        }
-
         if cancelled || ctx.cancel.is_cancelled() {
             let stop = if unknown_side_effect {
                 i18n::t(
@@ -826,19 +592,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 stop,
             };
         }
-    }
-
-    let _ = ctx.bus.publish(
-        &ctx.session_id,
-        "plugin-loop",
-        &DomainEvent::BudgetExceeded {
-            run_id: ctx.run_id.clone(),
-            dimension: "steps".to_string(),
-        },
-    );
-    RunOutcome::Aborted {
-        reason: i18n::t("Step limit reached"),
-        stop: i18n::t("Stopped: maximum steps reached; the task may be incomplete."),
     }
 }
 
@@ -921,12 +674,8 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
             } else {
                 i18n::t("Reversible: data modification")
             };
-            // Approval must not outlive the run's wall-clock deadline.
-            let remaining_wall_secs = ctx
-                .deadline
-                .saturating_duration_since(Instant::now())
-                .as_secs()
-                .max(1);
+            // Approval has its own timeout, independent of any run budget.
+            let expires_in_secs = env_u64("PHI_APPROVAL_TIMEOUT_SECS", 300);
             let spec = phi_contracts::ports::ApprovalSpec {
                 session_id: ctx.session_id.clone(),
                 run_id: ctx.run_id.clone(),
@@ -935,7 +684,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 args_preview: journal_args_preview(&call.tool_id, &call.input),
                 action_digest: digest.clone(),
                 risk,
-                expires_in_secs: env_u64("PHI_APPROVAL_TIMEOUT_SECS", 300).min(remaining_wall_secs),
+                expires_in_secs,
             };
             let pending = match approver.request(spec) {
                 Ok(pending) => pending,
@@ -1033,7 +782,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
         }
     }
 
-    let Some(sandbox) = ctx.services.sandbox() else {
+    if ctx.services.sandbox().is_none() {
         let error = i18n::t(
             "Sandbox component is unavailable; execution denied (never run without isolation)",
         );
@@ -1043,8 +792,8 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
             cancelled: false,
             unknown_side_effect: false,
         };
-    };
-    let _ = sandbox; // The tool provider owns path resolution/exec via the same port.
+    }
+    // The tool provider owns path resolution/exec via the same port.
 
     let Some(tool) = ctx.services.find_tool(&call.tool_id) else {
         let error = i18n::t_args(
@@ -1071,12 +820,6 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
         };
     }
 
-    if Instant::now() >= ctx.deadline {
-        let error = i18n::t("Wall-clock limit exceeded; action was not executed.");
-        publish_tool_failed(ctx, &call, &error);
-        return tool_not_executed(&call, &error);
-    }
-
     // The start record must be durable before the side effect begins.
     if let Err(error) = ctx.bus.publish(
         &ctx.session_id,
@@ -1099,7 +842,6 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
         workspace: ctx.workspace.clone(),
         session_id: ctx.session_id.clone(),
         run_id: ctx.run_id.clone(),
-        deadline: Some(ctx.deadline),
     };
     let started = Instant::now();
     // Do not drop this future on cancellation: the execution layer (sandbox)
@@ -1190,7 +932,10 @@ fn action_digest_for(ctx: &RunContext, call: &ToolCall) -> String {
         let (resolved, kind, content_hash) = match ctx.services.sandbox() {
             Some(sandbox) => match sandbox.resolve_path(&ctx.workspace, requested) {
                 Ok(path) => {
-                    let (kind, content_hash) = resource_fingerprint(&path);
+                    // Only writes bind file contents; reading a large file must
+                    // not pay for a content hash the approval never uses.
+                    let hash_contents = call.tool_id == "fs_write";
+                    let (kind, content_hash) = resource_identity(&path, hash_contents);
                     (path.to_string_lossy().to_string(), kind, content_hash)
                 }
                 Err(_) => ("<unresolved>".to_string(), "denied", None),
@@ -1418,58 +1163,24 @@ fn fallback_context(history: Vec<ChatMessage>, workspace: &Path) -> AssembledCon
     }
 }
 
-fn estimate_chars(
-    system: &str,
-    messages: &[ChatMessage],
-    tools: &[phi_contracts::ports::ToolDefinition],
-) -> usize {
-    let mut total = system.chars().count();
-    for message in messages {
-        for block in &message.blocks {
-            total += match block {
-                ContentBlock::Text { text } => text.chars().count(),
-                ContentBlock::ToolUse { input, .. } => input.to_string().chars().count(),
-                ContentBlock::ToolResult { content, .. } => content.chars().count(),
-            };
-        }
-    }
-    for tool in tools {
-        total += tool.description.chars().count() + tool.input_schema.to_string().chars().count();
-    }
-    total
-}
-
-fn estimate_bytes(
-    system: &str,
-    messages: &[ChatMessage],
-    tools: &[phi_contracts::ports::ToolDefinition],
-) -> usize {
-    let mut total = system.len() + 256;
-    for message in messages {
-        // Per-message structural overhead (role, delimiters).
-        total += 32;
-        for block in &message.blocks {
-            total += match block {
-                ContentBlock::Text { text } => text.len(),
-                ContentBlock::ToolUse { input, .. } => input.to_string().len(),
-                ContentBlock::ToolResult { content, .. } => content.len(),
-            };
-        }
-    }
-    for tool in tools {
-        total += 64 + tool.description.len() + tool.input_schema.to_string().len();
-    }
-    total
+/// Character budget for conversation history. The model's advertised context
+/// window is the physical limit; the output cap and a fixed allowance for the
+/// system prompt and tool schemas are reserved first. One character per token
+/// is a deliberately conservative bound for CJK-heavy prompts. An unknown
+/// window falls back to 100k characters.
+fn history_char_budget(context_window: Option<u64>, max_output_tokens: u32) -> usize {
+    const FALLBACK: usize = 100_000;
+    const MIN: usize = 8_000;
+    const MAX: usize = 400_000;
+    let Some(window) = context_window else {
+        return FALLBACK;
+    };
+    let reserved = u64::from(max_output_tokens).saturating_add(8_000);
+    let available = window.saturating_sub(reserved) as usize;
+    available.clamp(MIN, MAX)
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())

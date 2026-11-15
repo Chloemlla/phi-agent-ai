@@ -18,6 +18,7 @@ import {
   mergeSuggestion,
   modelFromId,
   type ModelSpec,
+  type Pricing,
   type ProviderInput,
   type ProviderTestView,
   type ProviderView,
@@ -177,29 +178,35 @@ export function ProviderEditor(props: {
     }
   }
 
-  function updatePricing(side: "inputPerMtok" | "outputPerMtok", raw: string) {
+  type PricingKey =
+    | "inputPerMtok"
+    | "outputPerMtok"
+    | "cacheReadPerMtok"
+    | "cacheWritePerMtok";
+
+  function updatePricing(side: PricingKey, raw: string) {
     const current = props.draft.pricing ?? { inputPerMtok: 0, outputPerMtok: 0 };
     const value = numberOrNull(raw);
-    const next = {
-      inputPerMtok: side === "inputPerMtok" ? value ?? 0 : current.inputPerMtok,
-      outputPerMtok: side === "outputPerMtok" ? value ?? 0 : current.outputPerMtok,
-    };
+    const next: Pricing = { ...current };
+    if (side === "inputPerMtok" || side === "outputPerMtok") {
+      next[side] = value ?? 0;
+    } else {
+      next[side] = value;
+    }
     update({ pricing: next });
   }
 
-  function updateModelPricing(
-    index: number,
-    side: "inputPerMtok" | "outputPerMtok",
-    raw: string,
-  ) {
+  function updateModelPricing(index: number, side: PricingKey, raw: string) {
     const model = models()[index];
     if (!model) return;
     const current = model.pricing ?? { inputPerMtok: 0, outputPerMtok: 0 };
     const value = numberOrNull(raw);
-    const next = {
-      inputPerMtok: side === "inputPerMtok" ? value ?? 0 : current.inputPerMtok,
-      outputPerMtok: side === "outputPerMtok" ? value ?? 0 : current.outputPerMtok,
-    };
+    const next: Pricing = { ...current };
+    if (side === "inputPerMtok" || side === "outputPerMtok") {
+      next[side] = value ?? 0;
+    } else {
+      next[side] = value;
+    }
     updateModel(index, { pricing: next });
   }
 
@@ -586,26 +593,50 @@ export function ProviderEditor(props: {
                     </label>
                     <label class="field">
                       <span>{t("Output $/Mtok")}</span>
-                      <div class="field-row">
-                        <input
-                          class="mono"
-                          inputmode="decimal"
-                          value={model().pricing?.outputPerMtok ?? ""}
-                          onInput={(event) =>
-                            updateModelPricing(index, "outputPerMtok", event.currentTarget.value)
-                          }
-                          placeholder={t("Inherit")}
-                        />
-                        <Show when={model().pricing}>
-                          <button
-                            class="link-button"
-                            onClick={() => clearModelPricing(index)}
-                          >
-                            {t("Inherit")}
-                          </button>
-                        </Show>
-                      </div>
+                      <input
+                        class="mono"
+                        inputmode="decimal"
+                        value={model().pricing?.outputPerMtok ?? ""}
+                        onInput={(event) =>
+                          updateModelPricing(index, "outputPerMtok", event.currentTarget.value)
+                        }
+                        placeholder={t("Inherit")}
+                      />
                     </label>
+                    <label class="field">
+                      <span>{t("Cache read $/Mtok")}</span>
+                      <input
+                        class="mono"
+                        inputmode="decimal"
+                        value={model().pricing?.cacheReadPerMtok ?? ""}
+                        onInput={(event) =>
+                          updateModelPricing(index, "cacheReadPerMtok", event.currentTarget.value)
+                        }
+                        placeholder={t("Inherit")}
+                      />
+                    </label>
+                    <label class="field">
+                      <span>{t("Cache write $/Mtok")}</span>
+                      <input
+                        class="mono"
+                        inputmode="decimal"
+                        value={model().pricing?.cacheWritePerMtok ?? ""}
+                        onInput={(event) =>
+                          updateModelPricing(index, "cacheWritePerMtok", event.currentTarget.value)
+                        }
+                        placeholder={t("Inherit")}
+                      />
+                    </label>
+                    <Show when={model().pricing}>
+                      <span class="full field-hint">
+                        <button
+                          class="link-button"
+                          onClick={() => clearModelPricing(index)}
+                        >
+                          {t("Use protocol defaults")}
+                        </button>
+                      </span>
+                    </Show>
                     <label class="field">
                       <span>{t("Temperature")}</span>
                       <input
@@ -763,6 +794,28 @@ export function ProviderEditor(props: {
               inputmode="decimal"
               value={props.draft.pricing?.outputPerMtok ?? ""}
               onInput={(event) => updatePricing("outputPerMtok", event.currentTarget.value)}
+            />
+          </label>
+          <label class="field">
+            <span>{t("Cache read $/Mtok")}</span>
+            <input
+              class="mono"
+              inputmode="decimal"
+              value={props.draft.pricing?.cacheReadPerMtok ?? ""}
+              onInput={(event) =>
+                updatePricing("cacheReadPerMtok", event.currentTarget.value)
+              }
+            />
+          </label>
+          <label class="field">
+            <span>{t("Cache write $/Mtok")}</span>
+            <input
+              class="mono"
+              inputmode="decimal"
+              value={props.draft.pricing?.cacheWritePerMtok ?? ""}
+              onInput={(event) =>
+                updatePricing("cacheWritePerMtok", event.currentTarget.value)
+              }
             />
           </label>
           <span class="full field-hint">

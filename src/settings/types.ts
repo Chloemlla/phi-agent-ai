@@ -5,6 +5,8 @@
 export type Pricing = {
   inputPerMtok: number;
   outputPerMtok: number;
+  cacheReadPerMtok?: number | null;
+  cacheWritePerMtok?: number | null;
 };
 
 export type ModelSpec = {

@@ -101,7 +101,6 @@ fn zh(msgid: &str) -> Option<&'static str> {
         // Generic
         "… (truncated)" => "…（已截断）",
         "New session" => "新会话",
-        "Wall-clock limit exceeded; action was not executed." => "超过墙钟上限；动作未执行。",
         "Unknown language {lang}; expected en or zh-CN" => "未知语言 {lang}；可选 en 或 zh-CN",
         "Unable to locate the application data directory: {error}" => {
             "无法定位应用数据目录: {error}"
@@ -329,21 +328,6 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Workspace does not exist or is not a directory" => "工作区不存在或不是目录",
         "Implicit task" => "隐式任务",
         "Stopped: the in-flight request was aborted." => "已停止：进行中的请求已中止。",
-        "Wall-clock limit exceeded" => "超过墙钟上限",
-        "Stopped: the run exceeded the time limit." => "已停止：运行超过时间上限。",
-        "Stopped: model request exceeded the wall-clock limit." => "已停止：模型请求超过时间上限。",
-        "Stopped: model response arrived after the wall-clock deadline." => {
-            "已停止：模型响应在时间上限之后才返回。"
-        }
-        "Cost budget exceeded (reservation failed before the call)" => {
-            "预算超限（成本），调用前预留失败"
-        }
-        "Stopped: the budget is insufficient for the next model call." => {
-            "已停止：预算不足以发起下一次模型调用。"
-        }
-        "Reservation before model call" => "模型调用前预留",
-        "Cost limit exceeded" => "超过成本上限",
-        "Stopped: cost limit exceeded after settlement." => "已停止：结算后成本超过上限。",
         "Stopped: model request was aborted; no tool side effects occurred." => {
             "已停止：模型请求已中止，未产生工具副作用。"
         }
@@ -352,16 +336,21 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Failed to save assistant message: {error}" => "保存助手消息失败: {error}",
         "Failed to save tool results: {error}" => "保存工具结果失败: {error}",
         "Run cancelled; action was not executed." => "运行已取消；动作未执行。",
-        "Stopped: wall-clock limit reached. A command that was still running may have produced partial side effects; verify the workspace." => {
-            "已停止：达到时间上限。仍在运行的命令可能已产生部分副作用，请检查工作区。"
-        }
         "Stopped: the command was terminated and may have produced partial side effects. Inspect and verify the workspace (no automatic retry)." => {
             "已停止：命令被终止，但可能已产生部分副作用。请检查工作区并核对（不会自动重试）。"
         }
         "Stopped: the in-flight tool call was aborted." => "已停止：进行中的工具调用已中止。",
-        "Step limit reached" => "达到步数上限",
-        "Stopped: maximum steps reached; the task may be incomplete." => {
-            "已停止：达到最大步数，任务可能未完成。"
+        "(stdout truncated at 1 MB; the rest was discarded)" => {
+            "（stdout 超过 1 MB，已截断，其余内容已丢弃）"
+        }
+        "(stderr truncated at 1 MB; the rest was discarded)" => {
+            "（stderr 超过 1 MB，已截断，其余内容已丢弃）"
+        }
+        "The model response was truncated by the output token limit; the run stopped instead of reporting a partial result." => {
+            "模型响应因输出 token 上限被截断；运行已停止，不会把不完整结果当作成功。"
+        }
+        "Response was truncated before the tool call completed; the tool was not executed." => {
+            "响应在工具调用完成前被截断；该工具未执行。"
         }
         "Policy component is unavailable; denied by default" => "策略组件不可用，按默认拒绝处理",
         "modify is not supported in this version; denied" => "当前版本不支持 modify，按拒绝处理",
@@ -482,9 +471,7 @@ fn zh(msgid: &str) -> Option<&'static str> {
 
         // Journal failures during a run
         "Failed to record the step start: {error}" => "记录步骤开始失败: {error}",
-        "Failed to record the budget reservation: {error}" => "记录预算预留失败: {error}",
         "Failed to record the model call: {error}" => "记录模型调用失败: {error}",
-        "Failed to record the budget settlement: {error}" => "记录预算结算失败: {error}",
         "Failed to record the model response: {error}" => "记录模型响应失败: {error}",
         "Failed to record the model failure: {error}" => "记录模型失败失败: {error}",
         "Failed to record the step completion: {error}" => "记录步骤完成失败: {error}",
@@ -519,7 +506,6 @@ mod tests {
             "Command is empty",
             "Access outside the workspace is denied",
             "Message is empty",
-            "Stopped: maximum steps reached; the task may be incomplete.",
             "… (truncated)",
             "The node is read-only",
             "Another phi-agent process is using this data directory",

@@ -32,11 +32,15 @@ impl Plugin for DefaultContextPlugin {
     }
 }
 
-const MAX_HISTORY_CHARS: usize = 100_000;
 const MAX_PROJECT_INSTRUCTIONS: usize = 8_000;
 
 impl ContextPort for DefaultContextPlugin {
-    fn assemble(&self, history: Vec<ChatMessage>, workspace: &Path) -> AssembledContext {
+    fn assemble(
+        &self,
+        history: Vec<ChatMessage>,
+        workspace: &Path,
+        max_history_chars: usize,
+    ) -> AssembledContext {
         let mut system = String::new();
         system.push_str(
             "You are phi-agent, a local-first coding agent running on the user's machine.\n",
@@ -70,7 +74,7 @@ impl ContextPort for DefaultContextPlugin {
             }
         }
 
-        let messages = trim_history(history);
+        let messages = trim_history(history, max_history_chars);
         AssembledContext { system, messages }
     }
 }
@@ -90,12 +94,31 @@ fn message_chars(message: &ChatMessage) -> usize {
         + 32
 }
 
-fn trim_history(history: Vec<ChatMessage>) -> Vec<ChatMessage> {
+fn is_user_task(message: &ChatMessage) -> bool {
+    message.role == Role::User
+        && message
+            .blocks
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text } if !text.trim().is_empty()))
+}
+
+fn trim_history(history: Vec<ChatMessage>, max_chars: usize) -> Vec<ChatMessage> {
+    // The first user text message is the task. It is always retained: trimming
+    // the oldest messages first would otherwise drop the only description of
+    // what the agent is supposed to do in a long run.
+    let task_index = history.iter().position(is_user_task);
+    let task = task_index.map(|index| history[index].clone());
+    let task_size = task.as_ref().map(message_chars).unwrap_or(0);
+    let budget = max_chars.saturating_sub(task_size);
+
     let mut kept: Vec<ChatMessage> = Vec::new();
     let mut total = 0usize;
-    for message in history.into_iter().rev() {
+    for (index, message) in history.into_iter().enumerate().rev() {
+        if Some(index) == task_index {
+            continue;
+        }
         let size = message_chars(&message);
-        if total + size > MAX_HISTORY_CHARS && !kept.is_empty() {
+        if total + size > budget && !kept.is_empty() {
             break;
         }
         total += size;
@@ -114,6 +137,10 @@ fn trim_history(history: Vec<ChatMessage>) -> Vec<ChatMessage> {
     {
         kept.remove(0);
     }
+
+    if let Some(task) = task {
+        kept.insert(0, task);
+    }
     kept
 }
 
@@ -131,7 +158,7 @@ mod tests {
             },
             ChatMessage::user_text("hello"),
         ];
-        let trimmed = trim_history(history);
+        let trimmed = trim_history(history, 100_000);
         assert_eq!(trimmed.len(), 1);
         assert_eq!(trimmed[0].role, Role::User);
     }
@@ -146,7 +173,28 @@ mod tests {
                 input: json!({}),
             }],
         }];
-        let trimmed = trim_history(history);
+        let trimmed = trim_history(history, 100_000);
         assert_eq!(trimmed.len(), 1);
+    }
+
+    #[test]
+    fn never_drops_the_original_task() {
+        let mut history = vec![ChatMessage::user_text("fix the failing test")];
+        for index in 0..40 {
+            history.push(ChatMessage::user_text(format!(
+                "tool result {index}: {}",
+                "x".repeat(400)
+            )));
+        }
+        let trimmed = trim_history(history, 2_000);
+        match &trimmed[0].blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "fix the failing test"),
+            other => panic!("first message must be the task, got {other:?}"),
+        }
+        let total: usize = trimmed.iter().map(message_chars).sum();
+        assert!(
+            total <= 2_000,
+            "trimmed history should fit the budget, got {total} chars"
+        );
     }
 }

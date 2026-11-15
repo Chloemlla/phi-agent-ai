@@ -32,14 +32,15 @@ pub struct RunView {
     pub turn_id: String,
     pub state: String,
     pub steps: u64,
-    pub max_steps: u64,
     pub cost_usd: f64,
-    pub max_cost_usd: f64,
-    pub max_wall_secs: u64,
     /// True when the agent may shape the workbench view for this run.
     pub workbench_mode: bool,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     pub pending_approval_id: Option<String>,
     pub error: Option<String>,
     pub stop_confirmation: Option<String>,

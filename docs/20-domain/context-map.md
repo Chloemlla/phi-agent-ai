@@ -32,6 +32,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
   │ Journal/     │ │ Tool/Skill/MCP   │ │ Provider/ │ │ Policy/      │
   │ Storage/Scope│ │ /Sandbox         │ │ Route/    │ │ Approver/    │
   │ 支撑域        │ │ 核心域 ★         │ │ Budget    │ │ Capability   │
+  │               │ │                  │ │ (可选)     │ │              │
   └──────────────┘ └──────────────────┘ │ 支撑域     │ │ 支撑域        │
                                         └───────────┘ └──────────────┘
 
@@ -64,7 +65,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 | ② | **会话、任务与运行** | ★核心域 | 任务/会话/轮次/运行/步骤的生命周期与事件产出 | `plugin-session` |
 | ③ | **Agent 运行时** | ★核心域 | Agent 定义、行动循环、上下文构筑、编排 | `plugin-loop`/`orchestrator`/`context` |
 | ④ | **能力** | ★核心域 | 工具、技能、MCP、沙箱执行 | `plugin-tools`/`skills`/`mcp`/`sandbox` |
-| ⑤ | **模型** | 支撑域 | 模型提供方、路由、缓存、用量、预算 | `plugin-model-gw`/`model-provider-*` |
+| ⑤ | **模型** | 支撑域 | 模型提供方、路由、缓存、用量（预算为可选目标态） | `plugin-model-gw`/`model-provider-*` |
 | ⑥ | **治理与安全** | 支撑域 | 策略、审批（人/辅助模型）、能力授权 | `plugin-policy`/`approver` |
 | ⑦ | **数据与事件** | 支撑域 | 事件日志、存储、作用域、读模型 | `plugin-store`、内核 eventbus/ports |
 | ⑧ | **扩展机制** | 通用域 | 插件清单、扩展点、贡献、生命周期、能力协商 | 内核 registry/lifecycle |
@@ -104,7 +105,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 - 不变量：一个 Run 恰好属于一个 Task 与一个 Session；Session 的写者同一时刻唯一（v1），换端以整个 Session 为单位（ADR-0011）；所有状态变化成为事件。
 
 ### ③ Agent 运行时 ★
-- **AgentDefinition**：角色/提示/工具/技能/模型/预算（数据）。/ **LoopStrategy**：可插拔算法。/ **ContextAssembly**：一次模型调用的上下文快照。
+- **AgentDefinition**：角色/提示/工具/技能/模型/预算（目标态）。/ **LoopStrategy**：可插拔算法。/ **ContextAssembly**：一次模型调用的上下文快照。
 - 不变量：AgentDefinition 是数据不是代码；Loop 不持有对具体模型的硬依赖（经 Model 端口）。
 
 ### ④ 能力 ★
@@ -113,7 +114,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 
 ### ⑤ 模型
 - **ModelProvider**：一个来源。/ **ModelSpec**：具体模型（能力/定价/上下文窗口）。/ **ModelCall**：一次调用 + 用量。/ **Route**：把任务路由到模型。
-- 不变量：用量必须计量（预算依赖它）；密钥不落明文。
+- 不变量：用量必须计量（可选预算依赖它）；密钥不落明文。
 
 ### ⑥ 治理与安全
 - **Policy**：规则集。/ **Decision**：allow/deny/ask/modify。/ **Approver**：人 / 辅助模型。/ **Capability**：授权令牌。
@@ -149,8 +150,8 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 | `TurnCompleted` | ② | ⑦⑩ |
 | `RunStarted` / `RunSucceeded` / `RunFailed` / `RunAborted` / `RunAwaitingReconciliation` | ②③ | ⑦⑤⑥ |
 | `StepStarted` / `StepCompleted` | ③ | ⑦ |
-| `ModelCallIssued` / `ModelCallReturned`(含用量) | ⑤ | ⑦⑥（预算） |
-| `BudgetReserved` / `BudgetSettled` / `BudgetExceeded` | ⑤ | ②⑦ |
+| `ModelCallIssued` / `ModelCallReturned`(含用量) | ⑤ | ⑦⑥（用量） |
+| `BudgetReserved` / `BudgetSettled` / `BudgetExceeded`（目标态） | ⑤ | ②⑦ |
 | `EgressGranted` / `EgressRevoked` | ⑤ | ⑦⑩ |
 | `ToolInvokeRequested` / `ToolInvokeCompleted` / `ToolInvokeOutcomeUnknown` | ④ | ⑥⑦ |
 | `PolicyDecisionMade` | ⑥ | ⑦④ |

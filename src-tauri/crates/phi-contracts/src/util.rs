@@ -51,6 +51,16 @@ pub struct ResourceIdentity {
     pub content_hash: Option<String>,
 }
 
+pub fn resource_kind(path: &Path) -> &'static str {
+    if path.is_file() {
+        "file"
+    } else if path.is_dir() {
+        "dir"
+    } else {
+        "missing"
+    }
+}
+
 pub fn resource_fingerprint(path: &Path) -> (&'static str, Option<String>) {
     if path.is_file() {
         match std::fs::read(path) {
@@ -61,6 +71,17 @@ pub fn resource_fingerprint(path: &Path) -> (&'static str, Option<String>) {
         ("dir", None)
     } else {
         ("missing", None)
+    }
+}
+
+/// Identity of a resource for an action digest. Content hashing is opt-in:
+/// only actions whose approval depends on the file contents pay for reading
+/// the file; read-only tools bind the resolved path and kind only.
+pub fn resource_identity(path: &Path, hash_contents: bool) -> (&'static str, Option<String>) {
+    if hash_contents {
+        resource_fingerprint(path)
+    } else {
+        (resource_kind(path), None)
     }
 }
 

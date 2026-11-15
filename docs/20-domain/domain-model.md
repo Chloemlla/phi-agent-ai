@@ -6,7 +6,30 @@
 
 ---
 
-## 0. 怎么读这份文档
+## 0. 实现状态（2026-11-15）
+
+本表只标注“当前代码实现到哪”，不删除任何目标态概念。✅ = 已实现；🧭 = 目标态，保留设计但当前未实现或未启用。
+
+| 概念 | 状态 | 说明 |
+|---|---|---|
+| Session / Turn / Run / Step / ToolInvocation | ✅ | v1 使用一条 session 事件流；Run 是流上的投影，独立 Run 流与检查点仍是目标态（ADR-0011 以 Session 为交接单位） |
+| ApprovalRequest | ✅ | 绑定 action digest，执行前复核 |
+| MemoryRecord / Episode | ✅ | SQLite + BM25，准入、脱敏、forget |
+| ProviderProfile / ModelSpec | ✅ | `providers.json`；模型目录是可选数据 |
+| UiView | ✅ | 声明式视图树 v1 |
+| Task | 🧭 | 当前只有隐式 `TaskCreated` 与 `taskId` 占位，没有 Task 聚合状态 |
+| AgentDefinition / LoopStrategy | 🧭 | 当前是单一 ReAct 循环与固定系统提示 |
+| Checkpoint | 🧭 | 当前恢复 = journal replay + interrupted 标记 + unpaired tool_use 修复 |
+| PolicyRule | 🧭 | 当前是默认策略函数，不是规则引擎 |
+| Budget | 🧭 可选 | v1 已移除 Run 级步数/成本/墙钟硬上限；token 与成本仍逐次记录（见 `80-roadmap/scope-additions.md` §2.10） |
+| Capability / EgressGrant | 🧭 | 未实现 |
+| Reflection | 🧭 | 未实现 |
+| PeerLink / Handoff | 🧭 | 未实现 |
+| 插件 tier / manifest | 🧭 | 当前是编译期组合 + 槽位元数据 |
+
+---
+
+## 0.1 怎么读这份文档
 
 - **聚合（Aggregate）** 是一致性边界：一个聚合内部强一致，聚合之间最终一致（经事件）。
 - **不变量（Invariant）** 是「任何时候都必须成立」的断言——它们是领域层单测的第一批用例。
@@ -67,7 +90,7 @@
 | `ActionDigest` | 执行主体 + 目标节点 + 工作区/资源身份 + `toolId@version` + 规范化参数 + 命令相关项 | 参数或目标变化 → 审批失效（`I-6-5`） |
 | `RiskProfile` | 数据修改 / 信息读取与外发 / 费用 / 代码执行与权限 | 四维独立；`sideEffect` 只是输入 |
 | `EgressGrant` | 接收方 + 用途 + 内容类别 | 授权外发的最小单位（主模型/审批/嵌入/反思分别授权） |
-| `Budget` | `maxSteps, maxCost, maxWallTime` | 任一超限 → 触发终止 |
+| `Budget` | `maxSteps, maxCost, maxWallTime` | 任一超限 → 触发终止（🧭 可选目标态；v1 未启用硬上限，见 §0） |
 | `ModelSpec` | provider + model + 参数 + 定价快照 | 调用时冻结定价，避免账单漂移 |
 | `Capability` | kind + resource（如 `fs.write:/workspace`） | 显式、可列举、可撤销 |
 | `ContentRef` | 内容哈希 + 存储引用 | 大对象走 Blob，不塞事件 |
@@ -162,7 +185,7 @@
 | `agentDefRef` | 引用某个 AgentDefinition 的版本 |
 | `pinnedVersions` | 本次运行固定的工具/技能/循环插件版本（恢复时据此校验，见 `I-3-7`） |
 | `state` | 见下方状态机 |
-| `budget: Budget` | 步数/成本/超时上限（含**已预留**额度） |
+| `budget: Budget` | 步数/成本/超时上限（含**已预留**额度；🧭 可选目标态，v1 未启用） |
 | `checkpoints: CheckpointRef[]` | 可恢复点 |
 | `lastSeq` | 事件序号（用于续跑/复制） |
 
@@ -173,7 +196,7 @@
         │ Scheduled│
         └────┬─────┘
              ▼
-        ┌──────────┐   超预算/用户取消/不收敛
+        ┌──────────┐   用户取消/不收敛（可选预算为目标态）
         │ Running  │───────────────┬──────────┐
         └────┬─────┘               ▼          ▼
              │                 ┌────────┐ ┌────────┐
@@ -198,7 +221,7 @@
 **不变量**：
 - `I-3-1` Run 终态（Succeeded/Failed/Aborted）不可再进入 Running，除非显式「重跑」创建**新** Run。
 - `I-3-2` 每次进入/离开 Running 必须产生事件（可回放）。
-- `I-3-3` 预算超限 → 必须终止（`Aborted`），不得「再试一次」。
+- `I-3-3` 预算超限 → 必须终止（`Aborted`），不得「再试一次」。（🧭 可选目标态；v1 不启用 Run 级预算上限，仅保留用量记录与用户取消）
 - `I-3-4` HandedOff 的 Run 在本节点不可再写（所有权已转出）。
 - `I-3-5` **同一 Turn 至多一个活跃的根 Run**（`parentRunId` 为空的 Run）。子 Run 可并行，但属于同一个根 Run，保留 `turnId` 关联而**不新建用户轮次**。
 - `I-3-6` 根 Run 进入终态（含 Aborted）后，**有界宽限期内必须取消全部后代 Run**——不留无人管理的执行。
@@ -244,7 +267,7 @@
 | `role`, `systemPrompt` | 角色与系统提示 |
 | `toolRefs`, `skillRefs` | 引用工具/技能（by id） |
 | `modelPolicy` | 模型选择策略（可交给 router） |
-| `budgetDefaults: Budget` | 默认预算 |
+| `budgetDefaults: Budget` | 默认预算（🧭 可选目标态） |
 | `memoryScope` | 记忆作用域 |
 
 **不变量**：
@@ -542,7 +565,7 @@ Requested ──policy──▶ Denied（终态）
 - `MessageAppended { sessionId, turnId, messageId, role, contentRef }` ← 用户/助手消息的**权威记录**
 - `ModelOutputRecorded { callId, runId, contentRef }` ← 一次模型产出的完整内容
 - `ContextSnapshotRecorded { runId, stepId, contextRef, tokenCount }` ← 该步**实际送进模型的上下文**（可回放/可审计）
-- `BudgetReserved { runId, reserved }` / `BudgetSettled { runId, consumed, released }` ← 调用前预留、调用后结算（`#10`）
+- `BudgetReserved { runId, reserved }` / `BudgetSettled { runId, consumed, released }` ← 调用前预留、调用后结算（`#10`；🧭 目标态，v1 未产生）
 - `BudgetExceeded { runId, dimension }`
 
 ### 模型（⑤）
@@ -588,7 +611,7 @@ Requested ──policy──▶ Denied（终态）
 
 > **事件目录的补充说明**（回应「事件不足以重建状态」）：
 > - **大对象一律走 Blob**：事件只带 `*Ref`（`ContentRef`）；消息正文、模型输出、上下文快照、工具结果都在 Blob。
-> - **生产者身份由宿主附加**：事件信封携带 `producer`（哪个模块/插件产生）与 `principal`；**关键事件（审批、预算、策略、换端）只能由所属模块产生**，插件不得伪造成这类事件（`#8`）。
+> - **生产者身份由宿主附加**：事件信封携带 `producer`（哪个模块/插件产生）与 `principal`；**关键事件（审批、用量、策略、换端）只能由所属模块产生**，插件不得伪造成这类事件（`#8`）。
 > - **聚合版本**：每个事件带 `aggregateId + aggregateVersion(seq)`；会话级订阅游标是「各聚合版本的向量」，不是单一 `seq`（`#15`）。
 
 ---

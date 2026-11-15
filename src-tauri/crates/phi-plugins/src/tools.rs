@@ -139,16 +139,6 @@ impl ToolPort for BuiltinToolsPlugin {
         ctx: &ToolContext,
         cancel: CancellationToken,
     ) -> Result<ToolOutput, String> {
-        if ctx
-            .deadline
-            .map(|deadline| std::time::Instant::now() >= deadline)
-            .unwrap_or(false)
-        {
-            return Ok(ToolOutput {
-                content: i18n::t("Wall-clock limit exceeded; action was not executed."),
-                is_error: true,
-            });
-        }
         let result = match call.tool_id.as_str() {
             "fs_list" => self.fs_list(&call.input, &ctx.workspace),
             "fs_read" => self.fs_read(&call.input, &ctx.workspace),
@@ -166,22 +156,12 @@ impl ToolPort for BuiltinToolsPlugin {
                         is_error: true,
                     });
                 }
-                let mut timeout_secs = call
+                let timeout_secs = call
                     .input
                     .get("timeout_secs")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(120)
                     .clamp(1, 300);
-                if let Some(deadline) = ctx.deadline {
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    if remaining.is_zero() {
-                        return Ok(ToolOutput {
-                            content: i18n::t("Wall-clock limit exceeded; action was not executed."),
-                            is_error: true,
-                        });
-                    }
-                    timeout_secs = timeout_secs.min(remaining.as_secs().max(1));
-                }
                 return match self
                     .sandbox
                     .exec(
@@ -199,6 +179,18 @@ impl ToolPort for BuiltinToolsPlugin {
                                 "(command timed out after {secs}s; terminated)\n",
                                 &[("secs", timeout_secs.to_string())],
                             ));
+                        }
+                        if out.stdout_truncated {
+                            text.push_str(&i18n::t(
+                                "(stdout truncated at 1 MB; the rest was discarded)",
+                            ));
+                            text.push('\n');
+                        }
+                        if out.stderr_truncated {
+                            text.push_str(&i18n::t(
+                                "(stderr truncated at 1 MB; the rest was discarded)",
+                            ));
+                            text.push('\n');
                         }
                         text.push_str(&format!("exit code: {:?}\n", out.exit_code));
                         text.push_str("--- stdout ---\n");

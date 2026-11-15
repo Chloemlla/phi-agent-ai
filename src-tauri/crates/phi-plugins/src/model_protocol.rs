@@ -29,8 +29,14 @@ pub struct HttpPlan {
 #[derive(Clone, Debug)]
 pub struct ProtocolResponse {
     pub blocks: Vec<ContentBlock>,
+    /// Non-cached input tokens. Providers that include cached tokens in the
+    /// prompt total are normalized here.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Input tokens served from the provider's prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to the provider's prompt cache.
+    pub cache_write_tokens: u64,
     pub finish_reason: String,
     pub estimated_usage: bool,
 }
@@ -131,10 +137,18 @@ pub fn build_http(
             let mut body = json!({
                 "model": model,
                 "max_tokens": max_tokens,
-                "system": req.system,
                 "messages": req.messages.iter().map(message_to_anthropic).collect::<Vec<_>>(),
                 "stream": stream,
             });
+            if !req.system.trim().is_empty() {
+                // A breakpoint on the system block caches the tool definitions
+                // and system prompt (everything before it in the prompt).
+                body["system"] = json!([{
+                    "type": "text",
+                    "text": req.system,
+                    "cache_control": { "type": "ephemeral" }
+                }]);
+            }
             if let Some(temperature) = profile.temperature {
                 body["temperature"] = json!(temperature);
             }
@@ -144,14 +158,23 @@ pub fn build_http(
             body
         }
         Protocol::OpenAiChat => {
+            let reasoning = is_reasoning_model(&model);
             let mut body = json!({
                 "model": model,
                 "messages": messages_to_chat(&req.messages),
-                "max_tokens": max_tokens,
                 "stream": stream,
             });
-            if let Some(temperature) = profile.temperature {
-                body["temperature"] = json!(temperature);
+            // Reasoning models reject `max_tokens`; newer Chat Completions
+            // models use `max_completion_tokens`.
+            if reasoning {
+                body["max_completion_tokens"] = json!(max_tokens);
+            } else {
+                body["max_tokens"] = json!(max_tokens);
+            }
+            if !reasoning {
+                if let Some(temperature) = profile.temperature {
+                    body["temperature"] = json!(temperature);
+                }
             }
             if !req.tools.is_empty() {
                 body["tools"] = Value::Array(req.tools.iter().map(tool_to_chat).collect());
@@ -159,6 +182,7 @@ pub fn build_http(
             body
         }
         Protocol::OpenAiResponses => {
+            let reasoning = is_reasoning_model(&model);
             let mut body = json!({
                 "model": model,
                 "input": messages_to_responses(&req.messages),
@@ -168,8 +192,10 @@ pub fn build_http(
             if !req.system.trim().is_empty() {
                 body["instructions"] = json!(req.system);
             }
-            if let Some(temperature) = profile.temperature {
-                body["temperature"] = json!(temperature);
+            if !reasoning {
+                if let Some(temperature) = profile.temperature {
+                    body["temperature"] = json!(temperature);
+                }
             }
             if !req.tools.is_empty() {
                 body["tools"] = Value::Array(req.tools.iter().map(tool_to_responses).collect());
@@ -179,6 +205,21 @@ pub fn build_http(
     };
 
     Ok(HttpPlan { url, headers, body })
+}
+
+/// OpenAI reasoning models (`o1`, `o3`, `o4`, `gpt-5` families) use
+/// `max_completion_tokens` on Chat Completions and reject sampling parameters
+/// such as `temperature` on both Chat and Responses.
+fn is_reasoning_model(model: &str) -> bool {
+    let model = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .trim()
+        .to_ascii_lowercase();
+    ["o1", "o3", "o4", "gpt-5"]
+        .iter()
+        .any(|prefix| model == *prefix || model.starts_with(&format!("{prefix}-")))
 }
 
 fn auth_headers(
@@ -441,12 +482,18 @@ fn parse_anthropic(value: &Value) -> Result<ProtocolResponse, ModelError> {
     if blocks.is_empty() {
         blocks.push(ContentBlock::text(i18n::t("(model returned no content)")));
     }
-    let input_tokens = value["usage"]["input_tokens"].as_u64();
-    let output_tokens = value["usage"]["output_tokens"].as_u64();
+    let usage = &value["usage"];
+    let input_tokens = usage["input_tokens"].as_u64();
+    let output_tokens = usage["output_tokens"].as_u64();
+    // Anthropic reports cache read/write tokens separately from `input_tokens`.
+    let cache_read_tokens = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+    let cache_write_tokens = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
     Ok(ProtocolResponse {
         blocks,
         input_tokens: input_tokens.unwrap_or(0),
         output_tokens: output_tokens.unwrap_or(0),
+        cache_read_tokens,
+        cache_write_tokens,
         finish_reason: value["stop_reason"]
             .as_str()
             .unwrap_or("end_turn")
@@ -498,12 +545,21 @@ fn parse_chat(value: &Value) -> Result<ProtocolResponse, ModelError> {
     }
 
     let usage = &value["usage"];
-    let input_tokens = usage["prompt_tokens"].as_u64();
+    let prompt_tokens = usage["prompt_tokens"].as_u64();
+    // OpenAI includes cached tokens in `prompt_tokens`; DeepSeek exposes them
+    // as `prompt_cache_hit_tokens`. Normalize to non-cached input tokens.
+    let cache_read_tokens = usage["prompt_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
+        .unwrap_or(0);
+    let input_tokens = prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens));
     let output_tokens = usage["completion_tokens"].as_u64();
     Ok(ProtocolResponse {
         blocks,
         input_tokens: input_tokens.unwrap_or(0),
         output_tokens: output_tokens.unwrap_or(0),
+        cache_read_tokens,
+        cache_write_tokens: 0,
         finish_reason: choice["finish_reason"]
             .as_str()
             .unwrap_or("stop")
@@ -557,7 +613,11 @@ fn parse_responses(value: &Value) -> Result<ProtocolResponse, ModelError> {
         blocks.push(ContentBlock::text(i18n::t("(model returned no content)")));
     }
     let usage = &value["usage"];
-    let input_tokens = usage["input_tokens"].as_u64();
+    let prompt_tokens = usage["input_tokens"].as_u64();
+    let cache_read_tokens = usage["input_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .unwrap_or(0);
+    let input_tokens = prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens));
     let output_tokens = usage["output_tokens"].as_u64();
     let finish_reason = match value["status"].as_str() {
         Some("incomplete") => value["incomplete_details"]["reason"]
@@ -570,6 +630,8 @@ fn parse_responses(value: &Value) -> Result<ProtocolResponse, ModelError> {
         blocks,
         input_tokens: input_tokens.unwrap_or(0),
         output_tokens: output_tokens.unwrap_or(0),
+        cache_read_tokens,
+        cache_write_tokens: 0,
         finish_reason,
         estimated_usage: input_tokens.is_none() || output_tokens.is_none(),
     })
@@ -669,6 +731,8 @@ struct AnthropicDecoder {
     blocks: BTreeMap<u32, BlockAccum>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
     stop_reason: Option<String>,
 }
 
@@ -696,8 +760,12 @@ impl StreamDecoder for AnthropicDecoder {
         let mut deltas = Vec::new();
         match kind {
             "message_start" => {
-                self.input_tokens = value["message"]["usage"]["input_tokens"].as_u64();
-                self.output_tokens = value["message"]["usage"]["output_tokens"].as_u64();
+                let usage = &value["message"]["usage"];
+                self.input_tokens = usage["input_tokens"].as_u64();
+                self.output_tokens = usage["output_tokens"].as_u64();
+                self.cache_read_tokens = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                self.cache_write_tokens =
+                    usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
             }
             "content_block_start" => {
                 let index = value["index"].as_u64().unwrap_or(0) as u32;
@@ -816,6 +884,8 @@ impl StreamDecoder for AnthropicDecoder {
             blocks,
             input_tokens: this.input_tokens.unwrap_or(0),
             output_tokens: this.output_tokens.unwrap_or(0),
+            cache_read_tokens: this.cache_read_tokens,
+            cache_write_tokens: this.cache_write_tokens,
             finish_reason: this.stop_reason.unwrap_or_else(|| "end_turn".to_string()),
             estimated_usage: this.input_tokens.is_none() || this.output_tokens.is_none(),
         })
@@ -828,6 +898,7 @@ struct ChatDecoder {
     tools: BTreeMap<u32, ToolAccum>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cache_read_tokens: u64,
     finish_reason: Option<String>,
 }
 
@@ -866,8 +937,13 @@ impl StreamDecoder for ChatDecoder {
             )));
         }
         if let Some(usage) = value.get("usage") {
+            let cache_read = usage["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
+                .unwrap_or(0);
+            self.cache_read_tokens = cache_read;
             if let Some(input) = usage["prompt_tokens"].as_u64() {
-                self.input_tokens = Some(input);
+                self.input_tokens = Some(input.saturating_sub(cache_read));
             }
             if let Some(output) = usage["completion_tokens"].as_u64() {
                 self.output_tokens = Some(output);
@@ -948,6 +1024,8 @@ impl StreamDecoder for ChatDecoder {
             blocks,
             input_tokens: this.input_tokens.unwrap_or(0),
             output_tokens: this.output_tokens.unwrap_or(0),
+            cache_read_tokens: this.cache_read_tokens,
+            cache_write_tokens: 0,
             finish_reason: this.finish_reason.unwrap_or_else(|| "stop".to_string()),
             estimated_usage: this.input_tokens.is_none() || this.output_tokens.is_none(),
         })
@@ -960,6 +1038,7 @@ struct ResponsesDecoder {
     tools: BTreeMap<u32, ToolAccum>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cache_read_tokens: u64,
     final_response: Option<Value>,
     finish_reason: Option<String>,
 }
@@ -1038,7 +1117,13 @@ impl StreamDecoder for ResponsesDecoder {
             "response.completed" => {
                 self.final_response = Some(value["response"].clone());
                 if let Some(usage) = value["response"].get("usage") {
-                    self.input_tokens = usage["input_tokens"].as_u64();
+                    let cache_read = usage["input_tokens_details"]["cached_tokens"]
+                        .as_u64()
+                        .unwrap_or(0);
+                    self.cache_read_tokens = cache_read;
+                    self.input_tokens = usage["input_tokens"]
+                        .as_u64()
+                        .map(|total| total.saturating_sub(cache_read));
                     self.output_tokens = usage["output_tokens"].as_u64();
                 }
                 deltas.push(StreamDelta::Done);
@@ -1087,6 +1172,8 @@ impl StreamDecoder for ResponsesDecoder {
             blocks,
             input_tokens: this.input_tokens.unwrap_or(0),
             output_tokens: this.output_tokens.unwrap_or(0),
+            cache_read_tokens: this.cache_read_tokens,
+            cache_write_tokens: 0,
             finish_reason: this.finish_reason.unwrap_or_else(|| "end_turn".to_string()),
             estimated_usage: this.input_tokens.is_none() || this.output_tokens.is_none(),
         })
@@ -1114,6 +1201,8 @@ mod tests {
             pricing: Some(Pricing {
                 input_per_mtok: 1.0,
                 output_per_mtok: 2.0,
+                cache_read_per_mtok: Some(0.1),
+                cache_write_per_mtok: Some(1.25),
             }),
             max_output_tokens: None,
             temperature: None,
@@ -1195,6 +1284,8 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2]["content"][0]["type"], "tool_result");
         assert_eq!(plan.body["tools"][0]["input_schema"]["type"], "object");
+        assert_eq!(plan.body["system"][0]["text"], "be helpful");
+        assert_eq!(plan.body["system"][0]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]
@@ -1211,6 +1302,29 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_models_use_max_completion_tokens_and_skip_temperature() {
+        let mut p = profile(Protocol::OpenAiChat);
+        p.model = "o3-mini".into();
+        p.temperature = Some(0.2);
+        let plan = build_http(&p, &request(), false).unwrap();
+        assert_eq!(plan.body["max_completion_tokens"], 100);
+        assert!(plan.body.get("max_tokens").is_none());
+        assert!(plan.body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn ordinary_chat_models_keep_max_tokens_and_temperature() {
+        let mut p = profile(Protocol::OpenAiChat);
+        p.model = "gpt-4o".into();
+        p.temperature = Some(0.2);
+        let plan = build_http(&p, &request(), false).unwrap();
+        assert_eq!(plan.body["max_tokens"], 100);
+        assert!(plan.body.get("max_completion_tokens").is_none());
+        let temperature = plan.body["temperature"].as_f64().unwrap();
+        assert!((temperature - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
     fn responses_request_uses_function_call_items() {
         let plan = build_http(&profile(Protocol::OpenAiResponses), &request(), false).unwrap();
         let input = plan.body["input"].as_array().unwrap();
@@ -1222,6 +1336,61 @@ mod tests {
         );
         assert_eq!(plan.body["instructions"], "be helpful");
         assert_eq!(plan.body["tools"][0]["name"], "fs_list");
+    }
+
+    #[test]
+    fn parses_anthropic_cache_usage() {
+        let value = json!({
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 100,
+                "cache_creation_input_tokens": 20
+            }
+        });
+        let response = parse_response(Protocol::AnthropicMessages, &value).unwrap();
+        assert_eq!(response.input_tokens, 10);
+        assert_eq!(response.output_tokens, 5);
+        assert_eq!(response.cache_read_tokens, 100);
+        assert_eq!(response.cache_write_tokens, 20);
+    }
+
+    #[test]
+    fn normalizes_openai_cached_prompt_tokens() {
+        let value = json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 40}
+            }
+        });
+        let response = parse_response(Protocol::OpenAiChat, &value).unwrap();
+        assert_eq!(response.input_tokens, 60);
+        assert_eq!(response.cache_read_tokens, 40);
+        assert_eq!(response.output_tokens, 5);
+    }
+
+    #[test]
+    fn normalizes_responses_cached_prompt_tokens() {
+        let value = json!({
+            "status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 5,
+                "input_tokens_details": {"cached_tokens": 70}
+            }
+        });
+        let response = parse_response(Protocol::OpenAiResponses, &value).unwrap();
+        assert_eq!(response.input_tokens, 30);
+        assert_eq!(response.cache_read_tokens, 70);
+        assert_eq!(response.output_tokens, 5);
     }
 
     #[test]

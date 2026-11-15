@@ -1,17 +1,13 @@
-// Composer: the primary surface. Run bar and composer share one rounded shell
-// so the caps read as part of the input, not as a separate toolbar.
+// Composer: the primary surface. The run bar above it shows live usage; the
+// composer itself stays focused on the task input.
 
-import { formatElapsed, formatMoney } from "../format";
-import { t, tArgs } from "../i18n";
+import { t } from "../i18n";
 import { IconArrowUp } from "./Icons";
 
 export function Composer(props: {
   value: string;
   disabled: boolean;
   running: boolean;
-  budgetSteps: number;
-  budgetCost: number;
-  budgetWallSecs: number;
   onInput: (value: string) => void;
   onSend: () => void;
 }) {
@@ -38,13 +34,6 @@ export function Composer(props: {
         aria-label={t("Message")}
       />
       <div class="composer-actions">
-        <span class="composer-hint mono">
-          {tArgs("Budget: {steps} steps / ${cost} / {time}", {
-            steps: props.budgetSteps,
-            cost: formatMoney(props.budgetCost, 2),
-            time: formatElapsed(props.budgetWallSecs),
-          })}
-        </span>
         <button
           class="btn primary send"
           onClick={props.onSend}

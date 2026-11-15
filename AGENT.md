@@ -12,10 +12,11 @@ easy to violate by accident.
    `phi_i18n::t("English message")` or
    `phi_i18n::t_args("Hello {name}", &[("name", name)])` (a crate may
    `use phi_i18n as i18n;`). The English text is the message id;
-   `src-tauri/crates/phi-i18n/src/lib.rs` is the only file that contains
-   translations. Add the Chinese translation there when you add a message.
-   Later UI work should follow the same rule (English source, translated
-   catalog).
+   `src-tauri/crates/phi-i18n/src/lib.rs` is the Rust translation catalog.
+   Add the Chinese translation there when you add a message. The desktop UI has
+   its own catalog in `src/i18n.ts`; a user-visible string added on the frontend
+   must be added there too. Later UI work should follow the same rule (English
+   source, translated catalog).
 3. **Headless mode is mandatory.** Every shared feature must be usable and
    tested without the desktop UI. `phi-headless` is the reference shell:
    `cargo run -p phi-headless -- <command>`.
@@ -72,15 +73,17 @@ dependency direction at compile time:
   No Tauri type may appear outside this crate.
 - `src/` — SolidJS desktop UI.
 
-The intended dependency graph is `kernel → domain → contracts → plugins →
-adapters → node → shells`. Never add a dependency from a lower crate to a
-higher one.
+The dependency direction is enforced where it matters: `phi-kernel` and
+`phi-domain` are leaves; `phi-contracts` depends on `phi-domain`; `phi-plugins`
+and `phi-adapters` depend on the contracts/domain/kernel set; `phi-node`
+composes everything; shells only talk to `phi-node`. Never add a dependency
+from a lower crate to a higher one.
 
 ## Headless workflow
 
 ```bash
 # One-shot run (a provider must be configured first; without one the run fails honestly)
-phi-headless --data-dir .phi --workspace . --message "list the workspace"
+phi-headless --data-dir .phi --workspace . run --message "list the workspace"
 
 # Pick a provider and a language
 phi-headless --lang zh-CN run --provider prov_xxx --message "hello"
@@ -105,7 +108,24 @@ honestly.
 
 Three wire protocols are supported: `anthropic_messages`, `openai_chat` and
 `openai_responses`, each with SSE streaming. Streaming deltas are transient and
-go to the shell sink; only the final assistant message is journaled.
+go to the shell sink; only the final assistant message is journaled. OpenAI
+reasoning models (`o1`/`o3`/`o4`/`gpt-5` families) use
+`max_completion_tokens` and reject sampling parameters such as `temperature`.
+
+Model metadata suggestions live in `src-tauri/assets/model-catalog.json`,
+compiled into the binary. The file may be empty: unknown models stay manual
+specs with only their id. Provider APIs supply the live model list. Pricing may
+include cache read/write rates; Anthropic requests mark the system block with
+an ephemeral cache breakpoint, and cached usage is parsed into
+`ModelCallReturned`.
+
+## Runtime loop
+
+The agent loop has no run-level step, cost or wall-clock cap. It ends when the
+model stops calling tools, when a response is truncated by the per-call output
+limit, or when the user cancels. Token usage and estimated cost are recorded
+per model call. `shell_exec` keeps its own per-command timeout (default 120s,
+max 300s); the HTTP client keeps its request timeout.
 
 ## Memory
 
@@ -174,8 +194,8 @@ path.
 
 ## Tests and CI
 
-- Rust unit tests live next to the code; integration tests live in
-  `src-tauri/crates/phi-headless/tests/`.
+- Rust unit tests live next to the code; integration tests live in the
+  `tests/` directory of `phi-headless`, `phi-adapters` and `phi-plugins`.
 - Headless smoke tests use `env!("CARGO_BIN_EXE_phi-headless")`.
 - CI runs `cargo fmt --all -- --check`, frontend typecheck/build, the full
   workspace test suite on Windows, and a Linux job for every crate except the

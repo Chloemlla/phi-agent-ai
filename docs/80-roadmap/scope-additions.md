@@ -28,6 +28,8 @@
 | 7 | 文档增补规则 | 流程 | 已生效 | `AGENT.md` 第 6 条、本文件 |
 | 8 | 视觉设计规格 v1 | 界面 | 已实现 | `docs/design/SPEC.md`、`src/App.css` |
 | 9 | 记忆 MVP 的落地增量 | 运行时 + 界面 | 已实现（工具、设置页、CLI、golden 集） | `phi-plugins/src/memory/`、`phi-adapters/src/memory_sqlite.rs`、`src/settings/MemoryPage.tsx` |
+| 10 | 移除 Run 级预算硬上限 | 运行时 + 界面 | 已移除（保留用量计量与取消） | `loop_plugin.rs`、`src/components/Runbar.tsx` |
+| 11 | 模型目录改为可替换数据 | 模型 | 已实现（数据文件当前为空） | `src-tauri/assets/model-catalog.json`、`model_catalog.rs` |
 
 ---
 
@@ -65,7 +67,7 @@
   - 桌面命令（`api.rs`）与无头 CLI（`providers list/show/add/update/remove/use/test/models`）两套管理入口。
 - **当前状态**：后端、无头 CLI 与桌面设置页（新增/编辑/删除、启用、测试连接、拉取模型、模型角色与自定义请求头）均已接通。
 - **与设计约束的偏差**：`keychain:` 适配器尚未实现，使用时会如实报错；`literal:` 会把密钥写入本地档案，属于开发期方案，不是最终形态。
-- **2026-11-15 增补**：供应商下的模型从纯字符串升级为结构化 `ModelSpec`（显示名、描述、标签、上下文窗口、输出上限、单价、温度、启用状态、来源）。`model_catalog.rs` 按模型名自动填充这些元数据（可手动覆盖），价格作为保守默认值参与预算预留；模型描述与标签为后续模型路由 / 多 Agent 选择提供数据基础。旧 `providers.json` 中的字符串模型继续兼容读取。
+- **2026-11-15 增补**：供应商下的模型从纯字符串升级为结构化 `ModelSpec`（显示名、描述、标签、上下文窗口、输出上限、单价、温度、启用状态、来源）。`model_catalog.rs` 按模型名自动填充这些元数据（可手动覆盖），价格作为保守默认值参与当时的预算预留（该预算机制已于 2026-11-15 移除，见 §2.10）；模型描述与标签为后续模型路由 / 多 Agent 选择提供数据基础。旧 `providers.json` 中的字符串模型继续兼容读取。
 
 ### 2.4 多语言（i18n）
 
@@ -98,7 +100,7 @@
 
 ### 2.8 视觉设计规格 v1
 
-- **是什么**：桌面界面的唯一视觉权威（`docs/design/SPEC.md`）：design tokens、字体与数字排版、间距/圆角/阴影、三栏布局、风险分级审批、runbar 预算条、workbench 组件与动效语言。
+- **是什么**：桌面界面的唯一视觉权威（`docs/design/SPEC.md`）：design tokens、字体与数字排版、间距/圆角/阴影、三栏布局、风险分级审批、runbar 用量条（原为预算条，2026-11-15 改为步数/成本/耗时读数）、workbench 组件与动效语言。
 - **新增于**：2026-11-14。
 - **落地内容**：
   - 自绘无边框标题栏（窗口控制、拖拽区、节点状态 pill、设置入口）。
@@ -130,6 +132,26 @@
   - `forget` 覆盖记忆子系统完整链路；会话对话历史属于另一保留边界，不因记忆删除而改写。
   - 记忆内容随上下文发给已配置的模型供应商，暂未单独接入 `EgressGrant`（与普通对话内容的现状一致）。
 - **文档影响**：`README`（中英）新增「可以检查的记忆」章节与路线图条目；`AGENT.md` 新增 Memory 章节；`docs/40-runtime/context-and-memory.md` 的目标设计不变。
+
+---
+
+### 2.10 移除 Run 级预算硬上限
+
+- **原始设计**：`40-runtime/agent-loop.md` §3、`70-quality/quality-attributes.md` QAS-6 与 `20-domain/domain-model.md` 把步数/成本/墙钟三重硬上限写成发行基线的不变量，模型网关在调用前预留、调用后结算。
+- **为什么移除**（2026-11-15）：默认 20 步 / $0.50 / 600 秒会中止正常任务——一次 Rust 冷编译或完整测试就可能超过 10 分钟；成本预留用字符/字节估算 token，英文场景高估约 4 倍，$0.50 往往几次调用就耗尽；失败调用也按整笔预留结算，一次限流即可触发中止。普通用户关心的是模型能否完成任务，而不是被默认阈值截断。
+- **移除内容**：`RunLimits` 与 per-run 上限、`Bootstrap/RunStatus/RunView/RunScheduled` 的 max 字段、`BudgetReserved/BudgetSettled/BudgetExceeded` 事件、`Ledger` 预留/结算、`ModelPort::estimate_cost`、CLI 的 `--max-steps/--max-cost/--max-wall`、Runbar 的三条 meter 与 Composer 的预算提示。
+- **保留内容**：每次调用的 `max_output_tokens`；`shell_exec` 的单命令 timeout；审批自身的 `PHI_APPROVAL_TIMEOUT_SECS`；用户取消；`ModelCallReturned` 的 token 与成本记录，Runbar 改为「步数 / 成本 / 耗时」读数。
+- **运行终止条件**：模型不再调用工具；响应被输出上限截断；用户取消；模型请求失败且不可重试。
+- **设计记录**：预留/结算与三重上限的设计文本保留在 `agent-loop.md`、`model-gateway.md`、`quality-attributes.md`，标注为历史/可选目标态；如果未来重新引入，必须是显式 opt-in，而不是默认闸门。
+- **文档影响**：README（中英）、SECURITY、AGENT.md 的 Runtime loop 一节、`design/SPEC.md` 的 Runbar 规范同步更新。
+
+### 2.11 模型目录改为可替换数据
+
+- **原状**：`model_catalog.rs` 内置一份按模型名匹配的名称/描述/标签/上下文/价格表，设置页 presets 也硬编码了模型 id。
+- **为什么改**（2026-11-15）：这些条目已经过时，继续自动填充会误导用户；用户将提供最新的模型清单。
+- **当前实现**：目录数据移到 `src-tauri/assets/model-catalog.json`，编译进二进制；默认内容为空 `[]`。未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。presets 不再预填模型 id。
+- **数据字段**：`patterns`（大小写不敏感的子串，匹配时会去掉 vendor 前缀）、`name`、`description`、`tags`、`contextWindow`、`maxOutputTokens`、`pricing`（`inputPerMtok` / `outputPerMtok` / `cacheReadPerMtok` / `cacheWritePerMtok`）。
+- **文档影响**：`40-runtime/model-gateway.md` 增加目录数据说明；`scope-additions` 记录本变更。
 
 ---
 

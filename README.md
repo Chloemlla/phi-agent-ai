@@ -47,14 +47,14 @@ Reading your workspace is automatic. Writing files and running shell commands as
 Messages, tool calls, approval requests, and results appear in the conversation as each step completes. The whole run stays in your session, so you can look back at what happened.
 
 **4. Take it back.**
-Cancel at any time. Every run has hard caps — 20 steps, $0.50, and 10 minutes by default. If the app closes mid-task, the run is marked for review instead of being silently retried.
+Cancel at any time. The agent keeps working until the task is done or you stop it; steps, tokens and cost are shown live. If the app closes mid-task, the run is marked for review instead of being silently retried.
 
 ## Built for people who own their tools
 
 | | |
 |---|---|
 | 🔒 **Local-first**<br>Sessions and API keys stay on your machine. | 🧾 **Recorded**<br>Every run is saved and can be reviewed later. |
-| 🛑 **Human approval**<br>Writes and commands wait for your explicit OK. | 💸 **Budget caps**<br>Steps, cost, and wall-clock time are bounded before they run. |
+| 🛑 **Human approval**<br>Writes and commands wait for your explicit OK. | 📊 **Visible usage**<br>Steps, tokens and cost are shown live for every run. |
 | 🧠 **Bring your own model**<br>Use your own Anthropic- or OpenAI-compatible model endpoints and keys. | 🔁 **Crash-safe**<br>Interrupted work is marked for review, never auto-retried. |
 | 🖥️ **One workspace, one boundary**<br>File tools stay inside the folder you choose. | 🛰️ **Multi-device**<br>Continue a task from another device — on the roadmap. |
 
@@ -104,11 +104,11 @@ Giving an agent the ability to edit files and run commands is serious. phi-agent
 - **File tools stay in the workspace.** The folder you choose is the boundary for reading and writing files.
 - **Shell commands use your permissions.** Command execution is not sandboxed like a virtual machine, so the approval prompt is the real safety boundary. Read it before you approve.
 - **Cancellation is real.** Commands that may have already had an effect are marked “outcome unknown” instead of pretending otherwise.
-- **Cost cannot run away.** Every model call reserves budget first; the hard cap holds even when calls fail.
+- **Spend is visible.** Every model call records its token usage and estimated cost in the session; there is no hidden meter. Stop any run with Cancel.
 
 ## Roadmap
 
-- [x] **v0.1 — Desktop** · real coding tasks, approvals, budget caps, cancellation, crash recovery
+- [x] **v0.1 — Desktop** · real coding tasks, approvals, cancellation, crash recovery
 - [x] **Memory MVP** · durable facts the agent can recall; inspect, search and delete them in Settings
 - [ ] **v1 — Beyond one window** · work from more than one device, installable extensions, richer memory
 - [ ] **Later** · task handoff across devices, extensions marketplace

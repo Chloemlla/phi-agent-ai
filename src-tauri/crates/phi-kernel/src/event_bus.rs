@@ -95,11 +95,10 @@ impl EventBus {
         }
         let _publish_guard = self.publish_lock.lock().unwrap();
         let (aggregate_version, seq) = {
-            let mut versions = self.versions.lock().unwrap();
-            let version = versions.entry(aggregate_id.to_string()).or_insert(0);
-            *version += 1;
-            let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
-            (*version, seq)
+            let versions = self.versions.lock().unwrap();
+            let version = versions.get(aggregate_id).copied().unwrap_or(0) + 1;
+            let seq = self.seq.load(Ordering::SeqCst) + 1;
+            (version, seq)
         };
 
         let record = EventRecord {
@@ -119,6 +118,14 @@ impl EventBus {
             return Err(format!("journal append failed: {e}"));
         }
 
+        // Commit the sequence numbers only after the journal accepted the
+        // record. A failed append must not leave memory ahead of the log.
+        self.versions
+            .lock()
+            .unwrap()
+            .insert(aggregate_id.to_string(), aggregate_version);
+        self.seq.store(seq, Ordering::SeqCst);
+
         let sinks = self.sinks.lock().unwrap().clone();
         for sink in sinks {
             sink.on_event(&record);
@@ -134,17 +141,25 @@ impl EventBus {
         let mut versions: HashMap<String, u64> = HashMap::new();
         let mut max_seq = 0u64;
 
-        for line in lines {
+        let total = lines.len();
+        for (index, line) in lines.into_iter().enumerate() {
             match serde_json::from_str::<EventRecord>(&line) {
                 Ok(record) => {
                     max_seq = max_seq.max(record.seq);
                     versions.insert(record.aggregate_id.clone(), record.aggregate_version);
                     records.push(record);
                 }
+                Err(e) if index + 1 == total => {
+                    // A torn final line is a crash artifact; skip it loudly.
+                    self.log.warn(&format!(
+                        "skipping unreadable journal tail (line {}): {e}",
+                        index + 1
+                    ));
+                }
                 Err(e) => {
-                    // A torn/corrupt tail must not kill the node; skip it loudly.
-                    self.log
-                        .warn(&format!("skipping unreadable journal line: {e}"));
+                    // Mid-file corruption is not a crash tail. Refusing to
+                    // start is safer than silently losing earlier events.
+                    return Err(format!("journal line {} is unreadable: {e}", index + 1));
                 }
             }
         }
@@ -152,5 +167,121 @@ impl EventBus {
         *self.versions.lock().unwrap() = versions;
         self.seq.store(max_seq, Ordering::SeqCst);
         Ok(records)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::{ClockPort, IdPort, JournalPort, LogPort};
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    struct MemJournal {
+        lines: Mutex<Vec<String>>,
+        fail_next: AtomicBool,
+    }
+
+    impl JournalPort for MemJournal {
+        fn append(&self, line: &str) -> Result<(), String> {
+            if self.fail_next.swap(false, Ordering::SeqCst) {
+                return Err("disk full".to_string());
+            }
+            self.lines.lock().unwrap().push(line.to_string());
+            Ok(())
+        }
+
+        fn read_all(&self) -> Result<Vec<String>, String> {
+            Ok(self.lines.lock().unwrap().clone())
+        }
+    }
+
+    struct StubClock;
+    impl ClockPort for StubClock {
+        fn now_rfc3339(&self) -> String {
+            "2026-01-01T00:00:00Z".to_string()
+        }
+        fn monotonic_ms(&self) -> u64 {
+            0
+        }
+    }
+
+    struct StubIds(AtomicUsize);
+    impl IdPort for StubIds {
+        fn new_id(&self, prefix: &str) -> String {
+            format!("{prefix}_{}", self.0.fetch_add(1, Ordering::SeqCst))
+        }
+    }
+
+    struct StubLog;
+    impl LogPort for StubLog {
+        fn info(&self, _msg: &str) {}
+        fn warn(&self, _msg: &str) {}
+        fn error(&self, _msg: &str) {}
+    }
+
+    fn bus(journal: Arc<MemJournal>) -> EventBus {
+        EventBus::new(
+            journal,
+            Arc::new(StubClock),
+            Arc::new(StubIds(AtomicUsize::new(0))),
+            Arc::new(StubLog),
+        )
+    }
+
+    fn record_line(seq: u64, version: u64) -> String {
+        serde_json::to_string(&EventRecord {
+            event_id: format!("evt_{seq}"),
+            schema_version: 1,
+            seq,
+            aggregate_id: "sess_1".to_string(),
+            aggregate_version: version,
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            producer: "test".to_string(),
+            payload: serde_json::json!({ "type": "Test" }),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn failed_append_does_not_consume_sequence_numbers() {
+        let journal = Arc::new(MemJournal {
+            lines: Mutex::new(Vec::new()),
+            fail_next: AtomicBool::new(true),
+        });
+        let bus = bus(journal);
+        assert!(
+            bus.publish("sess_1", "test", &serde_json::json!({}))
+                .is_err()
+        );
+        let record = bus
+            .publish("sess_1", "test", &serde_json::json!({}))
+            .unwrap();
+        assert_eq!(record.seq, 1);
+        assert_eq!(record.aggregate_version, 1);
+    }
+
+    #[test]
+    fn restore_skips_a_torn_tail() {
+        let journal = Arc::new(MemJournal {
+            lines: Mutex::new(vec![record_line(1, 1), "{not json".to_string()]),
+            fail_next: AtomicBool::new(false),
+        });
+        let bus = bus(journal);
+        let records = bus.restore().unwrap();
+        assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn restore_rejects_midfile_corruption() {
+        let journal = Arc::new(MemJournal {
+            lines: Mutex::new(vec![
+                record_line(1, 1),
+                "{not json".to_string(),
+                record_line(3, 3),
+            ]),
+            fail_next: AtomicBool::new(false),
+        });
+        let bus = bus(journal);
+        assert!(bus.restore().is_err());
     }
 }

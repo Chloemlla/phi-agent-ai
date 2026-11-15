@@ -19,7 +19,7 @@ use crate::model_protocol::{
 use crate::provider_store::{ProviderStore, ResolvedProvider};
 use phi_contracts::SLOT_MODEL_INVOKE;
 use phi_contracts::ports::{ModelError, ModelPort, ModelRequest, ModelResponse, ModelStatus};
-use phi_contracts::provider::{AuthMode, ProviderProfile};
+use phi_contracts::provider::{AuthMode, Pricing, ProviderProfile};
 use phi_contracts::stream::{ModelStreamEvent, StreamHub};
 use phi_i18n as i18n;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
@@ -31,12 +31,33 @@ pub struct ModelGateway {
     streams: Arc<StreamHub>,
 }
 
+fn compute_cost(
+    pricing: Pricing,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+) -> f64 {
+    // Unknown cache prices fall back to the ordinary input price, which
+    // overestimates rather than hiding spend.
+    let cache_read_price = pricing
+        .cache_read_per_mtok
+        .unwrap_or(pricing.input_per_mtok);
+    let cache_write_price = pricing
+        .cache_write_per_mtok
+        .unwrap_or(pricing.input_per_mtok);
+    input_tokens as f64 / 1_000_000.0 * pricing.input_per_mtok
+        + output_tokens as f64 / 1_000_000.0 * pricing.output_per_mtok
+        + cache_read_tokens as f64 / 1_000_000.0 * cache_read_price
+        + cache_write_tokens as f64 / 1_000_000.0 * cache_write_price
+}
+
 impl ModelGateway {
     pub fn new(providers: Arc<ProviderStore>, streams: Arc<StreamHub>) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
-            // Streaming responses can legitimately outlive a short request
-            // timeout; the run's wall-clock deadline is the real limit.
+            // Streaming responses can legitimately take a long time; the run
+            // is stopped by cancellation, not by a short request timeout.
             .timeout(Duration::from_secs(900))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
@@ -52,10 +73,16 @@ impl ModelGateway {
         profile: &ProviderProfile,
         input_tokens: u64,
         output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
     ) -> f64 {
-        let pricing = profile.pricing_or_default();
-        input_tokens as f64 / 1_000_000.0 * pricing.input_per_mtok
-            + output_tokens as f64 / 1_000_000.0 * pricing.output_per_mtok
+        compute_cost(
+            profile.pricing_or_default(),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+        )
     }
 
     async fn invoke_resolved(
@@ -205,7 +232,15 @@ impl ModelGateway {
             blocks: parsed.blocks,
             input_tokens,
             output_tokens,
-            cost_usd: self.compute_cost(profile, input_tokens, output_tokens),
+            cache_read_tokens: parsed.cache_read_tokens,
+            cache_write_tokens: parsed.cache_write_tokens,
+            cost_usd: self.compute_cost(
+                profile,
+                input_tokens,
+                output_tokens,
+                parsed.cache_read_tokens,
+                parsed.cache_write_tokens,
+            ),
             finish_reason: parsed.finish_reason,
             estimated_usage: parsed.estimated_usage,
         }
@@ -382,6 +417,10 @@ impl ModelPort for ModelGateway {
         match self.providers.active() {
             Some(profile) => {
                 let configured = profile.has_key();
+                let model_id = profile.resolved_model("");
+                let context_window = profile
+                    .model_spec(&model_id)
+                    .and_then(|spec| spec.context_window);
                 ModelStatus {
                     provider: profile.name.clone(),
                     model: profile.model.clone(),
@@ -394,6 +433,7 @@ impl ModelPort for ModelGateway {
                         .as_ref()
                         .map(|key| key.is_configured())
                         .unwrap_or(profile.auth_mode() == AuthMode::None),
+                    context_window,
                 }
             }
             None => ModelStatus {
@@ -404,6 +444,7 @@ impl ModelPort for ModelGateway {
                 protocol: String::new(),
                 base_url: None,
                 has_key: false,
+                context_window: None,
             },
         }
     }
@@ -411,21 +452,6 @@ impl ModelPort for ModelGateway {
     fn set_api_key(&self, key: &str) -> Result<ModelStatus, String> {
         self.providers.set_api_key(key)?;
         Ok(self.status())
-    }
-
-    fn estimate_cost(&self, input_chars: usize, input_bytes: usize, max_output_tokens: u32) -> f64 {
-        let Some(profile) = self.providers.active() else {
-            return 0.0;
-        };
-        if !profile.has_key() && profile.auth_mode() != AuthMode::None {
-            return 0.0;
-        }
-        let model_id = profile.resolved_model("");
-        let profile = profile.with_model_overrides(&model_id);
-        let pricing = profile.pricing_or_default();
-        let input_tokens = input_chars.max(input_bytes) as f64 + 256.0;
-        input_tokens / 1_000_000.0 * pricing.input_per_mtok
-            + max_output_tokens as f64 / 1_000_000.0 * pricing.output_per_mtok
     }
 
     async fn invoke(
@@ -526,6 +552,30 @@ fn parse_frame(frame: &[u8]) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use phi_contracts::provider::{ModelSpec, ProviderInput};
+
+    #[test]
+    fn cost_accounts_for_cache_read_and_write() {
+        let pricing = Pricing {
+            input_per_mtok: 3.0,
+            output_per_mtok: 15.0,
+            cache_read_per_mtok: Some(0.3),
+            cache_write_per_mtok: Some(3.75),
+        };
+        let cost = compute_cost(pricing, 1_000_000, 0, 1_000_000, 1_000_000);
+        assert!((cost - (3.0 + 0.3 + 3.75)).abs() < 1e-9, "cost={cost}");
+    }
+
+    #[test]
+    fn unknown_cache_prices_fall_back_to_the_input_price() {
+        let pricing = Pricing {
+            input_per_mtok: 2.0,
+            output_per_mtok: 10.0,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
+        };
+        let cost = compute_cost(pricing, 0, 0, 1_000_000, 1_000_000);
+        assert!((cost - 4.0).abs() < 1e-9, "cost={cost}");
+    }
 
     #[test]
     fn sse_buffer_handles_split_frames_and_crlf() {

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -41,9 +41,6 @@ pub struct ToolContext {
     pub workspace: PathBuf,
     pub session_id: String,
     pub run_id: String,
-    /// Unified wall-clock deadline for the run. Tools must not start new work
-    /// past it and should cap their own timeouts by the remaining time.
-    pub deadline: Option<Instant>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,6 +82,10 @@ pub struct ModelStatus {
     pub base_url: Option<String>,
     #[serde(default)]
     pub has_key: bool,
+    /// Advertised context window of the active model, when known. The runtime
+    /// uses it to size conversation history; it is not a spend limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -107,8 +108,11 @@ pub struct ModelRequest {
 #[derive(Clone, Debug)]
 pub struct ModelResponse {
     pub blocks: Vec<ContentBlock>,
+    /// Non-cached input tokens.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
     pub cost_usd: f64,
     pub finish_reason: String,
     pub estimated_usage: bool,
@@ -125,10 +129,6 @@ pub trait ModelPort: Send + Sync {
     fn status(&self) -> ModelStatus;
     /// Empty string clears the key. Returns the new status.
     fn set_api_key(&self, key: &str) -> Result<ModelStatus, String>;
-    /// Conservative reservation estimate before a call. Both the character
-    /// count and the UTF-8 byte count are provided because byte-oriented
-    /// estimates are required for CJK-heavy prompts.
-    fn estimate_cost(&self, input_chars: usize, input_bytes: usize, max_output_tokens: u32) -> f64;
     async fn invoke(
         &self,
         req: ModelRequest,
@@ -206,6 +206,9 @@ pub struct ExecOutput {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    /// True when the process produced more output than the retained buffer.
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 #[async_trait]
@@ -259,7 +262,14 @@ pub struct AssembledContext {
 }
 
 pub trait ContextPort: Send + Sync {
-    fn assemble(&self, history: Vec<ChatMessage>, workspace: &Path) -> AssembledContext;
+    /// Assemble the model context. `max_history_chars` bounds the conversation
+    /// history; the first user task message is always retained.
+    fn assemble(
+        &self,
+        history: Vec<ChatMessage>,
+        workspace: &Path,
+        max_history_chars: usize,
+    ) -> AssembledContext;
 }
 
 // ─────────────────────────── runtime ───────────────────────────
@@ -269,18 +279,8 @@ pub struct StartRunRequest {
     pub session_id: String,
     pub turn_id: String,
     pub workspace: PathBuf,
-    pub limits: RunLimits,
     /// Let the agent shape the workbench view for this run.
     pub workbench: bool,
-}
-
-/// Per-run hard caps. `None` falls back to the environment defaults, so a
-/// shell can tighten a run without changing node-wide configuration.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RunLimits {
-    pub max_steps: Option<u64>,
-    pub max_cost_usd: Option<f64>,
-    pub max_wall_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -290,9 +290,7 @@ pub struct RunStatus {
     pub session_id: String,
     pub state: String,
     pub steps: u64,
-    pub max_steps: u64,
     pub cost_usd: f64,
-    pub max_cost_usd: f64,
 }
 
 pub trait RuntimePort: Send + Sync {

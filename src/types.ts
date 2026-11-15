@@ -11,6 +11,7 @@ export type ModelStatus = {
   protocol?: string;
   baseUrl?: string;
   hasKey?: boolean;
+  contextWindow?: number;
 };
 
 export type SessionSummary = {
@@ -46,13 +47,12 @@ export type Run = {
   turnId: string;
   state: string;
   steps: number;
-  maxSteps: number;
   costUsd: number;
-  maxCostUsd: number;
-  maxWallSecs: number;
   workbenchMode: boolean;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   pendingApprovalId: string | null;
   error: string | null;
   stopConfirmation: string | null;
@@ -106,9 +106,6 @@ export type Bootstrap = {
   workspace: string | null;
   sessions: SessionSummary[];
   lastSessionId: string | null;
-  maxSteps: number;
-  maxCostUsd: number;
-  maxWallSecs: number;
   providers: ProviderView[];
   activeProviderId: string | null;
   language: string;

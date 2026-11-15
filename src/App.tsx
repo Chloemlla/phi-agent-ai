@@ -272,9 +272,6 @@ function App() {
                 <div class="dock">
                   <Runbar
                     run={currentRun()}
-                    maxSteps={boot()?.maxSteps ?? 20}
-                    maxCostUsd={boot()?.maxCostUsd ?? 0.5}
-                    maxWallSecs={boot()?.maxWallSecs ?? 600}
                     now={now()}
                     onCancel={cancelRun}
                   />
@@ -282,9 +279,6 @@ function App() {
                     value={input()}
                     disabled={!modeOk() || isRunning()}
                     running={isRunning()}
-                    budgetSteps={boot()?.maxSteps ?? 20}
-                    budgetCost={boot()?.maxCostUsd ?? 0.5}
-                    budgetWallSecs={boot()?.maxWallSecs ?? 600}
                     onInput={setInput}
                     onSend={send}
                   />

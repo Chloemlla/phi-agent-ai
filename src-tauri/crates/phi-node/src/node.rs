@@ -23,7 +23,7 @@ use phi_contracts::memory::{
     ForgetReport, ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryHit, MemoryListFilter,
     MemoryPort, MemoryQuery, MemoryStats, MemoryStore, Principal,
 };
-use phi_contracts::ports::{ModelStatus, RunLimits, RunStatus, SessionPort, StartRunRequest};
+use phi_contracts::ports::{ModelStatus, RunStatus, SessionPort, StartRunRequest};
 use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_contracts::services::Services;
 use phi_contracts::stream::{StreamHub, StreamPort};
@@ -103,9 +103,6 @@ pub struct Bootstrap {
     pub workspace: Option<String>,
     pub sessions: Vec<SessionSummary>,
     pub last_session_id: Option<String>,
-    pub max_steps: u64,
-    pub max_cost_usd: f64,
-    pub max_wall_secs: u64,
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
     pub language: String,
@@ -491,7 +488,6 @@ impl Node {
             sessions = self.list_sessions();
         }
         let model = self.model_status();
-        let (max_steps, max_cost_usd, max_wall_secs) = budget_limits();
         Ok(Bootstrap {
             node_id: self.node_id.clone(),
             mode: self.kernel.mode().as_str().to_string(),
@@ -500,9 +496,6 @@ impl Node {
             workspace: self.config.snapshot().workspace,
             last_session_id: sessions.first().map(|session| session.id.clone()),
             sessions,
-            max_steps,
-            max_cost_usd,
-            max_wall_secs,
             providers: self.provider_views(),
             active_provider_id: self.active_provider_id(),
             language: i18n::current().code().to_string(),
@@ -600,7 +593,7 @@ impl Node {
         text: &str,
         provider_id: Option<&str>,
     ) -> Result<String, String> {
-        self.send_message_full(session_id, text, provider_id, RunLimits::default(), false)
+        self.send_message_full(session_id, text, provider_id, false)
     }
 
     pub fn send_message_full(
@@ -608,7 +601,6 @@ impl Node {
         session_id: &str,
         text: &str,
         provider_id: Option<&str>,
-        limits: RunLimits,
         workbench: bool,
     ) -> Result<String, String> {
         self.require_writable()?;
@@ -659,7 +651,6 @@ impl Node {
             session_id: session_id.to_string(),
             turn_id: turn.turn_id,
             workspace,
-            limits,
             workbench,
         })
     }
@@ -708,6 +699,7 @@ impl Node {
                 protocol: String::new(),
                 base_url: None,
                 has_key: false,
+                context_window: None,
             },
         }
     }
@@ -735,9 +727,7 @@ impl Node {
             session_id,
             state: run.state,
             steps: run.steps,
-            max_steps: run.max_steps,
             cost_usd: run.cost_usd,
-            max_cost_usd: run.max_cost_usd,
         })
     }
 
@@ -881,26 +871,4 @@ impl Node {
         let (_, models) = self.model_gateway.list_models(id).await?;
         Ok(models)
     }
-}
-
-pub fn budget_limits() -> (u64, f64, u64) {
-    (
-        env_u64("PHI_MAX_STEPS", 20),
-        env_f64("PHI_MAX_COST_USD", 0.50),
-        env_u64("PHI_MAX_WALL_SECS", 600),
-    )
-}
-
-fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
 }

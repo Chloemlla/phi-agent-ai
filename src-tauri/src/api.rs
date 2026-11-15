@@ -55,7 +55,6 @@ pub async fn send_message(
         &session_id,
         &text,
         provider_id.as_deref(),
-        Default::default(),
         workbench.unwrap_or(false),
     )?;
     Ok(SendResult { run_id })

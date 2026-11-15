@@ -51,9 +51,6 @@ pub enum DomainEvent {
         session_id: String,
         turn_id: String,
         task_id: String,
-        max_steps: u64,
-        max_cost_usd: f64,
-        max_wall_secs: u64,
         /// The agent may shape the workbench view for this run.
         #[serde(default)]
         workbench: bool,
@@ -101,25 +98,6 @@ pub enum DomainEvent {
         note: String,
     },
 
-    // ── budget ────────────────────────────────────────────────────────
-    BudgetReserved {
-        run_id: String,
-        dimension: String,
-        amount: f64,
-        note: String,
-    },
-    BudgetSettled {
-        run_id: String,
-        cost_usd: f64,
-        input_tokens: u64,
-        output_tokens: u64,
-        estimated: bool,
-    },
-    BudgetExceeded {
-        run_id: String,
-        dimension: String,
-    },
-
     // ── model calls ───────────────────────────────────────────────────
     ModelCallIssued {
         call_id: String,
@@ -133,6 +111,10 @@ pub enum DomainEvent {
         run_id: String,
         input_tokens: u64,
         output_tokens: u64,
+        #[serde(default)]
+        cache_read_tokens: u64,
+        #[serde(default)]
+        cache_write_tokens: u64,
         cost_usd: f64,
         finish_reason: String,
     },

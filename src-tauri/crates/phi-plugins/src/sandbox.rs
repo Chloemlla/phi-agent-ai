@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -103,20 +103,16 @@ impl SandboxPort for FsSandboxPlugin {
         let mut stdout_pipe = child.stdout.take();
         let mut stderr_pipe = child.stderr.take();
         let stdout_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            if let Some(pipe) = stdout_pipe.as_mut() {
-                let mut limited = pipe.take(1_000_000);
-                let _ = limited.read_to_end(&mut buf).await;
+            match stdout_pipe.take() {
+                Some(pipe) => drain_pipe(pipe, MAX_PIPE_BYTES).await,
+                None => (Vec::new(), false),
             }
-            buf
         });
         let stderr_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            if let Some(pipe) = stderr_pipe.as_mut() {
-                let mut limited = pipe.take(1_000_000);
-                let _ = limited.read_to_end(&mut buf).await;
+            match stderr_pipe.take() {
+                Some(pipe) => drain_pipe(pipe, MAX_PIPE_BYTES).await,
+                None => (Vec::new(), false),
             }
-            buf
         });
 
         let deadline = tokio::time::Instant::now() + timeout;
@@ -155,14 +151,14 @@ impl SandboxPort for FsSandboxPlugin {
             status = child.wait().await.ok();
         }
 
-        let collect = |task: tokio::task::JoinHandle<Vec<u8>>| async move {
+        let collect = |task: tokio::task::JoinHandle<(Vec<u8>, bool)>| async move {
             match tokio::time::timeout(Duration::from_secs(2), task).await {
-                Ok(Ok(buf)) => buf,
-                _ => Vec::new(),
+                Ok(Ok(result)) => result,
+                _ => (Vec::new(), false),
             }
         };
-        let stdout = collect(stdout_task).await;
-        let stderr = collect(stderr_task).await;
+        let (stdout, stdout_truncated) = collect(stdout_task).await;
+        let (stderr, stderr_truncated) = collect(stderr_task).await;
 
         if cancelled {
             return Err("cancelled".to_string());
@@ -173,8 +169,37 @@ impl SandboxPort for FsSandboxPlugin {
             stdout: String::from_utf8_lossy(&stdout).to_string(),
             stderr: String::from_utf8_lossy(&stderr).to_string(),
             timed_out,
+            stdout_truncated,
+            stderr_truncated,
         })
     }
+}
+
+const MAX_PIPE_BYTES: usize = 1_000_000;
+
+/// Keep reading the pipe so the child never blocks on a full buffer, but only
+/// retain the first `keep` bytes for the tool result.
+async fn drain_pipe<R>(mut pipe: R, keep: usize) -> (Vec<u8>, bool)
+where
+    R: AsyncRead + Unpin,
+{
+    let mut kept = Vec::with_capacity(keep.min(64 * 1024));
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut truncated = false;
+    loop {
+        match pipe.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let room = keep.saturating_sub(kept.len());
+                let take = n.min(room);
+                kept.extend_from_slice(&buf[..take]);
+                if take < n {
+                    truncated = true;
+                }
+            }
+        }
+    }
+    (kept, truncated)
 }
 
 fn build_command(command: &str) -> Command {
@@ -188,6 +213,13 @@ fn build_command(command: &str) -> Command {
     {
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(command);
+        // Give the shell its own process group so cancellation can terminate
+        // the whole tree, not just the shell.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.as_std_mut().process_group(0);
+        }
         cmd
     }
 }
@@ -202,6 +234,13 @@ async fn kill_process_tree(pid: Option<u32>, child: &mut tokio::process::Child) 
             .stderr(Stdio::null())
             .status()
             .await;
+    }
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        // Negative pid targets the process group created in `build_command`.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
     }
     let _ = child.start_kill();
 }
@@ -235,6 +274,24 @@ mod tests {
         let sandbox = FsSandboxPlugin;
         let resolved = sandbox.resolve_path(&ws, "src/main.rs").unwrap();
         assert!(resolved.starts_with(ws.canonicalize().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn drains_output_past_the_retained_limit() {
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let writer_task = tokio::spawn(async move {
+            let payload = vec![b'x'; 4_096];
+            tokio::io::AsyncWriteExt::write_all(&mut writer, &payload)
+                .await
+                .unwrap();
+        });
+        let (kept, truncated) = drain_pipe(reader, 1_024).await;
+        writer_task.await.unwrap();
+        assert_eq!(kept.len(), 1_024);
+        assert!(
+            truncated,
+            "output beyond the retained limit must be flagged"
+        );
     }
 
     #[tokio::test]

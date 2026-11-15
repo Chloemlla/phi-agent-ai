@@ -1094,7 +1094,7 @@ pre {
   animation: spin 0.9s linear infinite;
 }
 
-.meters {
+.run-stats {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1103,22 +1103,14 @@ pre {
   flex-wrap: wrap;
 }
 
-.meter {
-  flex: 1;
-  min-width: 96px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.meter-head {
-  display: flex;
+.run-stat {
+  display: inline-flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-2);
+  gap: 6px;
+  white-space: nowrap;
 }
 
-.meter-label {
+.run-stat-label {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -1126,36 +1118,9 @@ pre {
   color: var(--text-muted);
 }
 
-.meter-value {
-  font-size: 10.5px;
+.run-stat .mono {
+  font-size: 11.5px;
   color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.meter-track {
-  height: 4px;
-  border-radius: 99px;
-  background: var(--bg-inset);
-  overflow: hidden;
-}
-
-.meter-fill {
-  height: 100%;
-  border-radius: 99px;
-  transition: width var(--dur-slow) var(--ease),
-    background var(--dur-slow) var(--ease);
-}
-
-.meter-fill.tone-accent {
-  background: var(--accent);
-}
-
-.meter-fill.tone-warn {
-  background: var(--warn);
-}
-
-.meter-fill.tone-danger {
-  background: var(--danger);
 }
 
 .cancel {
@@ -1193,6 +1158,7 @@ pre {
 .composer-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-3);
   padding: 6px 10px 10px 14px;
   flex-wrap: wrap;
@@ -1249,13 +1215,6 @@ pre {
 .switch-row input:focus-visible + .switch {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.composer-hint {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--text-faint);
-  white-space: nowrap;
 }
 
 .send {
@@ -1986,10 +1945,6 @@ pre {
     border-left: none;
     border-bottom: 1px solid var(--border-soft);
   }
-
-  .composer-hint {
-    display: none;
-  }
 }
 
 /* ─────────────────────────── motion ─────────────────────────── */
@@ -2084,7 +2039,6 @@ pre {
   }
 
   .sidebar,
-  .meter-fill,
   .switch,
   .switch::after {
     transition-duration: 1ms !important;

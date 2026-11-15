@@ -20,7 +20,8 @@ export const PRESETS: ProviderPreset[] = [
     protocol: "anthropic_messages",
     auth: "x_api_key",
     baseUrl: "https://api.anthropic.com",
-    models: ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"],
+    // Model ids are not hardcoded: fetch the live list from the provider.
+    models: [],
     websiteUrl: "https://www.anthropic.com",
   },
   {
@@ -30,7 +31,7 @@ export const PRESETS: ProviderPreset[] = [
     protocol: "openai_chat",
     auth: "bearer",
     baseUrl: "https://api.openai.com/v1",
-    models: ["gpt-5", "gpt-5-mini", "gpt-5-nano"],
+    models: [],
     websiteUrl: "https://platform.openai.com",
   },
   {
@@ -40,7 +41,7 @@ export const PRESETS: ProviderPreset[] = [
     protocol: "openai_responses",
     auth: "bearer",
     baseUrl: "https://api.openai.com/v1",
-    models: ["gpt-5", "gpt-5-mini"],
+    models: [],
     websiteUrl: "https://platform.openai.com",
   },
   {

@@ -7,7 +7,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use phi_adapters::control;
 use phi_adapters::jsonl_sink::{JsonlEventSink, JsonlStreamSink};
@@ -15,14 +15,13 @@ use phi_contracts::memory::{
     ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryEpisodeInput, MemoryListFilter,
     MemoryQuery,
 };
-use phi_contracts::ports::RunLimits;
 use phi_contracts::provider::{ModelSpec, Pricing, ProviderInput};
 use phi_contracts::stream::StreamPort;
 use phi_domain::memory::{EpisodeSource, MemoryScope, MemoryState, SourceTrust};
 use phi_domain::view::RunView;
 use phi_i18n as i18n;
 use phi_kernel::event_bus::EventSink;
-use phi_node::{Node, NodeConfig, budget_limits, compose};
+use phi_node::{Node, NodeConfig, compose};
 
 #[derive(Clone, Copy, Debug)]
 enum ApprovalMode {
@@ -64,7 +63,6 @@ struct RunArgs {
     approval: ApprovalMode,
     stream: bool,
     title: Option<String>,
-    limits: RunLimits,
     workbench: bool,
 }
 
@@ -438,7 +436,7 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
         session_id.clone(),
         args.approval,
     ));
-    let run_id = node.send_message_full(&session_id, &message, None, args.limits, args.workbench);
+    let run_id = node.send_message_full(&session_id, &message, None, args.workbench);
     let run_id = match run_id {
         Ok(run_id) => run_id,
         Err(error) => {
@@ -447,12 +445,7 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
         }
     };
 
-    let wall_secs = args
-        .limits
-        .max_wall_secs
-        .unwrap_or_else(|| budget_limits().2);
-    let timeout = Duration::from_secs(wall_secs.saturating_add(30));
-    let result = wait_for_terminal(&node, &session_id, timeout).await;
+    let result = wait_for_terminal(&node, &session_id).await;
     worker.abort();
     let run = result?;
 
@@ -482,12 +475,7 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
     })
 }
 
-async fn wait_for_terminal(
-    node: &Node,
-    session_id: &str,
-    timeout: Duration,
-) -> Result<RunView, String> {
-    let started = Instant::now();
+async fn wait_for_terminal(node: &Node, session_id: &str) -> Result<RunView, String> {
     loop {
         if let Some(session) = node.session_view(session_id) {
             if let Some(run) = session.runs.last() {
@@ -498,12 +486,6 @@ async fn wait_for_terminal(
                     return Ok(run.clone());
                 }
             }
-        }
-        if started.elapsed() >= timeout {
-            return Err(i18n::t_args(
-                "Timed out waiting for the run to finish ({secs}s)",
-                &[("secs", timeout.as_secs().to_string())],
-            ));
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -695,7 +677,6 @@ fn parse_run(rest: &[String]) -> Result<RunArgs, String> {
         approval: ApprovalMode::Deny,
         stream: true,
         title: None,
-        limits: RunLimits::default(),
         workbench: false,
     };
     let mut index = 0;
@@ -720,27 +701,6 @@ fn parse_run(rest: &[String]) -> Result<RunArgs, String> {
                     ));
                 }
             };
-        } else if let Some(value) = take_flag(rest, &mut index, "--max-steps")? {
-            args.limits.max_steps = Some(value.parse().map_err(|_| {
-                i18n::t_args(
-                    "--max-steps is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
-        } else if let Some(value) = take_flag(rest, &mut index, "--max-cost")? {
-            args.limits.max_cost_usd = Some(value.parse().map_err(|_| {
-                i18n::t_args(
-                    "--max-cost is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
-        } else if let Some(value) = take_flag(rest, &mut index, "--max-wall")? {
-            args.limits.max_wall_secs = Some(value.parse().map_err(|_| {
-                i18n::t_args(
-                    "--max-wall is not a number: {value}",
-                    &[("value", value.clone())],
-                )
-            })?);
         } else {
             match rest[index].as_str() {
                 "--no-stream" => {
@@ -1256,6 +1216,8 @@ fn parse_provider_input(
     let mut positional = Vec::new();
     let mut pricing_in = None;
     let mut pricing_out = None;
+    let mut pricing_cache_read = None;
+    let mut pricing_cache_write = None;
     let mut index = 0;
     while index < rest.len() {
         if let Some(value) = take_flag(rest, &mut index, "--id")? {
@@ -1304,6 +1266,20 @@ fn parse_provider_input(
             pricing_out = Some(value.parse::<f64>().map_err(|_| {
                 i18n::t_args(
                     "--pricing-out is not a number: {value}",
+                    &[("value", value.clone())],
+                )
+            })?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--pricing-cache-read")? {
+            pricing_cache_read = Some(value.parse::<f64>().map_err(|_| {
+                i18n::t_args(
+                    "--pricing-cache-read is not a number: {value}",
+                    &[("value", value.clone())],
+                )
+            })?);
+        } else if let Some(value) = take_flag(rest, &mut index, "--pricing-cache-write")? {
+            pricing_cache_write = Some(value.parse::<f64>().map_err(|_| {
+                i18n::t_args(
+                    "--pricing-cache-write is not a number: {value}",
                     &[("value", value.clone())],
                 )
             })?);
@@ -1367,10 +1343,16 @@ fn parse_provider_input(
     if require_id && input.id.is_none() {
         return Err(i18n::t("update requires a provider id"));
     }
-    if pricing_in.is_some() || pricing_out.is_some() {
+    if pricing_in.is_some()
+        || pricing_out.is_some()
+        || pricing_cache_read.is_some()
+        || pricing_cache_write.is_some()
+    {
         input.pricing = Some(Pricing {
             input_per_mtok: pricing_in.unwrap_or(0.0),
             output_per_mtok: pricing_out.unwrap_or(0.0),
+            cache_read_per_mtok: pricing_cache_read,
+            cache_write_per_mtok: pricing_cache_write,
         });
     }
     Ok((input, activate))
@@ -1408,7 +1390,7 @@ Usage:
 Commands:
   run --message TEXT [--session ID] [--provider ID]
       [--approval deny|allow|prompt] [--no-stream] [--title TEXT]
-      [--max-steps N] [--max-cost USD] [--max-wall SECS] [--workbench]
+      [--workbench]
   sessions list
   sessions show <id>
   approve <id> --allow|--deny [--note TEXT]
@@ -1419,7 +1401,8 @@ Commands:
   providers show <id>
   providers add --name NAME --protocol P --base-url URL --model MODEL
       [--api-key env:NAME|literal:VALUE|VALUE] [--auth x_api_key|bearer|none]
-      [--pricing-in N] [--pricing-out N] [--max-output-tokens N]
+      [--pricing-in N] [--pricing-out N]
+      [--pricing-cache-read N] [--pricing-cache-write N] [--max-output-tokens N]
       [--temperature N] [--models a,b] [--model-map role=model]
       [--icon NAME] [--icon-color #hex] [--website URL] [--notes TEXT]
       [--sort-index N] [--activate] [--disabled]

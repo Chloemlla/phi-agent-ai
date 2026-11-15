@@ -8,7 +8,7 @@
 
 ## 0. 一句话
 
-**模型网关是节点与「模型提供方」之间的唯一入口 (`ModelPort`)：它把「调用一个模型」抽象成统一接口，并集中承担路由、缓存、用量计量、预算预留、失败降级、外发授权与密钥管理。** 领域逻辑只见「模型」这个抽象，不认任何厂商。
+**模型网关是节点与「模型提供方」之间的唯一入口 (`ModelPort`)：它把「调用一个模型」抽象成统一接口，并集中承担路由、缓存、用量计量、（可选）预算预留、失败降级、外发授权与密钥管理。** 领域逻辑只见「模型」这个抽象，不认任何厂商。
 
 > 它是**发行基线的必需槽位** `model.invoke`（ADR-0009），不是一个内核部件——`ModelPort` 定义在模型上下文的契约包里。
 
@@ -58,7 +58,7 @@
 - **成本 vs 质量**：路由是成本控制的第一道闸——把便宜任务拦在贵模型之外。
 - **路由可被插件替换**：`strategy.modelRouter` 是扩展点，用户/插件可定义自己的路由规则。
 
-> 与 `awesome-architecture` 的一致：**成本随步数线性涨**，路由 + 缓存 + 硬上限是三条破解。
+> 与 `awesome-architecture` 的一致：**成本随步数线性涨**，路由 + 缓存 + 用量可见（硬上限为可选目标态）是三条破解。
 
 ---
 
@@ -91,6 +91,8 @@
 
 ## 5. 用量与预算：调用前预留，调用后结算
 
+> **2026-11-15 变更**：v1 已移除 Run 级预算硬上限。当前行为是**调用后按实际用量记录** `ModelCallReturned { usage, cost }`，Runbar 显示步数/成本/耗时；没有预留、结算或超限中止。下面的「调用前预留」保留为**可选目标态**的设计记录（见 `80-roadmap/scope-additions.md` §2.10）。
+
 > 「调用结束后扣费」保证不了「不超过成本预算」——一次调用本身就可能超掉剩余额度。硬上限必须在**发起之前**成立。
 
 - **预留（reserve）**：发起前先预留额度（`BudgetReserved`），可用额度不足 → **拒绝发起**。
@@ -101,7 +103,46 @@
 - **计量口径**：tokens + 金额双记账；金额用调用时的 `ModelSpec` **定价快照**，避免厂商调价后账单漂移。
 - 事件：`ModelCallReturned { usage }` 与 `BudgetReserved / BudgetSettled / BudgetExceeded`。
 
-> 这条是从「愿望式的硬上限」变成「结构上的硬上限」的关键：**没有预留，就没有硬上限。**
+> 这条是从「愿望式的硬上限」变成「结构上的硬上限」的关键：**没有预留，就没有硬上限。**（可选目标态；v1 不启用。）
+
+### 5.1 模型目录数据（可选）
+
+`src-tauri/assets/model-catalog.json` 是编译进二进制的可选目录，用于在设置页为模型 id 自动填充元数据。默认是空数组 `[]`：未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `patterns` | string[] | 小写子串，匹配时先去掉 vendor 前缀（如 `anthropic/`） |
+| `name` | string | 显示名 |
+| `description` | string | 一句话描述 |
+| `tags` | string[] | 如 `coding`、`reasoning`、`long-context`、`cheap` |
+| `contextWindow` | number? | 上下文窗口（tokens） |
+| `maxOutputTokens` | number? | 单次输出上限 |
+| `pricing` | object? | `inputPerMtok` / `outputPerMtok` / `cacheReadPerMtok` / `cacheWritePerMtok`（每百万 token 价格） |
+
+示例：
+
+```json
+[
+  {
+    "patterns": ["claude-sonnet"],
+    "name": "Claude Sonnet",
+    "description": "Coding model.",
+    "tags": ["coding", "tools"],
+    "contextWindow": 200000,
+    "maxOutputTokens": 64000,
+    "pricing": {
+      "inputPerMtok": 3.0,
+      "outputPerMtok": 15.0,
+      "cacheReadPerMtok": 0.3,
+      "cacheWritePerMtok": 3.75
+    }
+  }
+]
+```
+
+目录只填充用户留空的字段，显式值优先；未知 id 不会失败。缓存价格未提供时按普通输入价计入成本（宁可高估，不隐藏花费）。
+
+缓存用量：Anthropic 请求在 system 块上带 `cache_control: { type: "ephemeral" }`，usage 读取 `cache_creation_input_tokens` / `cache_read_input_tokens`；OpenAI / DeepSeek 的 `cached_tokens` / `prompt_cache_hit_tokens` 从普通输入中扣除，按缓存读取价计费。`ModelCallReturned` 记录 `cache_read_tokens` 与 `cache_write_tokens`。
 
 ---
 
@@ -109,7 +150,7 @@
 
 | 情况 | 处理 |
 |---|---|
-| 限速 / 临时错误 | 指数退避重试（有次数上限，消耗预算） |
+| 限速 / 临时错误 | 指数退避重试（有次数上限；消耗 token，预算硬上限为目标态） |
 | Provider 不可用 | 按策略**降级**到备用 provider/model（若配置） |
 | 上下文超长 | 触发压缩/裁剪（见 `context-and-memory.md`），而非直接失败 |
 | 输出不合法（工具参数坏） | 有限次「纠正重试」，仍不行则终止该步 |
@@ -150,7 +191,7 @@
 **辅助模型不是 Agent**：它不跑行动循环、不调工具、无记忆，是一个**无状态判定/抽取器**。网关为它提供：
 
 - 一个**受约束的调用**（固定的短提示、低温度、严格输出 schema）。
-- 与主模型**共享**用量计量与预算（它的成本也算进 Run）。
+- 与主模型**共享**用量计量（可选预算；它的成本也算进 Run）。
 - 可被 `strategy.modelRouter` 单独指向「便宜快」的模型。
 
 它的用途：**权限审批**（`judge.approver`）、分类、抽取、轻量校验。
@@ -164,7 +205,7 @@
 - ❌ **静默降级模型** → ✅ 显式降级 + 事件留痕 + **只在已授权服务集内**。
 - ❌ **对非确定性调用做响应缓存** → ✅ 只缓存确定性调用。
 - ❌ **把辅助模型当 Agent 用** → ✅ 它是判定器，不是循环。
-- ❌ **调用后才扣预算** → ✅ 调用前预留 + 输出上限 + 并发统一记账。
+- ❌ **调用后才扣预算** → ✅ 调用前预留 + 输出上限 + 并发统一记账（可选目标态；v1 用逐次用量记录与用户取消）。
 - ❌ **辅助/摘要/嵌入调用也走审批与完整上下文** → ✅ `callClass` 受限路径，防递归。
 - ❌ **填了 API Key 就默认所有内容可外发** → ✅ 按接收方/用途/内容类别分别授权。
 

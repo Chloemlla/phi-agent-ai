@@ -291,9 +291,11 @@ static TOOL_CALL_SEQ: AtomicU64 = AtomicU64::new(1);
 fn scripted_response(request: &Value) -> Value {
     let mut last_user_text = String::new();
     let mut last_tool_result = None;
+    let mut tool_use_count = 0usize;
     for message in request["messages"].as_array().into_iter().flatten() {
         for block in message["content"].as_array().into_iter().flatten() {
             match block["type"].as_str() {
+                Some("tool_use") => tool_use_count += 1,
                 Some("text") if message["role"] == "user" => {
                     if let Some(text) = block["text"].as_str() {
                         last_user_text = text.to_string();
@@ -307,6 +309,45 @@ fn scripted_response(request: &Value) -> Value {
         }
     }
 
+    let lower = last_user_text.to_lowercase();
+    let next_id = || format!("toolu_{}", TOOL_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
+
+    if lower.contains("truncate") {
+        return message_response(
+            vec![
+                json!({ "type": "text", "text": "Working on it." }),
+                json!({
+                    "type": "tool_use",
+                    "id": next_id(),
+                    "name": "fs_write",
+                    "input": {
+                        "path": "PHI_TRUNCATED.md",
+                        "content": "This must never be written."
+                    }
+                }),
+            ],
+            "length",
+        );
+    }
+
+    if lower.contains("many steps") || lower.contains("keep working") {
+        if tool_use_count < 25 {
+            return message_response(
+                vec![json!({
+                    "type": "tool_use",
+                    "id": next_id(),
+                    "name": "fs_list",
+                    "input": { "path": "." }
+                })],
+                "tool_use",
+            );
+        }
+        return message_response(
+            vec![json!({ "type": "text", "text": "Done after many steps." })],
+            "end_turn",
+        );
+    }
+
     if let Some(result) = last_tool_result {
         let summary: String = result.chars().take(200).collect();
         return message_response(
@@ -315,7 +356,6 @@ fn scripted_response(request: &Value) -> Value {
         );
     }
 
-    let lower = last_user_text.to_lowercase();
     let (name, input) = if lower.contains("write") {
         (
             "fs_write",
@@ -341,11 +381,10 @@ fn scripted_response(request: &Value) -> Value {
     } else {
         ("fs_list", json!({ "path": "." }))
     };
-    let call_id = format!("toolu_{}", TOOL_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
     message_response(
         vec![
             json!({ "type": "text", "text": "Working on it." }),
-            json!({ "type": "tool_use", "id": call_id, "name": name, "input": input }),
+            json!({ "type": "tool_use", "id": next_id(), "name": name, "input": input }),
         ],
         "tool_use",
     )
@@ -462,91 +501,52 @@ fn status_reads_a_finished_run_from_a_different_process() {
 }
 
 #[test]
-fn step_limit_aborts_the_run() {
-    let env = TestEnv::new("steps");
+fn run_is_not_capped_at_twenty_steps() {
+    let env = TestEnv::new("many-steps");
+    let _provider = env.with_scripted_provider();
+    let result = env.run(
+        "keep working until the task is done",
+        &["--approval", "deny"],
+    );
+    assert_eq!(result["run"]["state"], "Succeeded");
+    assert!(
+        result["run"]["steps"].as_u64().unwrap() >= 25,
+        "the run must continue past the old 20-step default: {}",
+        result["run"]["steps"]
+    );
+    assert!(
+        result["run"]["costUsd"].as_f64().unwrap() > 0.0,
+        "usage and cost are still recorded without a cap"
+    );
+    assert!(result["run"]["inputTokens"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn truncated_response_fails_without_executing_the_tool() {
+    let env = TestEnv::new("truncated");
     let _provider = env.with_scripted_provider();
     let output = env.command(&[
         "run",
         "--message",
-        "inspect the workspace",
+        "truncate the response",
         "--no-stream",
-        "--max-steps",
-        "1",
         "--approval",
         "deny",
     ]);
     assert_eq!(
         output.status.code(),
-        Some(3),
-        "expected aborted exit code, stdout={} stderr={}",
+        Some(4),
+        "expected failed exit code, stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let result = last_json(&output.stdout);
-    assert_eq!(result["run"]["state"], "Aborted");
-}
-
-#[test]
-fn cost_budget_aborts_before_the_model_call() {
-    let env = TestEnv::new("budget");
-    // A priced provider with a literal key makes `estimate_cost` non-zero;
-    // the tiny cap must fail the pre-call reservation, so no request is sent.
-    let add = env.command(&[
-        "providers",
-        "add",
-        "--name",
-        "Pricey",
-        "--protocol",
-        "openai_chat",
-        "--base-url",
-        "https://example.invalid/v1",
-        "--api-key",
-        "literal:test-key",
-        "--model",
-        "test-model",
-        "--pricing-in",
-        "1000",
-        "--pricing-out",
-        "1000",
-        "--activate",
-    ]);
-    assert!(
-        add.status.success(),
-        "providers add failed: {}",
-        String::from_utf8_lossy(&add.stderr)
-    );
-
-    let output = env.command(&[
-        "run",
-        "--message",
-        "inspect the workspace",
-        "--no-stream",
-        "--approval",
-        "deny",
-        "--max-cost",
-        "0.000001",
-    ]);
-    assert_eq!(
-        output.status.code(),
-        Some(3),
-        "expected aborted exit code, stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let result = last_json(&output.stdout);
-    assert_eq!(result["run"]["state"], "Aborted");
+    assert_eq!(result["run"]["state"], "Failed");
     let error = result["run"]["error"].as_str().unwrap_or("");
+    assert!(error.contains("truncated"), "unexpected error: {error}");
     assert!(
-        error.contains("Cost budget exceeded"),
-        "unexpected error: {error}"
-    );
-
-    // Only the user message exists: the model was never called.
-    let session = env.show(result["sessionId"].as_str().unwrap());
-    assert_eq!(
-        session["session"]["messages"].as_array().unwrap().len(),
-        1,
-        "budget abort must happen before the model call"
+        !env.workspace.join("PHI_TRUNCATED.md").exists(),
+        "a truncated tool call must not be executed"
     );
 }
 
@@ -700,13 +700,13 @@ fn legacy_provider_files_still_load() {
 }
 
 #[test]
-fn provider_add_fills_catalogue_metadata_and_picks_a_primary_model() {
+fn provider_add_keeps_unknown_models_manual_and_picks_a_primary() {
     let env = TestEnv::new("provider-add");
     let output = env.command(&[
         "providers",
         "add",
         "--name",
-        "Catalogue",
+        "Manual",
         "--protocol",
         "openai_chat",
         "--base-url",
@@ -726,8 +726,12 @@ fn provider_add_fills_catalogue_metadata_and_picks_a_primary_model() {
     assert_eq!(view["model"], "claude-sonnet-4.5");
     let models = view["models"].as_array().unwrap();
     assert_eq!(models.len(), 2);
-    assert_eq!(models[0]["name"], "Claude Sonnet");
-    assert_eq!(models[1]["name"], "GPT-5 mini");
+    // The stale hardcoded catalogue is gone; unknown ids stay manual until
+    // the user (or a fetched catalogue) supplies metadata.
+    assert_eq!(models[0]["name"], "claude-sonnet-4.5");
+    assert_eq!(models[0]["source"], "manual");
+    assert_eq!(models[1]["name"], "gpt-5-mini");
+    assert_eq!(models[1]["source"], "manual");
 }
 
 #[test]

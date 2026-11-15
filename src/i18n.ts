@@ -75,7 +75,6 @@ const ZH: Record<string, string> = {
   "Cost": "成本",
   "Time": "时间",
   "Cancel": "取消",
-  "Budget: {steps} steps / ${cost} / {time}": "预算：{steps} 步 / ${cost} / {time}",
   "Send": "发送",
   "Workbench": "工作台",
   "Updated": "已更新",
@@ -181,6 +180,8 @@ const ZH: Record<string, string> = {
   "Max output tokens": "最大输出 Token",
   "Input $/Mtok": "输入 $/百万 Token",
   "Output $/Mtok": "输出 $/百万 Token",
+  "Cache read $/Mtok": "缓存读取 $/百万 Token",
+  "Cache write $/Mtok": "缓存写入 $/百万 Token",
   "Temperature": "温度",
   "Auto-configured from the model name. Edit any field to override; explicit values are kept.":
     "已按模型名自动配置。修改任一字段即可覆盖；显式填写的值会保留。",

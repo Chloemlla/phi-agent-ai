@@ -66,7 +66,7 @@
 
 | 必需槽位 | 契约 | 官方默认实现 |
 |---|---|---|
-| `runtime.skeleton` | Run/Step/检查点/预算记账 | `plugin-loop` |
+| `runtime.skeleton` | Run/Step/检查点/用量记录（预算硬上限为可选目标态） | `plugin-loop` |
 | `session.store` | 会话/轮次/运行状态与事件产出 | `plugin-session` |
 | `persistence.journal` | 事件日志的落盘与读取 | `plugin-store`（经机制性存储端口） |
 | `policy.evaluate` | 动作判定 `allow/deny/ask/modify` | `plugin-policy` |
@@ -92,7 +92,7 @@
 
 | 模块 | 职责 | 依赖端口 | 移除后果 |
 |---|---|---|---|
-| `plugin-loop` 〔基线〕 | 提供可插拔的行动循环策略（ReAct/plan-execute/…）与 **Run/Step/检查点/预算记账** | Model, Journal | 无运行时骨架 → `Maintenance`（必需槽位 `runtime.skeleton`） |
+| `plugin-loop` 〔基线〕 | 提供可插拔的行动循环策略（ReAct/plan-execute/…）与 **Run/Step/检查点/用量记录**（预算硬上限为可选目标态） | Model, Journal | 无运行时骨架 → `Maintenance`（必需槽位 `runtime.skeleton`） |
 | `plugin-orchestrator` | 多 Agent 协作编排（supervisor/group-chat/pipeline） | Loop, Session | 只能单 Agent（v1 目标态） |
 | `plugin-context` 〔基线〕 | 上下文构筑（分层组装、压缩） | Memory, Model | 上下文退化为原始堆叠 |
 | `plugin-session` 〔基线〕 | 会话/轮次/运行的状态管理与事件产出 | Storage, Journal | 无会话模型 → `Maintenance`（必需槽位 `session.store`） |
@@ -105,7 +105,7 @@
 | `plugin-skills` | 技能的发现、加载、注入 | Storage | 无技能 |
 | `plugin-mcp` | 接入 MCP 工具发现层 | Transport | 无外部 MCP 工具 |
 | `plugin-sandbox` 〔基线〕 | 隔离执行工具/代码（含自带的 CLI 子进程） | Process/Container/Engine | **必需槽位 `sandbox.execute` 缺失 → `Maintenance`；运行中丢失 → `Degraded`，有副作用动作一律拒绝**（不是「无隔离跑」） |
-| `plugin-model-gw` 〔基线〕 | 模型路由、缓存、用量、预算（**调用前预留额度**） | Model providers | **必需槽位 `model.invoke` 缺失 → `Maintenance`** |
+| `plugin-model-gw` 〔基线〕 | 模型路由、缓存、用量记录（预算预留为可选目标态） | Model providers | **必需槽位 `model.invoke` 缺失 → `Maintenance`** |
 | `plugin-model-provider-*` | 具体模型方适配（Anthropic/OpenAI/本地） | — | 少一种模型来源 |
 | `plugin-memory` | 记忆存取（add/search + 变更操作） | Storage, Search | 无长期记忆（合法的空态） |
 

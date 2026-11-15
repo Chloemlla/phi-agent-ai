@@ -29,13 +29,12 @@ struct RunRecord {
     turn_id: String,
     state: String,
     steps: u64,
-    max_steps: u64,
     cost_usd: f64,
-    max_cost_usd: f64,
-    max_wall_secs: u64,
     workbench_mode: bool,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
     pending_approval_id: Option<String>,
     error: Option<String>,
     stop_confirmation: Option<String>,
@@ -135,7 +134,6 @@ impl SessionPlugin {
             }
         }
 
-        let mut repaired_sessions: Vec<String> = Vec::new();
         for (session_id, run_id, state) in &pending {
             let note = if state == "WaitingApproval" {
                 i18n::t(
@@ -155,15 +153,18 @@ impl SessionPlugin {
                     note: note.to_string(),
                 },
             );
-            if !repaired_sessions.contains(session_id) {
-                repaired_sessions.push(session_id.clone());
-            }
         }
 
-        // A crash between saving the assistant message and saving its tool
-        // results leaves an unpaired tool_use in history. Repair it before the
-        // next model call, otherwise the provider rejects the request.
-        for session_id in &repaired_sessions {
+        // A crash or a failed result append can leave an unpaired tool_use.
+        // Repair every session, not only the ones with a still-active run: the
+        // append may have failed after the run was already marked terminal,
+        // and the provider would reject the next model call. The repair is
+        // idempotent.
+        let all_sessions: Vec<String> = {
+            let projection = self.state.read().unwrap();
+            projection.sessions.keys().cloned().collect()
+        };
+        for session_id in &all_sessions {
             let _ = self.repair_unpaired_tool_uses(session_id);
         }
         pending.len()
@@ -500,9 +501,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             session_id,
             turn_id,
             task_id,
-            max_steps,
-            max_cost_usd,
-            max_wall_secs,
             workbench,
         } => {
             if let Some(session) = projection.sessions.get_mut(&session_id) {
@@ -517,13 +515,12 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                         turn_id,
                         state: "Scheduled".to_string(),
                         steps: 0,
-                        max_steps,
                         cost_usd: 0.0,
-                        max_cost_usd,
-                        max_wall_secs,
                         workbench_mode: workbench,
                         input_tokens: 0,
                         output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_write_tokens: 0,
                         pending_approval_id: None,
                         error: None,
                         stop_confirmation: None,
@@ -571,17 +568,21 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.pending_approval_id = Some(approval_id);
             });
         }
-        DomainEvent::BudgetSettled {
+        DomainEvent::ModelCallReturned {
             run_id,
             cost_usd,
             input_tokens,
             output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
             ..
         } => {
             update_run(projection, record, &run_id, |run| {
                 run.cost_usd += cost_usd;
                 run.input_tokens += input_tokens;
                 run.output_tokens += output_tokens;
+                run.cache_read_tokens += cache_read_tokens;
+                run.cache_write_tokens += cache_write_tokens;
             });
         }
         DomainEvent::RunSucceeded { run_id } => {
@@ -668,13 +669,12 @@ fn run_view(r: &RunRecord) -> RunView {
         turn_id: r.turn_id.clone(),
         state: r.state.clone(),
         steps: r.steps,
-        max_steps: r.max_steps,
         cost_usd: r.cost_usd,
-        max_cost_usd: r.max_cost_usd,
-        max_wall_secs: r.max_wall_secs,
         workbench_mode: r.workbench_mode,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,
+        cache_read_tokens: r.cache_read_tokens,
+        cache_write_tokens: r.cache_write_tokens,
         pending_approval_id: r.pending_approval_id.clone(),
         error: r.error.clone(),
         stop_confirmation: r.stop_confirmation.clone(),
@@ -731,10 +731,7 @@ mod tests {
                 "runId": "run-1",
                 "sessionId": session.id,
                 "turnId": turn.turn_id,
-                "taskId": "task-1",
-                "maxSteps": 5,
-                "maxCostUsd": 0.5,
-                "maxWallSecs": 60
+                "taskId": "task-1"
             }),
         )
         .unwrap();
@@ -788,6 +785,69 @@ mod tests {
 
         let view = plugin.get_session(&session.id).unwrap().ui_view.unwrap();
         assert_eq!(view["root"]["props"]["text"], "second");
+    }
+
+    #[test]
+    fn repairs_unpaired_tool_use_for_a_terminal_run() {
+        let dir = temp_dir("session-repair-terminal");
+        let bus = Arc::new(EventBus::new(
+            Arc::new(JsonlJournal::new(dir.join("events.jsonl"))),
+            Arc::new(SystemClock::new()),
+            Arc::new(UuidIds),
+            Arc::new(StderrLog),
+        ));
+        let plugin = Arc::new(SessionPlugin::new(
+            bus.clone(),
+            Arc::new(UuidIds),
+            Arc::new(FsBlobStore::new(dir.join("blobs"))),
+            "node-test".to_string(),
+        ));
+        bus.subscribe(plugin.clone());
+
+        let session = plugin.create_session("t").unwrap();
+        let turn = plugin.start_turn(&session.id).unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &json!({
+                "type": "RunScheduled",
+                "runId": "run-1",
+                "sessionId": session.id,
+                "turnId": turn.turn_id,
+                "taskId": "task-1"
+            }),
+        )
+        .unwrap();
+        plugin
+            .append_message(
+                &session.id,
+                None,
+                Role::Assistant,
+                vec![ContentBlock::ToolUse {
+                    id: "call-1".to_string(),
+                    name: "fs_list".to_string(),
+                    input: json!({ "path": "." }),
+                }],
+            )
+            .unwrap();
+        // The result append failed, so the run is already terminal. Startup
+        // recovery must still repair the dangling tool_use.
+        bus.publish(
+            &session.id,
+            "test",
+            &json!({ "type": "RunFailed", "runId": "run-1", "error": "journal write failed" }),
+        )
+        .unwrap();
+
+        assert_eq!(plugin.recover_interrupted(), 0);
+        let view = plugin.get_session(&session.id).unwrap();
+        let last = view.messages.last().unwrap();
+        match &last.blocks[0] {
+            ContentBlock::ToolResult { tool_use_id, .. } => {
+                assert_eq!(tool_use_id, "call-1")
+            }
+            other => panic!("expected tool_result, got {other:?}"),
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ Thanks for your interest in phi-agent. Code contributions, architecture discussi
 
 ## Development setup
 
-- Rust 1.85+ (MSVC toolchain)
+- Rust 1.89+ (MSVC toolchain)
 - Bun (or Node) and the Tauri 2 platform dependencies
 - Windows: Visual Studio Build Tools with the “Desktop development with C++” workload
 
@@ -24,7 +24,7 @@ bun run tauri dev
 ```bash
 bunx tsc --noEmit
 bun run build
-cd src-tauri && cargo test
+cd src-tauri && cargo test --workspace
 ```
 
 Please make sure that:

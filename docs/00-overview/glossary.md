@@ -45,14 +45,14 @@
 
 | 术语 | 定义 | _避免_ |
 |---|---|---|
-| **Agent 定义 Agent Definition** | 一个 Agent 的声明：角色、提示、可用工具/技能、模型、预算。是数据，不是代码。 | Agent 模板、bot |
+| **Agent 定义 Agent Definition** | 一个 Agent 的声明：角色、提示、可用工具/技能、模型、预算（目标态）。是数据，不是代码。 | Agent 模板、bot |
 | **行动循环 Loop / Loop Strategy** | 驱动「规划→行动→观察」的可插拔策略（ReAct、plan-execute、reflexion…）。内核不内置某一种。 | agent loop（可接受）、主循环 |
 | **工具 Tool** | 一个可被调用的能力，有输入 schema 与执行体；可能有副作用，需经策略与沙箱。 | 函数、function、action |
 | **技能 Skill** | 一个声明式的「知识+指引」包（清单 + 指令/提示 + 资源 + 可选脚本）。注上下文、导行为，区别于「调用」。 | 能力、capability |
 | **上下文构筑器 Context Builder** | 在每次模型调用前，assembling 出这一次要送进模型的上下文的组件（分层的：窗口/检索/记忆）。 | 提示组装、prompt builder |
-| **模型网关 Model Gateway** | 对模型提供方的统一抽象与路由（含小模型路由、缓存、用量计量、预算）。 | LLM 客户端、provider |
+| **模型网关 Model Gateway** | 对模型提供方的统一抽象与路由（含小模型路由、缓存、用量计量、可选预算）。 | LLM 客户端、provider |
 | **记忆 Memory** | 跨会话/跨轮次的持久知识，按作用域（user/project/agent/run）存取。 | 长期存储、知识库 |
-| **预算 Budget** | 一次 Run 的硬上限：步数、成本、超时。超限即停或转人工。 | 限额、quota |
+| **预算 Budget** | 🧭 可选目标态：一次 Run 的硬上限（步数、成本、超时）。v1 未启用硬上限，保留逐次用量记录与用户取消。 | 限额、quota |
 
 ## D. 治理与安全
 

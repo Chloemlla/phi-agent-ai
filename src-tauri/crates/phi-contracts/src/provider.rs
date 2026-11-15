@@ -74,17 +74,22 @@ impl Protocol {
     }
 
     /// Conservative list prices used when a profile does not declare its own.
-    /// They exist so the budget ledger has an upper bound; users can override
-    /// them per provider (pricing changes should not silently rewrite history).
+    /// They drive the cost figure recorded for each model call; users can
+    /// override them per provider (pricing changes should not silently rewrite
+    /// history).
     pub fn default_pricing(&self) -> Pricing {
         match self {
             Protocol::AnthropicMessages => Pricing {
                 input_per_mtok: 3.0,
                 output_per_mtok: 15.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
             Protocol::OpenAiChat | Protocol::OpenAiResponses => Pricing {
                 input_per_mtok: 2.5,
                 output_per_mtok: 10.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             },
         }
     }
@@ -131,14 +136,20 @@ impl AuthMode {
 pub struct Pricing {
     pub input_per_mtok: f64,
     pub output_per_mtok: f64,
+    /// Cached-input read price. `None` falls back to the input price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_per_mtok: Option<f64>,
+    /// Cache-write price. `None` falls back to the input price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_per_mtok: Option<f64>,
 }
 
 /// One model available through a provider.
 ///
 /// Only `id` (the wire model name) is required. Everything else is advisory
-/// metadata: pricing and output limits tighten the budget when present, while
-/// `description` and `tags` are catalogue data for humans and for future
-/// model-routing / multi-agent work.
+/// metadata: pricing and output limits shape the recorded usage and the
+/// per-call output cap when present, while `description` and `tags` are
+/// catalogue data for humans and for future model-routing / multi-agent work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSpec {
@@ -209,10 +220,14 @@ impl ModelSpec {
         if self.context_window == Some(0) {
             self.context_window = None;
         }
-        if self
-            .pricing
-            .is_some_and(|pricing| pricing.input_per_mtok < 0.0 || pricing.output_per_mtok < 0.0)
-        {
+        if self.pricing.is_some_and(|pricing| {
+            pricing.input_per_mtok < 0.0
+                || pricing.output_per_mtok < 0.0
+                || pricing.cache_read_per_mtok.is_some_and(|value| value < 0.0)
+                || pricing
+                    .cache_write_per_mtok
+                    .is_some_and(|value| value < 0.0)
+        }) {
             self.pricing = None;
         }
     }
@@ -754,6 +769,8 @@ mod tests {
                     pricing: Some(Pricing {
                         input_per_mtok: 0.25,
                         output_per_mtok: 2.0,
+                        cache_read_per_mtok: None,
+                        cache_write_per_mtok: None,
                     }),
                     max_output_tokens: Some(128_000),
                     ..ModelSpec::from_id("gpt-5-mini")
@@ -765,6 +782,8 @@ mod tests {
             pricing: Some(Pricing {
                 input_per_mtok: 9.0,
                 output_per_mtok: 90.0,
+                cache_read_per_mtok: None,
+                cache_write_per_mtok: None,
             }),
             max_output_tokens: Some(4_096),
             temperature: None,
