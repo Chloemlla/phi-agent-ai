@@ -100,9 +100,9 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   });
 
   async function loadList() {
-    const list = await invoke<MemoryRecord[]>("list_memories", {
-      text: query().trim() || null,
-    });
+    // The search box drives BM25 search explicitly; loading the list must not
+    // silently apply a substring filter from an unsubmitted query.
+    const list = await invoke<MemoryRecord[]>("list_memories", { text: null });
     setMemories(list);
   }
 
