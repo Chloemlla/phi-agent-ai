@@ -18,8 +18,8 @@ const MAX_NODES: usize = 800;
 /// Component kinds the shell knows how to render. Adding a kind is a protocol
 /// change: both the validator and the shell registry must learn it together.
 pub const UI_NODE_KINDS: &[&str] = &[
-    "stack", "row", "grid", "card", "text", "code", "table", "keyvalue", "chart", "form", "field",
-    "button", "badge", "progress", "divider",
+    "stack", "row", "grid", "card", "text", "code", "table", "keyvalue", "chart", "steps", "form",
+    "field", "button", "badge", "progress", "divider",
 ];
 
 /// Reject malformed or hostile trees before they reach the journal. Errors are
@@ -154,6 +154,24 @@ mod tests {
     #[test]
     fn valid_view_is_accepted() {
         assert!(validate_view(&sample()).is_ok());
+    }
+
+    #[test]
+    fn steps_view_is_accepted() {
+        let view = json!({
+            "version": 1,
+            "root": {
+                "kind": "steps",
+                "props": {
+                    "items": [
+                        { "title": "Read", "status": "done" },
+                        { "title": "Fix", "status": "current" },
+                        { "title": "Verify", "status": "todo" }
+                    ]
+                }
+            }
+        });
+        assert!(validate_view(&view).is_ok());
     }
 
     #[test]

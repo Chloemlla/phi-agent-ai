@@ -1,12 +1,26 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import solid from "vite-plugin-solid";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
+// Every Tauri webview understands woff2. Fontsource CSS also lists a legacy
+// woff fallback for each face; dropping it halves the bundled font payload
+// without changing what the app can render.
+function woff2Only(): Plugin {
+  return {
+    name: "woff2-only-fonts",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.includes("@fontsource")) return null;
+      return code.replace(/,\s*url\([^)]*\.woff\)\s*format\(['"]woff['"]\)/g, "");
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [solid()],
+  plugins: [woff2Only(), solid()],
 
   // Tauri ships modern webviews (WebView2 / WKWebView / WebKitGTK), so we can
   // target ES2021 and skip legacy transpilation and modulepreload polyfills.

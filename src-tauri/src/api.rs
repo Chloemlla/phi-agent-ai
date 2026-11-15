@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::app::AppStateHandle;
 use phi_contracts::ports::{ModelStatus, RunStatus};
-use phi_contracts::provider::{ProviderInput, ProviderTestView, ProviderView};
+use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_domain::view::SessionSummary;
 use phi_node::{Bootstrap, SendResult, SessionDetail};
 
@@ -130,4 +130,11 @@ pub async fn fetch_models(
     provider_id: Option<String>,
 ) -> Result<Vec<String>, String> {
     state.0.fetch_models(provider_id.as_deref()).await
+}
+
+/// Catalogue suggestions for the settings page. Pure metadata; saving the
+/// provider is what persists them.
+#[tauri::command]
+pub fn describe_models(state: State<'_, AppStateHandle>, model_ids: Vec<String>) -> Vec<ModelSpec> {
+    state.0.describe_models(&model_ids)
 }

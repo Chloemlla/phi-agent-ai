@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use phi_adapters::control;
 use phi_adapters::jsonl_sink::{JsonlEventSink, JsonlStreamSink};
 use phi_contracts::ports::RunLimits;
-use phi_contracts::provider::{Pricing, ProviderInput};
+use phi_contracts::provider::{ModelSpec, Pricing, ProviderInput};
 use phi_contracts::stream::StreamPort;
 use phi_domain::view::RunView;
 use phi_i18n as i18n;
@@ -753,6 +753,7 @@ fn parse_provider_input(
                     .split(',')
                     .map(|item| item.trim().to_string())
                     .filter(|item| !item.is_empty())
+                    .map(ModelSpec::from_id)
                     .collect(),
             );
         } else if let Some(value) = take_flag(rest, &mut index, "--model-map")? {

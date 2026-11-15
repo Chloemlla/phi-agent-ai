@@ -38,6 +38,7 @@
 第 3 层  运行时子系统               → 40-runtime/（循环/工具/模型/记忆/策略）
 第 3 层  协同与分布式               → 50-distributed/（本地优先/拓扑/换端）
 第 3 层  前端                       → 60-frontend/multi-frontend.md
+第 3 层  视觉规格                   → design/SPEC.md
 第 3 层  质量与演进                 → 70-quality/、80-roadmap/
 ```
 
@@ -82,6 +83,8 @@ docs/
 ├── 80-roadmap/
 │   ├── evolution.md                 # MVP → v1 → 后续迭代（交付边界）
 │   └── scope-additions.md           # 范围增补记录（原设计之外新增的能力）
+├── design/
+│   └── SPEC.md                      # 桌面 UI 视觉规格（tokens/组件/风险分级/动效）
 └── adr/                             # 架构决策记录（ADR）
     └── README.md                    # ADR 的写作门槛与索引
 ```
@@ -122,6 +125,7 @@ docs/
 | `50-distributed/topology-and-sync.md` | 🌿 | 对等节点/传输/attach |
 | `50-distributed/handoff.md` | 🌿 | 换端（预留 R1） |
 | `60-frontend/multi-frontend.md` | 🌿 | 外壳/区域/响应式/离线 UX |
+| `design/SPEC.md` | 🌿 | 桌面 UI 视觉规格：tokens/布局/风险分级/动效 |
 | `70-quality/quality-attributes.md` | 🌿 | 质量属性场景与取舍 |
 | `70-quality/evaluation.md` | 🌿 | 评测进 CI |
 | `80-roadmap/evolution.md` | 🌿 | 交付边界与里程碑（MVP/v1/后续） |

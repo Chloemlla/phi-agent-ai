@@ -237,6 +237,8 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Provider {name} is disabled" => "provider {name} 已禁用",
         "Provider {name} is missing baseUrl" => "provider {name} 缺少 baseUrl",
         "Provider {name} is missing model" => "provider {name} 缺少 model",
+        "Provider {name} has no primary model yet" => "provider {name} 还没有主模型",
+        "Model {model} is disabled in this provider" => "模型 {model} 在此 provider 中已禁用",
         "Provider {name} has no API key" => "provider {name} 未配置 API Key",
         "Provider {name}: {error}" => "provider {name}: {error}",
         "Failed to create config directory: {error}" => "创建配置目录失败: {error}",
@@ -354,6 +356,7 @@ fn zh(msgid: &str) -> Option<&'static str> {
 
         // Mock model
         "demo write" => "演示写",
+        "demo shell" => "演示命令",
         "(Mock model; no provider configured)\nCompleted one tool call. Latest tool result summary:\n{summary}" => {
             "（Mock 模型，未配置模型提供方）\n已跑通一次工具调用。最近一次工具结果摘要：\n{summary}"
         }

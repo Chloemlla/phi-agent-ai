@@ -14,9 +14,11 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use phi_contracts::provider::{
-    AuthMode, Protocol, ProviderFile, ProviderInput, ProviderProfile, ProviderView, SecretRef,
+    AuthMode, ModelSpec, Protocol, ProviderFile, ProviderInput, ProviderProfile, ProviderView,
+    SecretRef,
 };
 
+use crate::model_catalog;
 use phi_i18n as i18n;
 use phi_kernel::fs_atomic::write_atomic;
 
@@ -126,6 +128,12 @@ impl ProviderStore {
                 &[("name", profile.name.clone())],
             ));
         }
+        if profile.model.trim().is_empty() {
+            return Err(i18n::t_args(
+                "Provider {name} has no primary model yet",
+                &[("name", profile.name.clone())],
+            ));
+        }
         file.active_id = Some(id.to_string());
         self.save(&file)?;
         Ok(())
@@ -186,6 +194,8 @@ impl ProviderStore {
         };
 
         let is_new = existing_index.is_none();
+        let models_provided = input.models.is_some();
+        let model_provided = input.model.is_some();
         if let Some(protocol) = input.protocol.as_deref() {
             profile.protocol = Protocol::parse(protocol)?;
             // Let the new protocol choose its default auth unless the caller
@@ -204,7 +214,7 @@ impl ProviderStore {
             profile.model = model.trim().to_string();
         }
         if let Some(models) = input.models {
-            profile.models = dedupe(models);
+            profile.models = normalize_models(models);
         }
         if let Some(model_map) = input.model_map {
             profile.model_map = model_map;
@@ -242,6 +252,15 @@ impl ProviderStore {
             }
             profile.temperature = Some(temperature);
         }
+        if input.clear_pricing {
+            profile.pricing = None;
+        }
+        if input.clear_max_output_tokens {
+            profile.max_output_tokens = None;
+        }
+        if input.clear_temperature {
+            profile.temperature = None;
+        }
         if let Some(enabled) = input.enabled {
             profile.enabled = enabled;
         }
@@ -261,6 +280,38 @@ impl ProviderStore {
             profile.notes = input.notes;
         }
 
+        // Keep the primary model and the model list consistent. When the
+        // caller replaces the list without naming a primary, fall back to the
+        // first model instead of resurrecting a removed one.
+        if profile.model.is_empty()
+            || (models_provided
+                && !model_provided
+                && !profile.models.is_empty()
+                && !profile
+                    .models
+                    .iter()
+                    .any(|model| model.id.eq_ignore_ascii_case(&profile.model)))
+        {
+            profile.model = profile
+                .models
+                .first()
+                .map(|model| model.id.clone())
+                .unwrap_or_default();
+        }
+        if !profile.model.is_empty()
+            && !profile
+                .models
+                .iter()
+                .any(|model| model.id.eq_ignore_ascii_case(&profile.model))
+        {
+            profile
+                .models
+                .push(model_catalog::enrich(ModelSpec::from_id(
+                    profile.model.clone(),
+                )));
+        }
+        profile.models = normalize_models(profile.models);
+
         if profile.name.is_empty() {
             return Err(i18n::t("Provider name cannot be empty"));
         }
@@ -270,9 +321,9 @@ impl ProviderStore {
         if !(profile.base_url.starts_with("http://") || profile.base_url.starts_with("https://")) {
             return Err(i18n::t("baseUrl must start with http:// or https://"));
         }
-        if profile.model.is_empty() {
-            return Err(i18n::t("model cannot be empty"));
-        }
+        // A draft provider may have no primary model yet; the settings page
+        // can save it, fetch the provider's model list, and then pick one.
+        // Using it for a call still fails honestly in `resolve_profile`.
         if profile.auth_mode() != AuthMode::None && profile.api_key.is_none() {
             return Err(i18n::t(
                 "This auth mode requires an API key (an env:NAME reference works)",
@@ -284,10 +335,10 @@ impl ProviderStore {
             Some(index) => file.providers[index] = profile.clone(),
             None => file.providers.push(profile.clone()),
         }
-        if is_new && file.active_id.is_none() && profile.enabled {
+        if is_new && file.active_id.is_none() && profile.enabled && !profile.model.is_empty() {
             file.active_id = Some(profile.id.clone());
         }
-        if file.active_id.is_none() && profile.enabled {
+        if file.active_id.is_none() && profile.enabled && !profile.model.is_empty() {
             file.active_id = Some(profile.id.clone());
         }
         self.save(&file)?;
@@ -381,10 +432,28 @@ impl ProviderStore {
             .iter_mut()
             .find(|provider| provider.id == id)
             .ok_or_else(|| i18n::t_args("Unknown provider: {id}", &[("id", id.to_string())]))?;
-        profile.models = dedupe(models);
+        // Merge instead of replacing: fetched ids must not wipe descriptions,
+        // limits or prices the user already edited.
+        for model_id in models {
+            let model_id = model_id.trim();
+            if model_id.is_empty() {
+                continue;
+            }
+            if profile
+                .models
+                .iter()
+                .any(|model| model.id.eq_ignore_ascii_case(model_id))
+            {
+                continue;
+            }
+            let mut spec = ModelSpec::from_id(model_id.to_string());
+            spec.source = "fetched".to_string();
+            profile.models.push(model_catalog::enrich(spec));
+        }
+        profile.models = normalize_models(profile.models.clone());
         if profile.model.is_empty() {
             if let Some(first) = profile.models.first() {
-                profile.model = first.clone();
+                profile.model = first.id.clone();
             }
         }
         profile.updated_at = Utc::now().to_rfc3339();
@@ -411,6 +480,35 @@ impl ProviderStore {
     }
 
     fn resolve_profile(&self, profile: &ProviderProfile) -> Result<ResolvedProvider, String> {
+        self.resolve_profile_inner(profile, true)
+    }
+
+    /// Resolve endpoint and credentials without requiring a primary model.
+    /// Listing/testing models must work on a freshly added, still-empty
+    /// provider so the settings page can populate its model list.
+    pub fn resolve_for_listing(&self, id: &str) -> Result<ResolvedProvider, String> {
+        let file = self.snapshot();
+        let profile = file
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .cloned()
+            .ok_or_else(|| i18n::t_args("Unknown provider: {id}", &[("id", id.to_string())]))?;
+        self.resolve_profile_inner(&profile, false)
+    }
+
+    pub fn resolve_active_for_listing(&self) -> Result<Option<ResolvedProvider>, String> {
+        match self.active() {
+            Some(profile) => self.resolve_profile_inner(&profile, false).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn resolve_profile_inner(
+        &self,
+        profile: &ProviderProfile,
+        require_model: bool,
+    ) -> Result<ResolvedProvider, String> {
         if !profile.enabled {
             return Err(i18n::t_args(
                 "Provider {name} is disabled",
@@ -423,7 +521,7 @@ impl ProviderStore {
                 &[("name", profile.name.clone())],
             ));
         }
-        if profile.model.trim().is_empty() {
+        if require_model && profile.model.trim().is_empty() {
             return Err(i18n::t_args(
                 "Provider {name} is missing model",
                 &[("name", profile.name.clone())],
@@ -489,6 +587,8 @@ fn view_of(profile: &ProviderProfile, active: bool) -> ProviderView {
         base_url: profile.base_url.clone(),
         model: profile.model.clone(),
         models: profile.models.clone(),
+        model_map: profile.model_map.clone(),
+        headers: profile.headers.clone(),
         enabled: profile.enabled,
         active,
         has_key: profile.has_key(),
@@ -507,13 +607,21 @@ fn view_of(profile: &ProviderProfile, active: bool) -> ProviderView {
     }
 }
 
-fn dedupe(items: Vec<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for item in items {
-        let item = item.trim().to_string();
-        if !item.is_empty() && !out.contains(&item) {
-            out.push(item);
+fn normalize_models(models: Vec<ModelSpec>) -> Vec<ModelSpec> {
+    let mut out: Vec<ModelSpec> = Vec::new();
+    for model in models {
+        let mut model = model;
+        model.normalize();
+        if model.id.is_empty() {
+            continue;
         }
+        if out
+            .iter()
+            .any(|existing| existing.id.eq_ignore_ascii_case(&model.id))
+        {
+            continue;
+        }
+        out.push(model_catalog::enrich(model));
     }
     out
 }
@@ -655,5 +763,95 @@ mod tests {
         let reloaded = ProviderStore::load(path);
         assert_eq!(reloaded.views().len(), 1);
         assert_eq!(reloaded.active_id(), Some(view.id));
+    }
+
+    #[test]
+    fn a_primary_model_is_kept_in_the_model_list() {
+        let store = store("primary-list");
+        let view = store.upsert(input("One")).unwrap();
+        assert!(
+            view.models.iter().any(|model| model.id == "test-model"),
+            "the primary model must appear in the list: {:?}",
+            view.models
+                .iter()
+                .map(|model| &model.id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn replacing_models_without_naming_a_primary_picks_the_first() {
+        let store = store("primary-fallback");
+        let view = store.upsert(input("One")).unwrap();
+        let updated = store
+            .upsert(ProviderInput {
+                id: Some(view.id.clone()),
+                models: Some(vec![
+                    ModelSpec::from_id("alpha"),
+                    ModelSpec::from_id("beta"),
+                ]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(updated.model, "alpha");
+    }
+
+    #[test]
+    fn fetched_models_merge_and_keep_existing_metadata() {
+        let store = store("merge");
+        let mut kept = ModelSpec::from_id("kept-model");
+        kept.description = "do not lose".to_string();
+        let view = store
+            .upsert(ProviderInput {
+                models: Some(vec![kept]),
+                ..input("Merge")
+            })
+            .unwrap();
+
+        store
+            .mark_models(
+                &view.id,
+                vec!["new-model".to_string(), "kept-model".to_string()],
+            )
+            .unwrap();
+        let after = store.view(&view.id).unwrap();
+        let kept = after
+            .models
+            .iter()
+            .find(|model| model.id == "kept-model")
+            .unwrap();
+        assert_eq!(kept.description, "do not lose");
+        assert_eq!(
+            after
+                .models
+                .iter()
+                .filter(|model| model.id == "kept-model")
+                .count(),
+            1
+        );
+        let fetched = after
+            .models
+            .iter()
+            .find(|model| model.id == "new-model")
+            .unwrap();
+        assert_eq!(fetched.source, "fetched");
+    }
+
+    #[test]
+    fn drafts_can_be_listed_but_not_used_for_calls() {
+        let store = store("draft");
+        let view = store
+            .upsert(ProviderInput {
+                model: Some(String::new()),
+                // A literal key resolves without relying on process env vars.
+                api_key: Some("literal:test-key".to_string()),
+                ..input("Draft")
+            })
+            .unwrap();
+        assert!(view.model.is_empty());
+        assert!(!view.active);
+        assert!(store.resolve_for_listing(&view.id).is_ok());
+        assert!(store.resolve(&view.id).is_err());
+        assert!(store.set_active(&view.id).is_err());
     }
 }

@@ -63,6 +63,9 @@ the previous view entirely; send the full tree you want to show.
 - `badge` — props: `text`: string, `tone`?: `"neutral" | "ok" | "warn" |
   "error" | "info"`.
 - `progress` — props: `value`: number 0–100, `label`?: string.
+- `steps` — vertical plan/stepper. props: `items`: `[{ "title": string,
+  "detail"?: string, "status"?: "done" | "current" | "todo" }]`. Use it for a
+  plan, checklist or progress through a sequence of steps.
 - `chart` — props: `type`: `"bar" | "line"`, `labels`: string[],
   `series`: `[{ "name": string, "values": number[] }]`, `height`?: number.
 

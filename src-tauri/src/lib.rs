@@ -37,6 +37,7 @@ pub fn run() {
             api::set_active_provider,
             api::test_provider,
             api::fetch_models,
+            api::describe_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -109,18 +109,20 @@ go to the shell sink; only the final assistant message is journaled.
 
 ## Workbench view
 
-The main surface is a task workbench, not a chat log. In workbench mode the
-agent can call the `ui_update` tool to replace the view tree rendered beside the
-conversation. Views are declarative JSON data (`src-tauri/crates/phi-contracts/
-src/ui.rs`, version 1): layout, content and action kinds are allowlisted and the
-node validates every tree before it becomes a `UiViewUpdated` event. The shell
+The main surface is a task workbench, not a chat log. The agent can call the
+`ui_update` tool to replace the view tree rendered beside the conversation.
+Views are declarative JSON data (`src-tauri/crates/phi-contracts/src/ui.rs`,
+version 1): layout, content and action kinds are allowlisted and the node
+validates every tree before it becomes a `UiViewUpdated` event. The shell
 renders the tree with a Solid component registry (`src/workbench/`); it never
 evaluates model-authored code. Buttons and forms can only submit a message or
 open an http(s) URL.
 
-The protocol prompt lives in `src-tauri/assets/workbench-system-prompt.txt` and
-is appended to the normal system prompt only for workbench runs. Plain chat runs
-do not receive the tool or the prompt.
+The desktop shell offers the tool on every run; the agent decides whether a
+visual layout helps, so there is no user-facing workbench toggle. The protocol
+prompt lives in `src-tauri/assets/workbench-system-prompt.txt`. Headless runs
+can still request a plain chat run without the tool to exercise the non-workbench
+path.
 
 ## Tests and CI
 

@@ -55,18 +55,18 @@ Cancel at any time. Every run has hard caps — 20 steps, $0.50, and 10 minutes 
 |---|---|
 | 🔒 **Local-first**<br>Sessions and API keys stay on your machine. | 🧾 **Recorded**<br>Every run is saved and can be reviewed later. |
 | 🛑 **Human approval**<br>Writes and commands wait for your explicit OK. | 💸 **Budget caps**<br>Steps, cost, and wall-clock time are bounded before they run. |
-| 🧠 **Bring your own model**<br>Use your own Anthropic-compatible model endpoint and key. | 🔁 **Crash-safe**<br>Interrupted work is marked for review, never auto-retried. |
+| 🧠 **Bring your own model**<br>Use your own Anthropic- or OpenAI-compatible model endpoints and keys. | 🔁 **Crash-safe**<br>Interrupted work is marked for review, never auto-retried. |
 | 🖥️ **One workspace, one boundary**<br>File tools stay inside the folder you choose. | 🛰️ **Multi-device**<br>Continue a task from another device — on the roadmap. |
 
 ## Bring your own model
 
-phi-agent works with Anthropic-compatible model endpoints. Enter your API key in the app; it stays on your machine and is sent only to the endpoint you configure.
+phi-agent works with Anthropic Messages and OpenAI-compatible endpoints. Add one or more providers in **Settings → Model providers**; keys stay on your machine and are sent only to the endpoints you configure. Each provider can list several models with descriptions, context limits and prices, and one provider is active at a time.
 
 No key? A built-in demo model takes over, so you can try the full tool-and-approval flow offline.
 
 ## A workbench, not a chat window
 
-The main surface is a task workbench. When a visual layout helps, the agent lays out the workbench beside the conversation — plans, tables, charts, forms and buttons you can act on directly. Clicking a button or submitting a form sends that instruction back to the same agent, so the task keeps moving instead of restarting. Tick **Workbench** in the composer to let the agent shape the workbench for the next run. Approvals and tool calls work exactly the same way.
+The main surface is a task workbench. When a visual layout helps, the agent lays out the workbench beside the conversation — plans, tables, charts, forms and buttons you can act on directly. Clicking a button or submitting a form sends that instruction back to the same agent, so the task keeps moving instead of restarting. The agent receives the workbench tool on every run and decides when to use it; the panel opens automatically when the view changes. Approvals and tool calls work exactly the same way.
 
 ## Quick start
 
@@ -127,13 +127,13 @@ Not yet. File tools are confined to the workspace folder, but shell commands run
 <details>
 <summary><b>Which models are supported?</b></summary>
 
-Anthropic-compatible endpoints today. Local models are on the roadmap.
+Anthropic Messages and OpenAI-compatible endpoints (Chat Completions or Responses), including local runtimes that expose an OpenAI-compatible API.
 </details>
 
 <details>
 <summary><b>Where are my API keys stored?</b></summary>
 
-On your machine, in the app's local data folder. They are only sent to the model endpoint you configure.
+On your machine. The app stores a reference — an environment variable name (`env:NAME`) or, for development, a literal value in its local data folder. Values are only sent to the endpoint you configure.
 </details>
 
 <details>

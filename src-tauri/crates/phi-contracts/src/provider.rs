@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use phi_i18n as i18n;
 
@@ -16,7 +16,11 @@ use phi_i18n as i18n;
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
     AnthropicMessages,
+    // Canonical ids match `Protocol::as_str`; earlier builds serialized the
+    // enum with an extra underscore, so keep that as a deserialization alias.
+    #[serde(rename = "openai_chat", alias = "open_ai_chat")]
     OpenAiChat,
+    #[serde(rename = "openai_responses", alias = "open_ai_responses")]
     OpenAiResponses,
 }
 
@@ -127,6 +131,153 @@ impl AuthMode {
 pub struct Pricing {
     pub input_per_mtok: f64,
     pub output_per_mtok: f64,
+}
+
+/// One model available through a provider.
+///
+/// Only `id` (the wire model name) is required. Everything else is advisory
+/// metadata: pricing and output limits tighten the budget when present, while
+/// `description` and `tags` are catalogue data for humans and for future
+/// model-routing / multi-agent work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSpec {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Pricing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Provenance for the settings UI: `catalog`, `fetched` or `manual`.
+    #[serde(default)]
+    pub source: String,
+}
+
+impl ModelSpec {
+    pub fn from_id(id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            name: id.clone(),
+            id,
+            description: String::new(),
+            tags: Vec::new(),
+            context_window: None,
+            max_output_tokens: None,
+            pricing: None,
+            temperature: None,
+            enabled: true,
+            source: "manual".to_string(),
+        }
+    }
+
+    pub fn normalize(&mut self) {
+        self.id = self.id.trim().to_string();
+        self.name = self.name.trim().to_string();
+        self.description = self.description.trim().to_string();
+        self.tags = self
+            .tags
+            .iter()
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+        if self.name.is_empty() {
+            self.name = self.id.clone();
+        }
+        if self.source.trim().is_empty() {
+            self.source = "manual".to_string();
+        }
+        if self
+            .temperature
+            .is_some_and(|value| !(0.0..=2.0).contains(&value))
+        {
+            self.temperature = None;
+        }
+        if self.max_output_tokens == Some(0) {
+            self.max_output_tokens = None;
+        }
+        if self.context_window == Some(0) {
+            self.context_window = None;
+        }
+        if self
+            .pricing
+            .is_some_and(|pricing| pricing.input_per_mtok < 0.0 || pricing.output_per_mtok < 0.0)
+        {
+            self.pricing = None;
+        }
+    }
+
+    pub fn display_name(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
+    }
+}
+
+/// Old provider files stored `models: ["id", ...]`. Accept both that shape and
+/// the structured specs so upgrades never lose a provider.
+pub fn deserialize_models<'de, D>(deserializer: D) -> Result<Vec<ModelSpec>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Id(String),
+        Spec(ModelSpec),
+    }
+    let entries = Vec::<Entry>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| match entry {
+            Entry::Id(id) => ModelSpec::from_id(id),
+            Entry::Spec(mut spec) => {
+                spec.normalize();
+                spec
+            }
+        })
+        .collect())
+}
+
+/// The same compatibility for the patch input: older callers may still send
+/// `models: ["id", ...]`.
+pub fn deserialize_optional_models<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<ModelSpec>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Id(String),
+        Spec(ModelSpec),
+    }
+    let entries = Option::<Vec<Entry>>::deserialize(deserializer)?;
+    Ok(entries.map(|entries| {
+        entries
+            .into_iter()
+            .map(|entry| match entry {
+                Entry::Id(id) => ModelSpec::from_id(id),
+                Entry::Spec(mut spec) => {
+                    spec.normalize();
+                    spec
+                }
+            })
+            .collect()
+    }))
 }
 
 /// A reference to a credential, never the credential itself when rendered.
@@ -243,8 +394,8 @@ pub struct ProviderProfile {
     pub api_key: Option<SecretRef>,
     #[serde(default)]
     pub model: String,
-    #[serde(default)]
-    pub models: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_models")]
+    pub models: Vec<ModelSpec>,
     /// Maps a logical role ("default", "fast", a UI label) to a wire model id.
     #[serde(default)]
     pub model_map: HashMap<String, String>,
@@ -293,7 +444,11 @@ pub struct ProviderView {
     pub protocol: String,
     pub base_url: String,
     pub model: String,
-    pub models: Vec<String>,
+    pub models: Vec<ModelSpec>,
+    #[serde(default)]
+    pub model_map: HashMap<String, String>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
     pub enabled: bool,
     pub active: bool,
     pub has_key: bool,
@@ -359,6 +514,36 @@ impl ProviderProfile {
             None => self.auth_mode() == AuthMode::None,
         }
     }
+
+    pub fn model_spec(&self, model_id: &str) -> Option<&ModelSpec> {
+        self.models
+            .iter()
+            .find(|model| model.id.eq_ignore_ascii_case(model_id.trim()))
+    }
+
+    /// The model a request will actually use, after `model_map` resolution.
+    pub fn resolved_model(&self, requested: &str) -> String {
+        self.resolve_model(requested)
+    }
+
+    /// A view of this profile with per-model overrides applied. Used by the
+    /// gateway right before a call so pricing, output limits and temperature
+    /// come from the selected model when it declares them.
+    pub fn with_model_overrides(&self, model_id: &str) -> Self {
+        let mut profile = self.clone();
+        if let Some(spec) = self.model_spec(model_id) {
+            if spec.max_output_tokens.is_some() {
+                profile.max_output_tokens = spec.max_output_tokens;
+            }
+            if spec.temperature.is_some() {
+                profile.temperature = spec.temperature;
+            }
+            if spec.pricing.is_some() {
+                profile.pricing = spec.pricing;
+            }
+        }
+        profile
+    }
 }
 
 /// Patch-style input used by both the settings UI and the headless CLI.
@@ -379,8 +564,8 @@ pub struct ProviderInput {
     pub api_key: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
-    #[serde(default)]
-    pub models: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_models")]
+    pub models: Option<Vec<ModelSpec>>,
     #[serde(default)]
     pub model_map: Option<HashMap<String, String>>,
     #[serde(default)]
@@ -393,6 +578,14 @@ pub struct ProviderInput {
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Patch inputs cannot express "set to null", so these flags let the
+    /// settings UI clear a previously configured override.
+    #[serde(default)]
+    pub clear_pricing: bool,
+    #[serde(default)]
+    pub clear_max_output_tokens: bool,
+    #[serde(default)]
+    pub clear_temperature: bool,
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -486,5 +679,108 @@ mod tests {
         assert_eq!(profile.resolve_model("gpt-5-nano"), "gpt-5-nano");
         profile.api_key = Some(SecretRef::literal("x"));
         assert!(profile.has_key());
+    }
+
+    #[test]
+    fn protocol_serializes_with_canonical_ids() {
+        assert_eq!(
+            serde_json::to_string(&Protocol::OpenAiChat).unwrap(),
+            "\"openai_chat\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Protocol::OpenAiResponses).unwrap(),
+            "\"openai_responses\""
+        );
+        let legacy: Protocol = serde_json::from_str("\"open_ai_chat\"").unwrap();
+        assert_eq!(legacy, Protocol::OpenAiChat);
+    }
+
+    #[test]
+    fn legacy_string_models_still_deserialize() {
+        let profile: ProviderProfile = serde_json::from_value(serde_json::json!({
+            "id": "p",
+            "name": "p",
+            "protocol": "openai_chat",
+            "baseUrl": "https://example.com",
+            "model": "gpt-5",
+            "models": ["gpt-5", "gpt-5-mini"]
+        }))
+        .unwrap();
+        assert_eq!(profile.models.len(), 2);
+        assert_eq!(profile.models[0].id, "gpt-5");
+        assert_eq!(profile.models[0].name, "gpt-5");
+        assert!(profile.models[0].enabled);
+    }
+
+    #[test]
+    fn provider_input_accepts_string_models() {
+        let input: ProviderInput = serde_json::from_value(serde_json::json!({
+            "models": ["gpt-5", "gpt-5-mini"]
+        }))
+        .unwrap();
+        let models = input.models.unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-5");
+    }
+
+    #[test]
+    fn structured_models_default_optional_fields() {
+        let profile: ProviderProfile = serde_json::from_value(serde_json::json!({
+            "id": "p",
+            "name": "p",
+            "protocol": "anthropic_messages",
+            "baseUrl": "https://example.com",
+            "model": "claude-sonnet-4.5",
+            "models": [{ "id": "claude-sonnet-4.5", "description": "balanced" }]
+        }))
+        .unwrap();
+        assert_eq!(profile.models[0].name, "claude-sonnet-4.5");
+        assert_eq!(profile.models[0].description, "balanced");
+        assert!(profile.models[0].enabled);
+    }
+
+    #[test]
+    fn model_overrides_apply_to_the_resolved_model() {
+        let profile = ProviderProfile {
+            id: "p".into(),
+            name: "p".into(),
+            protocol: Protocol::OpenAiChat,
+            base_url: "https://example.com".into(),
+            api_key: None,
+            model: "gpt-5".into(),
+            models: vec![
+                ModelSpec::from_id("gpt-5"),
+                ModelSpec {
+                    pricing: Some(Pricing {
+                        input_per_mtok: 0.25,
+                        output_per_mtok: 2.0,
+                    }),
+                    max_output_tokens: Some(128_000),
+                    ..ModelSpec::from_id("gpt-5-mini")
+                },
+            ],
+            model_map: HashMap::from([("fast".to_string(), "gpt-5-mini".to_string())]),
+            auth: Some(AuthMode::Bearer),
+            headers: HashMap::new(),
+            pricing: Some(Pricing {
+                input_per_mtok: 9.0,
+                output_per_mtok: 90.0,
+            }),
+            max_output_tokens: Some(4_096),
+            temperature: None,
+            enabled: true,
+            sort_index: 0,
+            icon: None,
+            icon_color: None,
+            website_url: None,
+            notes: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let effective = profile.with_model_overrides("gpt-5-mini");
+        let pricing = effective.pricing_or_default();
+        assert_eq!(pricing.input_per_mtok, 0.25);
+        assert_eq!(effective.max_output_tokens, Some(128_000));
+        assert_eq!(profile.resolved_model("fast"), "gpt-5-mini");
     }
 }

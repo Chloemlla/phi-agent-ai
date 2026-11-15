@@ -19,7 +19,7 @@ use phi_adapters::fs_journal::JsonlJournal;
 use phi_adapters::lock::DataDirLock;
 use phi_adapters::system::{StderrLog, SystemClock, UuidIds};
 use phi_contracts::ports::{ModelStatus, RunLimits, RunStatus, SessionPort, StartRunRequest};
-use phi_contracts::provider::{ProviderInput, ProviderTestView, ProviderView};
+use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_contracts::services::Services;
 use phi_contracts::stream::{StreamHub, StreamPort};
 use phi_contracts::{REQUIRED_SLOTS, SLOT_PERSISTENCE_JOURNAL};
@@ -694,6 +694,11 @@ impl Node {
     pub fn set_active_provider(&self, id: &str) -> Result<(), String> {
         self.require_writable()?;
         self.providers.set_active(id)
+    }
+
+    /// Best-effort catalogue metadata for model ids. Pure: no I/O, no lock.
+    pub fn describe_models(&self, ids: &[String]) -> Vec<ModelSpec> {
+        phi_plugins::model_catalog::describe_many(ids)
     }
 
     pub async fn test_provider(&self, id: Option<&str>) -> ProviderTestView {

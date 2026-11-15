@@ -67,6 +67,18 @@ impl ModelGateway {
     ) -> Result<ModelResponse, ModelError> {
         let profile = resolved.profile;
         let stream = req.stream && self.streams.is_enabled();
+        // Per-model metadata overrides the provider defaults for this call.
+        let model_id = profile.resolved_model(&req.model);
+        if profile
+            .model_spec(&model_id)
+            .is_some_and(|spec| !spec.enabled)
+        {
+            return Err(model_error(i18n::t_args(
+                "Model {model} is disabled in this provider",
+                &[("model", model_id)],
+            )));
+        }
+        let profile = profile.with_model_overrides(&model_id);
         let plan = build_http(&profile, &req, stream)?;
         let mut builder = self.client.post(&plan.url).json(&plan.body);
         for (key, value) in &plan.headers {
@@ -297,6 +309,8 @@ impl ModelGateway {
             let lowercase = last_user_text.to_lowercase();
             let wants_demo_write = lowercase.contains("demo write")
                 || lowercase.contains(&i18n::t("demo write").to_lowercase());
+            let wants_demo_shell = lowercase.contains("demo shell")
+                || lowercase.contains(&i18n::t("demo shell").to_lowercase());
             let call = if wants_demo_write {
                 ContentBlock::ToolUse {
                     id: format!("call_{}", uuid::Uuid::new_v4().simple()),
@@ -306,6 +320,15 @@ impl ModelGateway {
                         "content": i18n::t(
                             "# phi-agent demo\n\nWritten by the mock model to demonstrate human approval.\n"
                         )
+                    }),
+                }
+            } else if wants_demo_shell {
+                ContentBlock::ToolUse {
+                    id: format!("call_{}", uuid::Uuid::new_v4().simple()),
+                    name: "shell_exec".to_string(),
+                    input: json!({
+                        "command": "echo phi-agent-shell-demo",
+                        "timeout_secs": 30
                     }),
                 }
             } else {
@@ -374,10 +397,10 @@ impl ModelGateway {
         })
     }
 
-    fn resolve_for(&self, id: Option<&str>) -> Result<ResolvedProvider, String> {
+    fn resolve_for_listing(&self, id: Option<&str>) -> Result<ResolvedProvider, String> {
         match id {
-            Some(id) => self.providers.resolve(id),
-            None => self.providers.resolve_active()?.ok_or_else(|| {
+            Some(id) => self.providers.resolve_for_listing(id),
+            None => self.providers.resolve_active_for_listing()?.ok_or_else(|| {
                 i18n::t(
                     "No provider is configured; add a provider or set the environment variables",
                 )
@@ -386,7 +409,7 @@ impl ModelGateway {
     }
 
     pub async fn list_models(&self, id: Option<&str>) -> Result<(String, Vec<String>), String> {
-        let resolved = self.resolve_for(id)?;
+        let resolved = self.resolve_for_listing(id)?;
         let profile = resolved.profile;
         let url = models_url(&profile);
         let mut request = self.client.get(&url);
@@ -593,6 +616,8 @@ impl ModelPort for ModelGateway {
         if !profile.has_key() && profile.auth_mode() != AuthMode::None {
             return 0.0;
         }
+        let model_id = profile.resolved_model("");
+        let profile = profile.with_model_overrides(&model_id);
         let pricing = profile.pricing_or_default();
         let input_tokens = input_chars.max(input_bytes) as f64 + 256.0;
         input_tokens / 1_000_000.0 * pricing.input_per_mtok
@@ -702,6 +727,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phi_contracts::provider::{ModelSpec, ProviderInput};
 
     #[test]
     fn sse_buffer_handles_split_frames_and_crlf() {
@@ -749,6 +775,48 @@ mod tests {
                 .blocks
                 .iter()
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_models_are_rejected_before_any_request() {
+        let dir = std::env::temp_dir().join(format!("phi-gateway-{}", uuid::Uuid::new_v4()));
+        let providers = Arc::new(ProviderStore::load(dir.join("providers.json")));
+        let mut disabled = ModelSpec::from_id("disabled-model");
+        disabled.enabled = false;
+        let view = providers
+            .upsert(ProviderInput {
+                name: Some("Provider".into()),
+                protocol: Some("openai_chat".into()),
+                base_url: Some("https://example.invalid/v1".into()),
+                api_key: Some("literal:test-key".into()),
+                model: Some("main-model".into()),
+                models: Some(vec![ModelSpec::from_id("main-model"), disabled]),
+                ..Default::default()
+            })
+            .unwrap();
+        providers.set_active(&view.id).unwrap();
+
+        let gateway = ModelGateway::new(providers, Arc::new(StreamHub::default()));
+        let req = ModelRequest {
+            model: "disabled-model".into(),
+            system: "hello".into(),
+            messages: vec![phi_domain::message::ChatMessage::user_text("hi")],
+            tools: Vec::new(),
+            max_output_tokens: 100,
+            call_id: "call".into(),
+            run_id: "run".into(),
+            stream: false,
+            workbench: false,
+        };
+        let error = gateway
+            .invoke(req, CancellationToken::new())
+            .await
+            .expect_err("disabled model must not be called");
+        assert!(
+            error.message.contains("disabled"),
+            "unexpected error: {}",
+            error.message
         );
     }
 }
