@@ -83,7 +83,9 @@ docs/
 ├── 70-quality/
 │   ├── quality-attributes.md        # 质量属性与取舍
 │   ├── evaluation.md                # 评测进 CI
-│   └── frontend-review-2026-11-20.md # UI/UX 与前端工程审查；动效/字体决策
+│   ├── frontend-review-2026-11-20.md # UI/UX 与前端工程审查；动效/字体决策
+│   ├── frontend-review-2026-11-22.md # UI/UX 与前端工程审查；安全文案/焦点/状态
+│   └── backend-review-2026-11-22.md  # 后端架构/工程质量审查与收口顺序
 ├── 80-roadmap/
 │   ├── evolution.md                 # MVP → v1 → 后续迭代（交付边界）
 │   └── scope-additions.md           # 范围增补记录（原设计之外新增的能力）
@@ -136,6 +138,8 @@ docs/
 | `70-quality/quality-attributes.md` | 🌿 | 质量属性场景与取舍 |
 | `70-quality/evaluation.md` | 🌿 | 评测进 CI |
 | `70-quality/frontend-review-2026-11-20.md` | 🌿 | UI/UX 与前端工程审查；reduced-motion/字体决策 |
+| `70-quality/frontend-review-2026-11-22.md` | 🌿 | UI/UX 与前端工程审查；安全文案、焦点、运行状态、设置一致性 |
+| `70-quality/backend-review-2026-11-22.md` | 🌿 | 后端架构/工程质量审查；高风险缺陷与收口顺序 |
 | `80-roadmap/evolution.md` | 🌿 | 交付边界与里程碑（MVP/v1/后续） |
 | `80-roadmap/scope-additions.md` | 🌿 | 范围增补记录（原设计之外新增/移除的能力与原因） |
 | `adr/0001`–`adr/0016` | 🌳 | 十六条关键决策（0012–0016 已接受；0008 被 0012 取代） |
