@@ -16,7 +16,7 @@
 | ApprovalRequest | ✅ | 绑定 action digest，执行前复核 |
 | MemoryRecord / Episode | ✅ | SQLite + BM25，准入、脱敏、forget |
 | ProviderProfile / ModelSpec | ✅ | `providers.json`；模型目录是可选数据 |
-| UiView | ✅ | 声明式视图树 v1 |
+| UiView | — | 声明式视图树协议已移除；界面改为回复正文中的内联 HTML（见 `80-roadmap/scope-additions.md` §2.17） |
 | Task | 🧭 | 当前只有隐式 `TaskCreated` 与 `taskId` 占位，没有 Task 聚合状态 |
 | AgentDefinition / LoopStrategy | 🧭 | 当前是单一 ReAct 循环与固定系统提示 |
 | Checkpoint | 🧭 | 当前恢复 = journal replay + interrupted 标记 + unpaired tool_use 修复 |

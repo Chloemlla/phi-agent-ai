@@ -66,9 +66,13 @@ The composer shows the current model. Switch models without opening Settings, an
 
 Without a provider, a run fails with a clear message instead of inventing output. Point a provider at a local OpenAI-compatible runtime (Ollama, LM Studio, vLLM) to stay fully offline.
 
-## A workbench, not a chat window
+## Answers that can lay themselves out
 
-The main surface is a task workbench. When a visual layout helps, the agent lays out the workbench beside the conversation — plans, tables, charts, forms and buttons you can act on directly. Clicking a button or submitting a form sends that instruction back to the same agent, so the task keeps moving instead of restarting. The agent receives the workbench tool on every run and decides when to use it; the panel opens automatically when the view changes. Approvals and tool calls work exactly the same way.
+When prose is not the best shape for an answer, the agent can put a small, working interface directly in its reply — a checklist you can tick, a plan with progress, a filterable set of metrics, a chart, or a short form that sends your choices back. It renders inside the message flow and styled to match the rest of the app.
+
+The controls are real HTML: sliders, choices, checklists, steppers, collapsible details and tables. Their state stays in the page while you explore; nothing is sent to you or the model until you press a send button or submit the form. Charts are drawn from ordinary tables in the reply.
+
+Nothing model-written runs: executable scripts, styles, iframes and event handlers are removed, and every visible element is rebuilt from a fixed allowlist. Links open in your browser; images must use https URLs from the conversation.
 
 ## Memory you can inspect
 

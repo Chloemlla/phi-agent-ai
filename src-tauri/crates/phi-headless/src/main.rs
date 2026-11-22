@@ -65,7 +65,6 @@ struct RunArgs {
     approval: ApprovalMode,
     stream: bool,
     title: Option<String>,
-    workbench: bool,
 }
 
 enum Command {
@@ -442,7 +441,6 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
         &session_id,
         &message,
         None,
-        args.workbench,
         args.model.as_deref(),
         args.thinking.as_deref(),
     );
@@ -689,7 +687,6 @@ fn parse_run(rest: &[String]) -> Result<RunArgs, String> {
         approval: ApprovalMode::Deny,
         stream: true,
         title: None,
-        workbench: false,
     };
     let mut index = 0;
     while index < rest.len() {
@@ -725,10 +722,6 @@ fn parse_run(rest: &[String]) -> Result<RunArgs, String> {
                 }
                 "--stream" => {
                     args.stream = true;
-                    index += 1;
-                }
-                "--workbench" => {
-                    args.workbench = true;
                     index += 1;
                 }
                 other => {
@@ -1363,7 +1356,6 @@ Commands:
   run --message TEXT [--session ID] [--provider ID]
       [--model ID] [--thinking off|low|medium|high]
       [--approval deny|allow|prompt] [--no-stream] [--title TEXT]
-      [--workbench]
   sessions list
   sessions show <id>
   approve <id> --allow|--deny [--note TEXT]

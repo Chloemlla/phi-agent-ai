@@ -110,7 +110,6 @@ impl RuntimePort for LoopPlugin {
                 session_id: req.session_id.clone(),
                 turn_id: req.turn_id.clone(),
                 task_id,
-                workbench: req.workbench,
             },
         )?;
 
@@ -146,7 +145,6 @@ impl RuntimePort for LoopPlugin {
             thinking: req.thinking,
             cancel,
             status,
-            workbench_mode: req.workbench,
         };
         tokio::spawn(run_loop(ctx));
         Ok(run_id)
@@ -189,11 +187,11 @@ struct RunContext {
     thinking: Option<ThinkingEffort>,
     cancel: CancellationToken,
     status: Arc<Mutex<RunStatus>>,
-    workbench_mode: bool,
 }
 
-/// Appended to the normal system prompt when the run may shape the workbench.
-const WORKBENCH_PROMPT: &str = include_str!("../../../assets/workbench-system-prompt.txt");
+/// Appended to the normal system prompt so every reply can carry a small
+/// HTML interface block rendered inside the message flow.
+const INLINE_UI_PROMPT: &str = include_str!("../../../assets/inline-ui-system-prompt.txt");
 
 /// A model that keeps re-emitting unparsable tool arguments gets a few fresh
 /// steps to correct itself, then the run fails honestly instead of looping
@@ -282,11 +280,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         },
     );
 
-    let mut tools = ctx.services.tool_definitions();
-    if !ctx.workbench_mode {
-        // The UI tool is noise for plain chat runs; keep the prompt focused.
-        tools.retain(|tool| tool.id != "ui_update");
-    }
+    let tools = ctx.services.tool_definitions();
     let max_output_tokens = env_u64("PHI_MAX_OUTPUT_TOKENS", 8192) as u32;
     let context_budget = history_char_budget(model.status().context_window, max_output_tokens);
     // The shell may select a model per message; "default" lets the gateway
@@ -323,9 +317,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             Some(assembler) => assembler.assemble(history, &ctx.workspace, context_budget),
             None => fallback_context(history, &ctx.workspace),
         };
-        if ctx.workbench_mode {
-            assembled.system = format!("{}\n\n{}", assembled.system, WORKBENCH_PROMPT);
-        }
+        assembled.system = format!("{}\n\n{}", assembled.system, INLINE_UI_PROMPT);
         if !memory_injected {
             inject_memory(&ctx, memory_query.as_deref(), &mut assembled).await;
             memory_injected = true;
@@ -384,7 +376,6 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 call_id: call_id.clone(),
                 run_id: ctx.run_id.clone(),
                 stream: env_bool("PHI_STREAM", true),
-                workbench: ctx.workbench_mode,
             };
 
             let result = model.invoke(request, ctx.cancel.clone()).await;

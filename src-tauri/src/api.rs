@@ -49,7 +49,6 @@ pub async fn send_message(
     session_id: String,
     text: String,
     provider_id: Option<String>,
-    workbench: Option<bool>,
     model: Option<String>,
     thinking: Option<String>,
 ) -> Result<SendResult, String> {
@@ -57,7 +56,6 @@ pub async fn send_message(
         &session_id,
         &text,
         provider_id.as_deref(),
-        workbench.unwrap_or(false),
         model.as_deref(),
         thinking.as_deref(),
     )?;

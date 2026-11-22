@@ -51,9 +51,6 @@ pub enum DomainEvent {
         session_id: String,
         turn_id: String,
         task_id: String,
-        /// The agent may shape the workbench view for this run.
-        #[serde(default)]
-        workbench: bool,
     },
     RunStarted {
         run_id: String,
@@ -160,9 +157,10 @@ pub enum DomainEvent {
         evidence: String,
     },
 
-    // ── workbench ─────────────────────────────────────────────────────
-    /// The latest view tree replaces the session's workbench. Views are data,
-    /// not code: the shell renders them with its own component registry.
+    // ── retired ───────────────────────────────────────────────────────
+    /// Retired workbench protocol. Kept only so journals written before
+    /// 2026-11-20 still replay; nothing publishes it and projections ignore
+    /// the stored view.
     UiViewUpdated {
         run_id: String,
         view: Value,

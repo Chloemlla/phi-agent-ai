@@ -1,11 +1,14 @@
 // Safe Markdown renderer. Every block is built as Solid JSX; raw HTML in the
 // model output is never injected. The parser is intentionally small and
-// streaming-friendly: an unterminated fence keeps rendering as code.
+// streaming-friendly: an unterminated fence keeps rendering as code. Fenced
+// `html` blocks and top-level HTML blocks become inline interface blocks,
+// rebuilt from an allowlist by `RichHtml`.
 
 import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { t } from "../i18n";
 import { IconCheck, IconCopy } from "./Icons";
+import { RichHtml } from "./RichHtml";
 
 const SAFE_LINK = /^(https?:\/\/|mailto:)/i;
 
@@ -213,6 +216,7 @@ type BlockNode =
   | { kind: "paragraph"; lines: string[] }
   | { kind: "heading"; level: number; text: string }
   | { kind: "code"; lang: string; code: string }
+  | { kind: "html"; html: string }
   | { kind: "quote"; lines: string[] }
   | { kind: "list"; ordered: boolean; start: number; items: string[][] }
   | { kind: "rule" }
@@ -230,6 +234,10 @@ const CLOSING_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const RULE = /^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/;
 const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+// A top-level line that opens a block-level HTML element. Lines that do not
+// use one of these tags stay ordinary text.
+const HTML_BLOCK_START =
+  /^\s{0,3}<(?:html|body|section|div|article|header|footer|main|aside|nav|table|ul|ol|dl|details|figure|blockquote|pre|h[1-6]|p|hr)(?=[\s>/])/i;
 
 function leadingSpaces(line: string): number {
   const match = line.match(/^ */);
@@ -269,6 +277,7 @@ function isBlockStart(lines: string[], index: number): boolean {
     HEADING.test(line) ||
     RULE.test(line) ||
     /^\s{0,3}>/.test(line) ||
+    HTML_BLOCK_START.test(line) ||
     matchList(line)
   ) {
     return true;
@@ -365,7 +374,11 @@ function parseBlocks(lines: string[]): BlockNode[] {
         code.push(lines[index]);
         index += 1;
       }
-      blocks.push({ kind: "code", lang, code: code.join("\n") });
+      if (lang.toLowerCase() === "html") {
+        blocks.push({ kind: "html", html: code.join("\n") });
+      } else {
+        blocks.push({ kind: "code", lang, code: code.join("\n") });
+      }
       continue;
     }
 
@@ -424,6 +437,17 @@ function parseBlocks(lines: string[]): BlockNode[] {
       continue;
     }
 
+    if (HTML_BLOCK_START.test(line)) {
+      // CommonMark-style HTML block: the block ends at the first blank line.
+      const html: string[] = [];
+      while (index < lines.length && lines[index].trim()) {
+        html.push(lines[index]);
+        index += 1;
+      }
+      blocks.push({ kind: "html", html: html.join("\n") });
+      continue;
+    }
+
     if (matchList(line)) {
       const parsed = parseList(lines, index);
       blocks.push(parsed.node);
@@ -463,7 +487,11 @@ function CodeBlock(props: { lang: string; code: string }) {
   );
 }
 
-function ListItems(props: { items: string[][] }) {
+function ListItems(props: {
+  items: string[][];
+  onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
+}) {
   return (
     <For each={props.items}>
       {(item) => (
@@ -472,7 +500,11 @@ function ListItems(props: { items: string[][] }) {
             when={item.length > 1}
             fallback={<Inline text={item[0] ?? ""} />}
           >
-            <BlockList blocks={parseBlocks(item)} />
+            <BlockList
+              blocks={parseBlocks(item)}
+              onOpenUrl={props.onOpenUrl}
+              onSend={props.onSend}
+            />
           </Show>
         </li>
       )}
@@ -480,7 +512,11 @@ function ListItems(props: { items: string[][] }) {
   );
 }
 
-function BlockView(props: { block: BlockNode; onOpenUrl?: (url: string) => void }) {
+function BlockView(props: {
+  block: BlockNode;
+  onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
+}) {
   const block = props.block;
 
   switch (block.kind) {
@@ -519,10 +555,22 @@ function BlockView(props: { block: BlockNode; onOpenUrl?: (url: string) => void 
     }
     case "code":
       return <CodeBlock lang={block.lang} code={block.code} />;
+    case "html":
+      return (
+        <RichHtml
+          html={block.html}
+          onOpenUrl={props.onOpenUrl}
+          onSend={props.onSend}
+        />
+      );
     case "quote":
       return (
         <blockquote>
-          <BlockList blocks={parseBlocks(block.lines)} onOpenUrl={props.onOpenUrl} />
+          <BlockList
+            blocks={parseBlocks(block.lines)}
+            onOpenUrl={props.onOpenUrl}
+            onSend={props.onSend}
+          />
         </blockquote>
       );
     case "list":
@@ -531,12 +579,20 @@ function BlockView(props: { block: BlockNode; onOpenUrl?: (url: string) => void 
           when={block.ordered}
           fallback={
             <ul class="md-list">
-              <ListItems items={block.items} />
+              <ListItems
+                items={block.items}
+                onOpenUrl={props.onOpenUrl}
+                onSend={props.onSend}
+              />
             </ul>
           }
         >
           <ol class="md-list" start={block.start}>
-            <ListItems items={block.items} />
+            <ListItems
+              items={block.items}
+              onOpenUrl={props.onOpenUrl}
+              onSend={props.onSend}
+            />
           </ol>
         </Show>
       );
@@ -583,10 +639,17 @@ function BlockView(props: { block: BlockNode; onOpenUrl?: (url: string) => void 
 function BlockList(props: {
   blocks: BlockNode[];
   onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
 }) {
   return (
     <For each={props.blocks}>
-      {(block) => <BlockView block={block} onOpenUrl={props.onOpenUrl} />}
+      {(block) => (
+        <BlockView
+          block={block}
+          onOpenUrl={props.onOpenUrl}
+          onSend={props.onSend}
+        />
+      )}
     </For>
   );
 }
@@ -594,12 +657,17 @@ function BlockList(props: {
 export function Markdown(props: {
   text: string;
   onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
 }) {
   const blocks = () =>
     parseBlocks(props.text.replace(/\r\n?/g, "\n").split("\n"));
   return (
     <div class="md">
-      <BlockList blocks={blocks()} onOpenUrl={props.onOpenUrl} />
+      <BlockList
+        blocks={blocks()}
+        onOpenUrl={props.onOpenUrl}
+        onSend={props.onSend}
+      />
     </div>
   );
 }

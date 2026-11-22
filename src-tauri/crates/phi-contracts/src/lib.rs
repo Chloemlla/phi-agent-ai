@@ -9,7 +9,6 @@ pub mod ports;
 pub mod provider;
 pub mod services;
 pub mod stream;
-pub mod ui;
 pub mod util;
 
 // Extension point / required slot names.

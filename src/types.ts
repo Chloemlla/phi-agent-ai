@@ -1,7 +1,5 @@
 // Shapes mirrored from the Rust read model (`phi-node` / `phi-domain`).
 
-import type { WorkbenchView } from "./workbench/types";
-
 /** Host platform reported by the node. */
 export type Platform = "windows" | "macos" | "linux" | "android" | "ios";
 
@@ -92,7 +90,6 @@ export type Run = {
   turnId: string;
   state: string;
   steps: number;
-  workbenchMode: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
@@ -112,7 +109,6 @@ export type SessionView = {
   updatedAt: string;
   messages: Message[];
   runs: Run[];
-  uiView: WorkbenchView | null;
 };
 
 export type PendingApproval = {

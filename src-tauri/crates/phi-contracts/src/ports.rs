@@ -159,8 +159,6 @@ pub struct ModelRequest {
     /// Whether the shell can consume incremental output. The gateway only
     /// streams when a sink is registered.
     pub stream: bool,
-    /// Whether the agent may shape the workbench view for this run.
-    pub workbench: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -357,8 +355,6 @@ pub struct StartRunRequest {
     pub session_id: String,
     pub turn_id: String,
     pub workspace: PathBuf,
-    /// Let the agent shape the workbench view for this run.
-    pub workbench: bool,
     /// Per-message model override. `None` means the provider's primary model.
     pub model: Option<String>,
     /// Per-message extended reasoning effort.

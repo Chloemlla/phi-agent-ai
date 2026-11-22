@@ -27,18 +27,25 @@ import {
   IconWrench,
 } from "./Icons";
 import { CopyButton, Markdown } from "./Markdown";
+import { RichHtml } from "./RichHtml";
+import { splitInlineUi } from "./inlineUi";
 
 function ToolBlock(props: {
   block: Block;
   assistant: boolean;
   toolName?: string;
   onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
 }) {
   switch (props.block.type) {
     case "text": {
       const block = props.block;
       return props.assistant ? (
-        <Markdown text={block.text} onOpenUrl={props.onOpenUrl} />
+        <Markdown
+          text={block.text}
+          onOpenUrl={props.onOpenUrl}
+          onSend={props.onSend}
+        />
       ) : (
         <div class="text">{block.text}</div>
       );
@@ -147,6 +154,7 @@ function MessageRow(props: {
   message: Message;
   toolNames: Map<string, string>;
   onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
 }) {
   const user = () => props.message.role === "user";
   // The backend journals tool results as user-role messages. They are tool
@@ -188,6 +196,7 @@ function MessageRow(props: {
                   : undefined
               }
               onOpenUrl={props.onOpenUrl}
+              onSend={props.onSend}
             />
           )}
         </For>
@@ -282,6 +291,7 @@ export function Conversation(props: {
   now: number;
   onResolve: (approvalId: string, approved: boolean) => Promise<void>;
   onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
 }) {
   const failedRun = () =>
     props.run && FAILED_STATES.includes(props.run.state) ? props.run : null;
@@ -300,6 +310,7 @@ export function Conversation(props: {
     streamMatchesDurable(props.streamText, lastAssistantText(props.detail));
 
   const showStream = () => props.streamText.length > 0 && !durableStream();
+  const streamSegments = () => splitInlineUi(props.streamText);
 
   return (
     <div class="conversation-inner">
@@ -336,6 +347,7 @@ export function Conversation(props: {
                   message={message}
                   toolNames={toolNames()}
                   onOpenUrl={props.onOpenUrl}
+                  onSend={props.onSend}
                 />
               )}
             </For>
@@ -350,9 +362,25 @@ export function Conversation(props: {
                 </header>
                 <div class="msg-body">
                   {/* Plain text while streaming: reparsing Markdown on every
-                      token recreates blocks and loses code-copy state. The
-                      durable message renders Markdown once. */}
-                  <div class="streaming-text">{props.streamText}</div>
+                      token recreates blocks and loses code-copy state. An
+                      `html` fence is rendered live because its content is
+                      self-contained, then the durable message renders the
+                      whole reply once. */}
+                  <For each={streamSegments()}>
+                    {(segment) =>
+                      segment.kind === "html" ? (
+                        <RichHtml
+                          html={segment.html}
+                          onOpenUrl={props.onOpenUrl}
+                          onSend={props.onSend}
+                        />
+                      ) : (
+                        <Show when={segment.text.trim()}>
+                          <div class="streaming-text">{segment.text}</div>
+                        </Show>
+                      )
+                    }
+                  </For>
                   <Show when={props.streamEnded}>
                     <div class="stream-stopped">
                       <span class="dot tone-idle" />

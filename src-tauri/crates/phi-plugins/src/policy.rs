@@ -117,10 +117,6 @@ impl PolicyPort for DefaultPolicyPlugin {
                     ),
                 }
             }
-            "ui_update" => PolicyDecision {
-                effect: PolicyEffect::Allow,
-                rationale: i18n::t("Workbench views are declarative data and cannot execute code"),
-            },
             "memory_search" => PolicyDecision {
                 effect: PolicyEffect::Allow,
                 rationale: i18n::t("Reading long-term memory does not touch the workspace"),

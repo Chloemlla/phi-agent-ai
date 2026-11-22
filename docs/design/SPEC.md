@@ -195,15 +195,14 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 ```
 ┌────────────────────────────────────────────────┐
 │ Titlebar（自绘，frameless，44px）               │
-├──────────┬─────────────────────┬───────────────┤
-│          │                     │               │
-│ Sidebar  │   Conversation      │  Workbench    │
-│ 264px    │   (flex, max 720px) │  420px(可选)  │
-│ 可收起    │                     │               │
-│          │─────────────────────│               │
-│          │ Runbar（状态/用量）  │               │
-│          │ Composer（输入）     │               │
-└──────────┴─────────────────────┴───────────────┘
+├──────────┬─────────────────────────────────────┤
+│          │                                     │
+│ Sidebar  │   Conversation (flex, max 720px)    │
+│ 264px    │                                     │
+│ 可收起    │─────────────────────────────────────│
+│          │ Runbar（状态/用量）                  │
+│          │ Composer（输入）                     │
+└──────────┴─────────────────────────────────────┘
 ```
 
 ### 4.1 Titlebar（自绘，不用系统默认）
@@ -227,13 +226,14 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - 消息间 `--sp-5`，角色行（avatar + 名字 + 时间）+ 正文。
 - user / agent 用 avatar 颜色区分，**不用左右气泡对齐**（保持文档式流畅）。
 
-### 4.4 Workbench（按需出现）
+### 4.4 内联界面块（正文内）
 
-- 宽 `420px`（窄屏 360px），左 `1px` 分隔 + 极轻左阴影。
-- **是否出现由 Agent 决定**：每次运行都向 Agent 提供 `ui_update` 工具，由它在
-  可视化布局有帮助时提交视图；面板在视图出现时自动展开，**不设用户开关**。
-- **身份建立靠三件小事**：标题 + `已更新` 脉冲指示 + 版本徽章（`v3`）。
-- 内容 = 白名单组件（plan / table / form / actions），见 §6.4。
+- 不再有独立的第三栏：模型生成的界面出现在回复正文中，随消息流滚动，宽度受正文 `720px` 约束。
+- **是否出现由 Agent 决定**：系统提示词引导模型在布局或交互比文字更清楚时用围栏代码块（语言标记 `html`）；不设用户开关。
+- **表达方式**：普通 HTML 为主体，叠加极小的 `data-ui-*` 属性与 `{{ }}` 表达式；状态用 JSON 数据岛声明，表达式由固定语法解析，**不执行任何模型编写的 JavaScript**。
+- **交互**：输入绑定、清单勾选、步进器、筛选、表单提交和动作按钮都在正文内完成；状态留在本机，只有用户点击发送/提交时才进入会话。
+- **安全**：先解析再按白名单重建；脚本/样式/iframe/对象/事件属性全部丢弃；链接只允许 `http(s)`/`mailto`，图片只允许对话中出现过的 `https` 地址。
+- **风格**：宿主 CSS 决定排版，模型只使用宿主定义的组件类（卡片、Callout、指标、步骤、图表等），见 §6.4。
 
 ---
 
@@ -302,7 +302,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 
 - Composer 是**主角**：白底 + `--border-soft` + `--shadow-md`，`:focus-within` 时边框转 `--accent-border`、阴影转 `--shadow-pop`。
 - textarea 无边框，placeholder 用 `--text-faint`。
-- 底部行：上限提示（mono faint）+ 发送按钮。工作台是否启用由 Agent 决定，
+- 底部行：上限提示（mono faint）+ 发送按钮。内联界面由 Agent 决定是否使用，
   输入框不提供用户开关。
 
 ### 6.3 工具调用 / 结果（tool block）
@@ -312,19 +312,24 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - 展开体：`--bg-inset` 底 + mono 12px。错误内容用 danger 文字。
 - 默认**折叠**，失败的可默认展开。
 
-### 6.4 Workbench 组件（白名单）
+### 6.4 内联界面块（HTML + 受控组件）
 
-> 全部走"声明式 JSON → 受控渲染"，**前端永不执行模型代码**。
+> 模型写 HTML 与少量 `data-ui-*` 属性；宿主解析后按白名单重建为 Solid 元素，表达式由固定语法求值。**前端永不注入原始 HTML，也永不执行模型代码**。
 
 | 组件 | 视觉 |
 |---|---|
-| Plan / Steps | 垂直 stepper：圆圈编号（done=ok 底+✓ / now=accent 实底+pop 影 / 待办=灰）|
-| KV Table | 无边框，行间 hairline，左列 muted、右列 mono |
-| Form | 与全局输入一致；提交按钮 primary |
-| Actions | 按钮组，主动作 primary，次动作 default |
-| Chart | 遵循 dataviz 规范（中性底 + 单强调色系） |
+| 容器 / 卡片 / 网格 | 正文内的白底细边框卡片；`ui-grid` 自适应列，`ui-split` 两栏（窄屏堆叠） |
+| 卡片 / Callout | `ui-card` 为浅底面板；`ui-callout` 按 `ui-info/ok/warn/danger` 使用语义底色 |
+| 指标 | `ui-metrics` 自适应网格 + `ui-metric`（大号数值 + 小标签，tabular numbers） |
+| 徽标 / 步骤 | `ui-badge` 胶囊标签；`ui-steps` 编号时间线，`data-state` 区分 done/current/todo |
+| 表格 / 键值 | 行间 hairline，表头 10px 大写 muted；`ui-num` 数字右对齐；`ui-kv` 两列 |
+| 图表 | `table.ui-chart` + `data-type="bar|line|area"`，由表格行绘制；caption 作为说明；带无障碍表格 |
+| 表单 / 控件 | 原生 input/select/textarea/range/checkbox/radio，输入框与全局风格一致；提交按钮 primary |
+| 图片 / SVG | 图片限 https 并圆角裁切；SVG 仅基础形状/文本，用于示意图 |
+| 状态反馈 | 交互即时更新，不弹“已保存”类提示；复制成功走 toast |
 
-- **更新提示**：agent `ui_update` 后，wb-head 的 `已更新` 标签做**一次**脉冲（不循环），wb-body 做一次 `wbIn` 淡入上移。
+- 样式完全由 `.inline-ui` 与组件类定义；`class` 只允许宿主清单内的 token，`style` / 事件属性在清洗时丢弃。
+- 界面块出现在正文流中，不需要额外的“已更新”提示或版本徽章。
 
 ### 6.5 空状态
 
@@ -357,7 +362,6 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 | **审批卡出现** | `rise`：opacity 0→1 + `translateY(6px)→0` | med | 新审批"浮上来" |
 | **流式文本** | 尾部 `▍` 光标 `blink`（1s steps） | — | 表示"正在生成" |
 | **运行状态点** | `pulse`：box-shadow 扩散 | 2s loop | live/运行中 |
-| **Workbench 更新** | `已更新` 脉冲一次 + body `wbIn`（淡入+上移 4px） | slow | "agent 刚调整过" |
 | **运行中 ring** | `spin` 旋转 | 0.9s loop | 仅运行态 |
 | **侧栏收起** | `margin-left` 过渡 | slow + ease | 布局级 |
 | **toggle 开关** | 圆点 `translateX` + 底色过渡 | fast | |
@@ -409,16 +413,17 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 |---|---|
 | Design tokens | `src/App.css` `:root`（全部 CSS 变量，禁硬编码） |
 | 字体资产 | `src/assets/fonts/`（Figtree / Noto Sans SC / Cascadia Code 的 woff2 + `@font-face`） |
-| 组件 | `src/App.tsx`（消息/审批/runbar/composer）、`src/workbench/ViewRenderer.tsx`（workbench 白名单） |
+| 组件 | `src/App.tsx`（消息/审批/runbar/composer）、`src/components/RichHtml.tsx`（内联界面白名单与交互）、`src/components/uiExpression.ts`（表达式） |
+| 图表 | `src/components/InlineChart.tsx`（表格 → SVG，bar/line/area） |
 | 动效 | `src/App.css` keyframes + 工具类 |
 | 自绘标题栏 | `src-tauri/tauri.conf.json` frameless + `src/components/Titlebar.tsx`；平台决定 Windows/Linux 右侧 caption 按钮、macOS 左侧红绿灯、Android/iOS 应用栏 |
 | 模型 / 思考选择 | `src/components/ModelPicker.tsx`（悬浮子菜单，触摸内联展开） |
 | 通知 | `src/toast.ts` + `src/components/Toasts.tsx`（去重、限流、自动消失） |
-| Markdown | `src/components/Markdown.tsx`（安全 JSX，不注入 HTML） |
+| Markdown | `src/components/Markdown.tsx`（安全 JSX，不注入 HTML；`html` 围栏交给 `RichHtml`） |
 | 响应式 / 安全区 | `src/App.css` 断点 1100/900/760/520 + `env(safe-area-inset-*)` |
 | 深色模式 | 未来替换 `:root` token 表为 `[data-theme="dark"]` |
 
-**实现顺序建议**：tokens → 布局骨架（titlebar/sidebar/main）→ 对话与审批分级 → runbar/composer → workbench → 微动画打磨。
+**实现顺序建议**：tokens → 布局骨架（titlebar/sidebar/main）→ 对话与审批分级 → runbar/composer → 内联界面块 → 微动画打磨。
 
 ---
 

@@ -78,16 +78,8 @@ const ZH: Record<string, string> = {
   "Time": "时间",
   "Cancel": "取消",
   "Send": "发送",
-  "Workbench": "工作台",
-  "Updated": "已更新",
-  "v{version}": "v{version}",
-  "The agent will lay out the task here when a visual overview helps.":
-    "当可视化的总览有帮助时，Agent 会在这里布置任务。",
-  "Unsupported view component: {kind}": "不支持的视图组件：{kind}",
-  "Done": "已完成",
-  "Current": "进行中",
-  "To do": "待办",
-  "Chart data": "图表数据",
+  "This interface block is too large to display.":
+    "这个界面块太大，无法显示。",
   "Label": "标签",
 
   // settings: general

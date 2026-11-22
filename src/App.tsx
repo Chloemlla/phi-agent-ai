@@ -10,7 +10,6 @@ import { Runbar } from "./components/Runbar";
 import { Sidebar } from "./components/Sidebar";
 import { Titlebar } from "./components/Titlebar";
 import { Toasts } from "./components/Toasts";
-import { WorkbenchPane } from "./components/WorkbenchPane";
 import { SettingsPage } from "./settings/SettingsPage";
 import { isActiveState } from "./status";
 import {
@@ -25,7 +24,6 @@ import {
   type SessionSummary,
   type ThinkingLevel,
 } from "./types";
-import type { ViewAction } from "./workbench/types";
 import "./App.css";
 
 const TERMINAL_EVENTS = new Set([
@@ -162,6 +160,7 @@ function App() {
   let transcriptRef: HTMLElement | undefined;
   let refreshTimer: number | undefined;
   let streamFallbackTimer: number | undefined;
+  let inlineSendBusy = false;
   let sidebarInitialized = false;
 
   const mobile = () => isMobilePlatform(boot()?.platform);
@@ -208,8 +207,6 @@ function App() {
 
   const isRunning = () => isActiveState(currentRun()?.state);
   const modeOk = () => boot()?.mode === "Normal";
-  const uiView = () => detail()?.session.uiView ?? null;
-  const showWorkbench = () => !!uiView();
   const provider = () => {
     const bootstrap = boot();
     return bootstrap ? activeProviderOf(bootstrap) : null;
@@ -449,9 +446,6 @@ function App() {
       const result = await invoke<SendResult>("send_message", {
         sessionId: id,
         text,
-        // The agent decides whether a workbench view helps; the shell always
-        // offers the tool.
-        workbench: true,
         ...(pick
           ? { model: pick.modelId, thinking: pick.thinking }
           : {}),
@@ -469,16 +463,22 @@ function App() {
     if (text) void sendText(text, true);
   }
 
-  async function handleViewAction(action: ViewAction) {
-    if (action.kind === "message") {
-      if (isRunning()) {
-        notifyError(t("A run is already active."));
-        return;
-      }
-      await sendText(action.text, false);
+  /** A button or form inside an inline interface block. The run guard mirrors
+   * the composer: one run at a time, and the message goes through the same
+   * session turn. */
+  async function handleInlineSend(text: string) {
+    const value = text.trim();
+    if (!value || inlineSendBusy) return;
+    if (isRunning()) {
+      notifyError(t("A run is already active."));
       return;
     }
-    handleOpenUrl(action.url);
+    inlineSendBusy = true;
+    try {
+      await sendText(value, false);
+    } finally {
+      inlineSendBusy = false;
+    }
   }
 
   async function resolveApproval(approvalId: string, approved: boolean) {
@@ -611,6 +611,7 @@ function App() {
                   now={now()}
                   onResolve={resolveApproval}
                   onOpenUrl={handleOpenUrl}
+                  onSend={handleInlineSend}
                 />
               </div>
               <div class="dock-wrap">
@@ -641,9 +642,6 @@ function App() {
                 </div>
               </div>
             </section>
-            <Show when={showWorkbench()}>
-              <WorkbenchPane view={uiView()} onAction={handleViewAction} />
-            </Show>
           </main>
         </div>
       </Show>

@@ -1,6 +1,6 @@
 # 范围增补记录
 
-> 状态：🌿 · 最后更新：2026-11-15
+> 状态：🌿 · 最后更新：2026-11-20
 > 上游：原始设计文档集（2026-11-08 版，`00-overview/` 至 `80-roadmap/` 与 `adr/`）
 > 用途：记录**原设计文档里没有、后续实现阶段新增**的能力。设计文档描述目标，本文件记录两者之间的增量；被移除的增补也保留，不抹掉历史。
 
@@ -19,8 +19,8 @@
 
 | # | 增补 | 类型 | 状态 | 主要位置 |
 |---|---|---|---|---|
-| 1 | Intelligent UI | 界面 | **已移除**（被工作台视图取代） | 残留代码已删除 |
-| 2 | 工作台视图（Workbench view） | 界面 + 协议 | 已实现 | `phi-contracts/src/ui.rs`、`src/workbench/` |
+| 1 | Intelligent UI | 界面 | **已移除**（先被工作台视图取代，现为内联 HTML 界面块） | 残留代码已删除 |
+| 2 | 工作台视图（Workbench view） | 界面 + 协议 | **已移除**（被内联 HTML 界面块取代） | 残留代码已删除 |
 | 3 | Provider 管理面 | 设置 / CLI | 已实现（后端、CLI、桌面设置页） | `provider_store.rs`、`model_catalog.rs`、`src/settings/` |
 | 4 | 多语言（i18n） | 基础设施 | 已实现（含桌面切换入口） | `phi-i18n`、`src/i18n.ts`、设置 → 通用 |
 | 5 | 离线演示模型 | 模型 | **已移除**（2026-11-15，被真实 Provider 与测试夹具取代） | 无（测试用进程内脚本化 HTTP provider） |
@@ -35,6 +35,7 @@
 | 14 | 供应商接入向导 | 设置 / 协议 | 已实现（两步、预览模型、手动勾选） | `src/settings/`、`preview_models` 命令 |
 | 15 | 平台原生标题栏与移动端适配 | 界面 | 已实现（Windows/Linux/macOS/Android） | `src/components/Titlebar.tsx`、`src/App.css`、`gen/android/` |
 | 16 | 聊天体验重构 | 界面 | 已实现（模型选择、toast、Markdown、流式交接） | `src/components/`、`src/toast.ts` |
+| 17 | 内联 HTML 界面块 | 界面 + 提示词 + 状态 | 已实现（取代工作台视图） | `src/components/RichHtml.tsx`、`uiExpression.ts`、`InlineChart.tsx`、`assets/inline-ui-system-prompt.txt` |
 
 ---
 
@@ -61,6 +62,7 @@
   - Solid 组件注册表（`src/workbench/`），未知组件降级为占位提示，永不执行模型生成的代码。
   - 桌面布局：会话与工作台并排，窄屏自动堆叠。
 - **文档影响**：README 新增「A workbench, not a chat window」；`AGENT.md` 新增 Workbench view 章节；原始文档的插件视图树章节不变（两者共存，用途不同）。
+- **2026-11-20 移除**：用户要求不再保留独立工作台，界面直接输出到正文流，并用 HTML 表达而不是固定的视图树语法。视图树协议（`phi-contracts/src/ui.rs`）、`ui_update` 工具、`RunView.workbenchMode`、`SessionView.uiView`、运行级 workbench 开关与 `src/workbench/` 全部删除；替代方案见 §2.17。`DomainEvent::UiViewUpdated` 仅保留为反序列化占位，让旧日志可以回放，投影会忽略其中的视图。
 
 ### 2.3 Provider 管理面
 
@@ -154,7 +156,7 @@
 
 - **原状**：`model_catalog.rs` 内置一份按模型名匹配的名称/描述/标签/上下文/价格表，设置页 presets 也硬编码了模型 id。
 - **为什么改**（2026-11-15）：这些条目已经过时，继续自动填充会误导用户；用户将提供最新的模型清单。
-- **当前实现**：目录数据移到 `src-tauri/assets/model-catalog.json`，编译进二进制。目录只维护**当前**模型家族（GPT-6、Claude 5.x / Fable、GLM-5.x、DeepSeek-V4、Kimi-K3、Gemini 4）；未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。匹配用家族 `patterns` 加变体 `requires`，`display` + `anchor` 从 id 解析版本，因此未记录的小版本（如 `gpt-6.5-luna`）显示为 `GPT-6.5 Luna`，Fable 5 / 5.1 / 5.2 共用一条记录。当前模型都支持思考强度，不再维护 `reasoning` 标记与旧模型推断列表。`scale` 为 1–5 的模型规模（Fable / Astra / Carbon / K3.1-Pro 为 5），用于限制子代理调用比自己更大的模型。厂商发布新模型时同步更新本文件。
+- **当前实现**：目录数据移到 `src-tauri/assets/model-catalog.json`，编译进二进制。目录只维护**当前**模型家族（GPT-6、Claude 5.x / Fable、GLM-5.x、DeepSeek-V4、Kimi-K3、Gemini 4）；未知模型保持 manual spec，只填 id；provider 的模型列表拉取仍是实时来源。匹配用家族 `patterns` 加变体 `requires`，`display` + `anchor` 从 id 解析版本，因此未记录的小版本（如 `gpt-6.5-luna`）显示为 `GPT-6.5 Luna`，Fable 5 / 5.1 / 5.2 共用一条记录。当前模型都支持思考强度，不再维护 `reasoning` 标记与旧模型推断列表。`scale` 为 1–5 的模型规模（Fable / Astra / Carbon 为 5）；目录没有通用回退条目，未记录的变体按 manual spec 处理。规模用于限制子代理调用比自己更大的模型。厂商发布新模型时同步更新本文件。
 - **数据字段**：`patterns`（任一命中的大小写不敏感子串，匹配时去掉 vendor 前缀）、`requires`（必须同时命中的变体标记）、`name`（版本解析失败时的回退显示名）、`display`（`{version}` 模板）、`anchor`（版本数字起点）、`description`、`tags`、`contextWindow`、`maxOutputTokens`、`scale`（1–5，缺省 3；`pricing` 已在 §2.12 移除）。
 - **文档影响**：`40-runtime/model-gateway.md` 增加目录数据说明；`scope-additions` 记录本变更。
 
@@ -214,6 +216,21 @@
   - 工具错误：从配对的 `tool_use` 解析工具名，显示「Tool failed: <name>」、可展开正文与复制按钮。
   - Runbar：步数 / token（输入↑ 输出↓）/ 耗时，不再显示成本。
 - **文档影响**：README（中英）、`design/SPEC.md`、`AGENT.md`。
+
+### 2.17 内联 HTML 界面块（HTML + 状态/表达式）
+
+- **原状**：Agent 通过 `ui_update` 把声明式视图树写到对话旁的工作台面板；用户要求去掉工作台，界面直接出现在回复正文里。
+- **参考**：本地参考项目 `references/open-intelligent-ui`（Open Intelligent UI，基于 OpenUI Lang；https://github.com/thesysdev/open-intelligent-ui）展示了足够强的目标：模型编排组件、输入绑定状态、页面内计算、图表/表单/动作。它本身是一门新语言，模型驾驭成本高；本实现保留它的**能力模型**（组件词汇、状态、表达式、动作），但把表面语言换成模型最熟悉的 HTML。
+- **当前实现**：
+  - 每次运行的模型调用都追加 `src-tauri/assets/inline-ui-system-prompt.txt`：引导模型在回复中用围栏代码块（语言标记 `html`）写 HTML，并只在需要时叠加 `data-ui-*` 与 `{{ }}`；没有按消息或按运行的用户开关。
+  - 状态：`<script type="application/json" data-ui-state>` 数据岛，`JSON.parse` 读取，永不执行；每次渲染按块源码缓存，刷新会话时保留用户在块内的选择（进程内）。
+  - 表达式：`src/components/uiExpression.ts` 使用固定文法（算术、比较、三元、成员/索引、白名单函数）求值，**不使用 `eval` / `new Function`**；`items.amount` 这类数组取字段、`filter/sort/toggle/sum` 等函数让页面内计算成为可能。
+  - 交互：`data-ui-bind` 双向绑定 input/select/textarea；`data-ui-set` 修改状态；`data-ui-send` / `data-ui-copy` / 表单提交沿用会话输入 owner，一次只允许一个运行；`data-ui-show` 条件显示；`<template data-ui-each>` 重复标记（≤200 行）。
+  - 组件：宿主 CSS 提供 `ui-grid`、`ui-card`、`ui-callout`、`ui-badge`、`ui-metrics`、`ui-steps`、`ui-kv`、`ui-chips`、`ui-num` 等词汇；`table.ui-chart` 由 `InlineChart.tsx` 绘制 bar/line/area，并提供无障碍表格；原生 `details`、`progress`、`meter`、表单控件与图片（仅对话中出现过的 https 地址）都可用；SVG 仅基础形状/文本。
+  - 安全：`RichHtml.tsx` 用 inert `DOMParser` 解析后按标签、class、属性白名单重建；脚本（数据岛除外）、样式、iframe、对象、事件属性、`style` 全部丢弃；链接仅 `http(s)`/`mailto`；图片仅 `https`；表达式错误只显示原文或空值，不执行。
+  - 流式：`inlineUi.ts` 把文本切成正文与 html 围栏，围栏内容边流边渲染；持久消息由 Markdown 渲染器统一处理。
+- **能力差异**：地图、图片搜索、日历、可编辑表格、沙盒 HTML/JS（`HtmlView`）与 OpenUI 的完整组件集未实现；没有模型编写的 JavaScript。需要用户选择时用表单或 `data-ui-send` 按钮；数据用表格、指标或图表表达。安全承诺不变：永不执行或注入模型生成的代码，也永不注入原始 HTML 字符串。
+- **文档影响**：README（中英）、`AGENT.md`、`design/SPEC.md`、`20-domain/domain-model.md`。
 
 ---
 

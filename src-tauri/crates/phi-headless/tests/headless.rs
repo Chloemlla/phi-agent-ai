@@ -389,6 +389,18 @@ fn scripted_response(request: &Value) -> Value {
         );
     }
 
+    if lower.contains("dashboard") {
+        // Inline interface blocks are ordinary assistant text: the node must
+        // journal the HTML fence exactly as the model produced it.
+        return message_response(
+            vec![json!({
+                "type": "text",
+                "text": "Here is the layout.\n\n```html\n<section>\n  <h2>Plan</h2>\n  <ol><li>Read</li><li>Change</li></ol>\n</section>\n```\n"
+            })],
+            "end_turn",
+        );
+    }
+
     let (name, input) = if lower.contains("write") {
         (
             "fs_write",
@@ -409,8 +421,6 @@ fn scripted_response(request: &Value) -> Value {
         )
     } else if lower.contains("recall") {
         ("memory_search", json!({ "query": "deploy target" }))
-    } else if lower.contains("dashboard") || lower.contains("plan") {
-        ("ui_update", json!({ "view": scripted_view() }))
     } else {
         ("fs_list", json!({ "path": "." }))
     };
@@ -432,30 +442,6 @@ fn message_response(content: Vec<Value>, stop_reason: &str) -> Value {
         "content": content,
         "stop_reason": stop_reason,
         "usage": { "input_tokens": 12, "output_tokens": 6 }
-    })
-}
-
-fn scripted_view() -> Value {
-    json!({
-        "version": 1,
-        "title": "Task plan",
-        "root": {
-            "kind": "stack",
-            "props": { "gap": "md" },
-            "children": [
-                { "kind": "text", "props": { "text": "A deterministic workbench view." } },
-                {
-                    "kind": "steps",
-                    "props": {
-                        "items": [
-                            { "title": "Read", "status": "done" },
-                            { "title": "Change", "status": "current" },
-                            { "title": "Verify", "status": "todo" }
-                        ]
-                    }
-                }
-            ]
-        }
     })
 }
 
@@ -567,19 +553,36 @@ fn handle_malformed_request(
 }
 
 #[test]
-fn workbench_run_updates_the_session_view() {
-    let env = TestEnv::new("workbench");
-    let _provider = env.with_scripted_provider();
-    let result = env.run("show me a small dashboard", &["--workbench"]);
+fn inline_html_replies_are_journaled_and_prompted() {
+    let env = TestEnv::new("inline-ui");
+    let provider = env.with_scripted_provider();
+    let result = env.run("show me a dashboard", &[]);
     assert_eq!(result["run"]["state"], "Succeeded");
-    assert_eq!(result["run"]["workbenchMode"], json!(true));
 
+    // Every model call carries the inline interface guidance.
+    let requests = provider.requests();
+    let system = requests[0]["system"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        system.contains("# Inline interface blocks"),
+        "system prompt is missing the inline UI guidance"
+    );
+
+    // The reply, including its HTML fence, is stored as ordinary text.
     let session = env.show(result["sessionId"].as_str().unwrap());
-    let view = &session["session"]["uiView"];
-    assert_eq!(view["version"], json!(1));
-    assert_eq!(view["root"]["kind"], "stack");
-    // The view is a full tree, not an opaque program string.
-    assert!(view["root"]["children"].as_array().unwrap().len() >= 2);
+    let text: String = session["session"]["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["role"] == "assistant")
+        .flat_map(|message| message["blocks"].as_array().into_iter().flatten())
+        .filter(|block| block["type"] == "text")
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("```html"), "assistant text lost the fence");
+    assert!(text.contains("<section>"), "assistant text lost the HTML");
 }
 
 #[test]

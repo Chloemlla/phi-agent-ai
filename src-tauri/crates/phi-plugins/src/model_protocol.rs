@@ -1594,7 +1594,6 @@ mod tests {
             call_id: "call".into(),
             run_id: "run".into(),
             stream: true,
-            workbench: false,
         }
     }
 

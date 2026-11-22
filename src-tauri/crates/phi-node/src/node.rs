@@ -228,7 +228,6 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     let tools = Arc::new(BuiltinToolsPlugin::new(
         sandbox.clone(),
         config.data_dir.join("backups"),
-        bus.clone(),
     ));
     let context = Arc::new(DefaultContextPlugin::new(sandbox.clone()));
 
@@ -597,7 +596,7 @@ impl Node {
         text: &str,
         provider_id: Option<&str>,
     ) -> Result<String, String> {
-        self.send_message_full(session_id, text, provider_id, false, None, None)
+        self.send_message_full(session_id, text, provider_id, None, None)
     }
 
     pub fn send_message_full(
@@ -605,7 +604,6 @@ impl Node {
         session_id: &str,
         text: &str,
         provider_id: Option<&str>,
-        workbench: bool,
         model: Option<&str>,
         thinking: Option<&str>,
     ) -> Result<String, String> {
@@ -672,7 +670,6 @@ impl Node {
             session_id: session_id.to_string(),
             turn_id: turn.turn_id,
             workspace,
-            workbench,
             model,
             thinking,
         })

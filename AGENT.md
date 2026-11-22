@@ -197,22 +197,47 @@ phi-headless memory forget <id> --reason "outdated"
 phi-headless memory stats
 ```
 
-## Workbench view
+## Inline interface blocks
 
-The main surface is a task workbench, not a chat log. The agent can call the
-`ui_update` tool to replace the view tree rendered beside the conversation.
-Views are declarative JSON data (`src-tauri/crates/phi-contracts/src/ui.rs`,
-version 1): layout, content and action kinds are allowlisted and the node
-validates every tree before it becomes a `UiViewUpdated` event. The shell
-renders the tree with a Solid component registry (`src/workbench/`); it never
-evaluates model-authored code. Buttons and forms can only submit a message or
-open an http(s) URL.
+The agent can put a small, working interface directly into its reply instead
+of into a separate panel. It writes ordinary HTML inside a fenced `html`
+block; the text around the fence is normal Markdown. Every run receives the
+guidance in `src-tauri/assets/inline-ui-system-prompt.txt`; there is no
+per-message or per-run switch, and the node stores the reply verbatim, so
+headless mode sees the fence like any other text.
 
-The desktop shell offers the tool on every run; the agent decides whether a
-visual layout helps, so there is no user-facing workbench toggle. The protocol
-prompt lives in `src-tauri/assets/workbench-system-prompt.txt`. Headless runs
-can still request a plain chat run without the tool to exercise the non-workbench
-path.
+The block is HTML plus a deliberately small layer:
+
+- a JSON data island (`<script type="application/json" data-ui-state>` or a
+  `data-ui-state` template) holds state; it is parsed with `JSON.parse` and
+  never executed;
+- `{{ expression }}` interpolates state into text and a few attributes, parsed
+  by `src/components/uiExpression.ts` (a fixed grammar: arithmetic,
+  comparisons, ternary, member/index access and a closed function set — never
+  `eval` or `new Function`);
+- `data-ui-bind` wires inputs, `data-ui-set` changes state,
+  `data-ui-send`/`data-ui-copy` act, `data-ui-show` hides, and
+  `<template data-ui-each>` repeats markup;
+- buttons and forms go through the same session turn as the composer.
+
+The shell never injects model HTML. `src/components/RichHtml.tsx` parses the
+block with an inert `DOMParser`, drops scripts, styles, iframes, objects and
+event attributes, and rebuilds allowlisted elements, host-owned classes and
+attributes as Solid JSX. Host CSS owns the look: cards, callouts, badges,
+metrics, steps, key/value rows, chips and form controls. `InlineChart.tsx`
+draws bar, line and area charts from a `table.ui-chart` with static rows.
+Links must be `http(s)`/`mailto`; images must be `https` and are expected to
+come from the conversation. Blocks render in the message flow, including
+while the reply streams (`src/components/inlineUi.ts`); the durable message
+goes through the same Markdown renderer. State is cached for the session,
+keyed by the block source, so choices survive transcript refreshes.
+
+There is no UI protocol, no live view event and no `ui_update` tool (the old
+`UiViewUpdated` variant survives only so pre-2026-11-20 journals replay).
+There is no model-authored JavaScript, no iframe or sandboxed page, and no
+map/photo search: the expression layer and host components are the whole
+surface. The old workbench protocol and its history are recorded in
+`docs/80-roadmap/scope-additions.md` §2.1–§2.2 and §2.17.
 
 ## Tests and CI
 

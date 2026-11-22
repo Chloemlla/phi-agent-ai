@@ -618,7 +618,6 @@ mod tests {
             call_id: "call".into(),
             run_id: "run".into(),
             stream: false,
-            workbench: false,
         };
         let error = gateway
             .invoke(req, CancellationToken::new())
@@ -661,7 +660,6 @@ mod tests {
             call_id: "call".into(),
             run_id: "run".into(),
             stream: false,
-            workbench: false,
         };
         let error = gateway
             .invoke(req, CancellationToken::new())

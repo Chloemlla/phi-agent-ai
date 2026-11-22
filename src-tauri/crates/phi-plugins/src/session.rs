@@ -11,7 +11,6 @@ use phi_kernel::event_bus::{EventBus, EventRecord, EventSink};
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::ports::{BlobPort, IdPort};
 use phi_kernel::registry::Contribution;
-use serde_json::Value;
 
 #[derive(Clone)]
 struct StoredMessage {
@@ -29,7 +28,6 @@ struct RunRecord {
     turn_id: String,
     state: String,
     steps: u64,
-    workbench_mode: bool,
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
@@ -68,7 +66,6 @@ struct StoredSession {
     runs: HashMap<String, RunRecord>,
     run_order: Vec<String>,
     turn_count: u64,
-    ui_view: Option<Value>,
 }
 
 #[derive(Default)]
@@ -300,7 +297,6 @@ impl SessionPort for SessionPlugin {
             updated_at: stored.updated_at.clone(),
             messages,
             runs,
-            ui_view: stored.ui_view.clone(),
         })
     }
 
@@ -466,7 +462,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     runs: HashMap::new(),
                     run_order: Vec::new(),
                     turn_count: 0,
-                    ui_view: None,
                 });
         }
         DomainEvent::TurnStarted {
@@ -500,7 +495,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             session_id,
             turn_id,
             task_id,
-            workbench,
         } => {
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 if !session.runs.contains_key(&run_id) {
@@ -514,7 +508,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                         turn_id,
                         state: "Scheduled".to_string(),
                         steps: 0,
-                        workbench_mode: workbench,
                         input_tokens: 0,
                         output_tokens: 0,
                         cache_read_tokens: 0,
@@ -628,12 +621,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 session.updated_at = record.ts.clone();
             }
         }
-        DomainEvent::UiViewUpdated { view, .. } => {
-            if let Some(session) = projection.sessions.get_mut(&record.aggregate_id) {
-                session.ui_view = Some(view);
-                session.updated_at = record.ts.clone();
-            }
-        }
         _ => {
             // Tool/model/approval leaf events only bump activity timestamps.
             if let Some(session) = projection.sessions.get_mut(&record.aggregate_id) {
@@ -665,7 +652,6 @@ fn run_view(r: &RunRecord) -> RunView {
         turn_id: r.turn_id.clone(),
         state: r.state.clone(),
         steps: r.steps,
-        workbench_mode: r.workbench_mode,
         input_tokens: r.input_tokens,
         output_tokens: r.output_tokens,
         cache_read_tokens: r.cache_read_tokens,
@@ -741,45 +727,6 @@ mod tests {
         assert_eq!(view.messages.len(), 1);
         assert_eq!(view.messages[0].blocks.len(), 1);
         assert_eq!(view.runs[0].state, "Succeeded");
-    }
-
-    #[test]
-    fn projects_the_latest_workbench_view() {
-        let dir = temp_dir("session-view");
-        let bus = Arc::new(EventBus::new(
-            Arc::new(JsonlJournal::new(dir.join("events.jsonl"))),
-            Arc::new(SystemClock::new()),
-            Arc::new(UuidIds),
-            Arc::new(StderrLog),
-        ));
-        let plugin = Arc::new(SessionPlugin::new(
-            bus.clone(),
-            Arc::new(UuidIds),
-            Arc::new(FsBlobStore::new(dir.join("blobs"))),
-            "node-test".to_string(),
-        ));
-        bus.subscribe(plugin.clone());
-
-        let session = plugin.create_session("t").unwrap();
-        assert!(plugin.get_session(&session.id).unwrap().ui_view.is_none());
-
-        for text in ["first", "second"] {
-            bus.publish(
-                &session.id,
-                "test",
-                &DomainEvent::UiViewUpdated {
-                    run_id: "run-1".to_string(),
-                    view: json!({
-                        "version": 1,
-                        "root": { "kind": "text", "props": { "text": text } }
-                    }),
-                },
-            )
-            .unwrap();
-        }
-
-        let view = plugin.get_session(&session.id).unwrap().ui_view.unwrap();
-        assert_eq!(view["root"]["props"]["text"], "second");
     }
 
     #[test]

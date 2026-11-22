@@ -32,8 +32,6 @@ pub struct RunView {
     pub turn_id: String,
     pub state: String,
     pub steps: u64,
-    /// True when the agent may shape the workbench view for this run.
-    pub workbench_mode: bool,
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(default)]
@@ -57,9 +55,6 @@ pub struct SessionView {
     pub updated_at: String,
     pub messages: Vec<MessageView>,
     pub runs: Vec<RunView>,
-    /// Latest workbench view tree for this session, if the agent has set one.
-    #[serde(default)]
-    pub ui_view: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
