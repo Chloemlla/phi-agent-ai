@@ -4,11 +4,7 @@
 import { For, Show } from "solid-js";
 import { t, tArgs } from "../i18n";
 import { IconEye, IconEyeOff } from "../components/Icons";
-import {
-  PROTOCOLS,
-  type ProviderInput,
-  type ProviderView,
-} from "./types";
+import { PROTOCOLS, type ProviderInput, type ProviderView } from "./types";
 import { protocolLabel, type FieldErrors } from "./providerForm";
 
 export function ProviderConnectionSection(props: {
@@ -77,11 +73,7 @@ export function ProviderConnectionSection(props: {
               type={props.showKey ? "text" : "password"}
               value={props.keyInput}
               onInput={(event) => props.onKeyInput(event.currentTarget.value)}
-              placeholder={
-                props.view?.keyHint
-                  ? "••••••••"
-                  : t("API key (optional)")
-              }
+              placeholder={props.view?.keyHint ? "••••••••" : t("API key (optional)")}
               autocomplete="off"
               autocapitalize="off"
               autocorrect="off"
@@ -107,9 +99,7 @@ export function ProviderConnectionSection(props: {
           </Show>
           <Show when={!props.view?.keyHint}>
             <span class="field-hint">
-              {t(
-                "Optional. Leave empty for endpoints that do not require authentication.",
-              )}
+              {t("Optional. Leave empty for endpoints that do not require authentication.")}
             </span>
           </Show>
           <Show when={props.isNew && props.view?.keyHint}>

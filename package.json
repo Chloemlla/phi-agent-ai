@@ -9,6 +9,10 @@
     "build": "vite build",
     "serve": "vite preview",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\" \"eslint.config.js\" \".prettierrc.json\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\" \"eslint.config.js\" \".prettierrc.json\"",
+    "types:generate": "cargo run --manifest-path src-tauri/Cargo.toml -p phi-node --bin export-types",
     "test": "bun --conditions=browser test --preload ./tests/dom.setup.ts --path-ignore-patterns='references/**'",
     "check": "bun run typecheck && bun run build",
     "tauri": "tauri"
@@ -27,11 +31,19 @@
   "devDependencies": {
     "@babel/core": "^7",
     "@babel/preset-typescript": "^7",
+    "@eslint/js": "^10.0.1",
     "@happy-dom/global-registrator": "^21.0.4",
     "@tauri-apps/cli": "^2",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "babel-preset-solid": "^1",
+    "eslint": "^10.15.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-solid": "^0.20.1",
+    "globals": "^17.14.0",
     "happy-dom": "^21.0.4",
-    "typescript": "^7",
+    "prettier": "^3.10.1",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.73.0",
     "vite": "^8",
     "vite-plugin-solid": "^2"
   }

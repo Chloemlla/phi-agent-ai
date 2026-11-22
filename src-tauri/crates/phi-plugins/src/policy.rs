@@ -127,6 +127,12 @@ impl PolicyPort for DefaultPolicyPlugin {
                     "Memory writes pass the admission barrier and can be forgotten later",
                 ),
             },
+            "delegate" | "wait_for_agents" | "send_message" | "cancel_agent" => PolicyDecision {
+                effect: PolicyEffect::Allow,
+                rationale: i18n::t(
+                    "Agent coordination does not touch the workspace; each subagent action is still policy-checked",
+                ),
+            },
             other => PolicyDecision {
                 effect: PolicyEffect::Deny,
                 rationale: i18n::t_args(

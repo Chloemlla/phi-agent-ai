@@ -11,9 +11,10 @@
 //! comparison is also chronological comparison.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Where a fact came from. Used for attribution and retrieval ranking.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryScope {
     User,
@@ -34,7 +35,7 @@ impl MemoryScope {
 }
 
 /// Trust of the original source. Higher ranks are more trustworthy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceTrust {
     /// The user said it directly.
@@ -82,7 +83,7 @@ impl SourceTrust {
 
 /// Lifecycle state of a fact. `Invalidated` and `Superseded` are terminal for
 /// retrieval but remain stored for traceability.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryState {
     Active,
@@ -101,7 +102,7 @@ impl MemoryState {
 }
 
 /// A derived fact: the source of truth for what the agent believes.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryRecord {
     pub id: String,
@@ -188,7 +189,7 @@ impl EpisodeSource {
 
 /// Stable reason codes for admission rejection. The message shown to a human
 /// is localized separately; the code is data and safe to test against.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionRejection {
     Empty,

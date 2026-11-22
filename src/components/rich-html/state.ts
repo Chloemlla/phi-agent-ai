@@ -70,9 +70,7 @@ function parseState(source: string): UiValues {
 
 export function parseBlock(html: string): { body: Element; state: UiValues } {
   const document = new DOMParser().parseFromString(html, "text/html");
-  const script = document.querySelector(
-    'script[type="application/json"][data-ui-state]',
-  );
+  const script = document.querySelector('script[type="application/json"][data-ui-state]');
   // A template with the same attribute is an equally inert alternative for
   // models that prefer not to write a script tag.
   const template = document.querySelector("template[data-ui-state]");

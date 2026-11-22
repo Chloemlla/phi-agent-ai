@@ -71,6 +71,8 @@ enum Command {
     Run(RunArgs),
     SessionsList,
     SessionsShow(String),
+    AgentsList(String),
+    AgentsShow(String),
     Approve {
         id: String,
         approved: bool,
@@ -163,6 +165,26 @@ async fn execute(global: GlobalOptions, command: Command) -> Result<i32, String>
         Command::SessionsShow(id) => {
             let node = open_node(&global, false)?;
             print_json(&node.get_session(&id)?)?;
+            Ok(0)
+        }
+        Command::AgentsList(session_id) => {
+            let node = open_node(&global, false)?;
+            print_json(&serde_json::json!({
+                "type": "agents",
+                "sessionId": session_id,
+                "agents": node.agents(&session_id),
+            }))?;
+            Ok(0)
+        }
+        Command::AgentsShow(agent_id) => {
+            let node = open_node(&global, false)?;
+            let agent = node.agent(&agent_id);
+            let messages = node.agent_messages(&agent_id);
+            print_json(&serde_json::json!({
+                "type": "agent",
+                "agent": agent,
+                "messages": messages,
+            }))?;
             Ok(0)
         }
         Command::Approve { id, approved, note } => {
@@ -452,7 +474,7 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
         }
     };
 
-    let result = wait_for_terminal(&node, &session_id).await;
+    let result = wait_for_terminal(&node, &session_id, &run_id).await;
     worker.abort();
     let run = result?;
 
@@ -483,10 +505,10 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
     })
 }
 
-async fn wait_for_terminal(node: &Node, session_id: &str) -> Result<RunView, String> {
+async fn wait_for_terminal(node: &Node, session_id: &str, run_id: &str) -> Result<RunView, String> {
     loop {
         if let Some(session) = node.session_view(session_id) {
-            if let Some(run) = session.runs.last() {
+            if let Some(run) = session.runs.iter().find(|run| run.id == run_id) {
                 if matches!(
                     run.state.as_str(),
                     "Succeeded" | "Failed" | "Aborted" | "AwaitingReconciliation"
@@ -658,6 +680,21 @@ fn parse_cli(raw: Vec<String>) -> Result<(GlobalOptions, Command), String> {
                 return Err(i18n::t_args(
                     "Unknown sessions subcommand: {command}",
                     &[("command", other.to_string())],
+                ));
+            }
+        },
+        "agents" => match rest.first().map(String::as_str) {
+            Some("list") => Command::AgentsList(parse_id(rest, 1)?),
+            Some("show") => Command::AgentsShow(parse_id(rest, 1)?),
+            Some(other) => {
+                return Err(i18n::t_args(
+                    "Unknown agents subcommand: {command}",
+                    &[("command", other.to_string())],
+                ));
+            }
+            None => {
+                return Err(i18n::t(
+                    "agents requires a subcommand: list <session-id> or show <agent-id>",
                 ));
             }
         },
@@ -1358,6 +1395,8 @@ Commands:
       [--approval deny|allow|prompt] [--no-stream] [--title TEXT]
   sessions list
   sessions show <id>
+  agents list <session-id>
+  agents show <agent-id>
   approve <id> --allow|--deny [--note TEXT]
   cancel <run-id>
   status <run-id>

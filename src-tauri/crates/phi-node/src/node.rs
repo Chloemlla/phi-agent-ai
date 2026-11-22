@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::Serialize;
+use ts_rs::TS;
 
 use phi_adapters::config::ConfigStore;
 use phi_adapters::control;
@@ -28,8 +29,9 @@ use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, Provid
 use phi_contracts::services::Services;
 use phi_contracts::stream::{StreamHub, StreamPort};
 use phi_contracts::{REQUIRED_SLOTS, SLOT_PERSISTENCE_JOURNAL};
+use phi_domain::agent::{AgentRole, AgentView, WorkMode};
 use phi_domain::memory::{Episode, MemoryRecord};
-use phi_domain::message::{ContentBlock, Role};
+use phi_domain::message::{ChatMessage, ContentBlock, Role};
 use phi_domain::view::{PendingApprovalView, SessionSummary, SessionView};
 use phi_i18n as i18n;
 use phi_kernel::event_bus::{EventBus, EventSink};
@@ -46,6 +48,7 @@ use phi_plugins::provider_store::ProviderStore;
 use phi_plugins::sandbox::FsSandboxPlugin;
 use phi_plugins::session::SessionPlugin;
 use phi_plugins::store::StorePlugin;
+use phi_plugins::subagent::SubagentToolsPlugin;
 use phi_plugins::tools::BuiltinToolsPlugin;
 
 #[derive(Clone)]
@@ -93,7 +96,7 @@ pub struct Node {
     _data_lock: Option<DataDirLock>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
     pub node_id: String,
@@ -111,14 +114,14 @@ pub struct Bootstrap {
     pub platform: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDetail {
     pub session: SessionView,
     pub pending_approvals: Vec<PendingApprovalView>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendResult {
     pub run_id: String,
@@ -286,6 +289,14 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     ));
     services.set_runtime(runtime.clone());
 
+    let subagent = Arc::new(SubagentToolsPlugin::new(
+        services.clone(),
+        bus.clone(),
+        ids.clone(),
+        log.clone(),
+    ));
+    services.add_tool_provider(subagent.clone());
+
     let registry = Arc::new(Registry::new());
     let kernel = Arc::new(Kernel::new(bus.clone(), registry.clone(), log.clone()));
     kernel.add_plugin(Arc::new(StorePlugin::new(journal.clone(), blob.clone())));
@@ -297,6 +308,7 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     kernel.add_plugin(tools.clone());
     kernel.add_plugin(context.clone());
     kernel.add_plugin(runtime.clone());
+    kernel.add_plugin(subagent.clone());
     if let Some(memory) = &memory {
         kernel.add_plugin(memory.clone());
     }
@@ -518,6 +530,25 @@ impl Node {
             .and_then(|session| session.get_session(session_id))
     }
 
+    pub fn agents(&self, session_id: &str) -> Vec<AgentView> {
+        self.services
+            .session()
+            .map(|session| session.agents(session_id))
+            .unwrap_or_default()
+    }
+
+    pub fn agent(&self, agent_id: &str) -> Option<AgentView> {
+        self.services
+            .session()
+            .and_then(|session| session.agent(agent_id))
+    }
+
+    pub fn agent_messages(&self, agent_id: &str) -> Option<Vec<ChatMessage>> {
+        let session = self.services.session()?;
+        let agent = session.agent(agent_id)?;
+        Some(session.messages_for_thread(&agent.session_id, &agent.thread_id))
+    }
+
     pub fn pending_approvals(&self, session_id: &str) -> Vec<PendingApprovalView> {
         self.services
             .approver()
@@ -672,6 +703,16 @@ impl Node {
             workspace,
             model,
             thinking,
+            // A user turn starts the lead run; the runtime assigns the lead
+            // agent id and thread when the session has no agent yet.
+            parent_run_id: None,
+            agent_id: None,
+            thread_id: None,
+            root_agent_id: None,
+            role: AgentRole::Lead,
+            report_to: None,
+            work_mode: WorkMode::Shared,
+            lead_scale: None,
         })
     }
 
@@ -747,6 +788,9 @@ impl Node {
             session_id,
             state: run.state,
             steps: run.steps,
+            agent_id: run.agent_id,
+            thread_id: run.thread_id,
+            parent_run_id: run.parent_run_id,
         })
     }
 

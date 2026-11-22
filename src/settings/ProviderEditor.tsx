@@ -166,9 +166,7 @@ export function ProviderEditor(props: {
     setHeaders(next);
     update({
       headers: Object.fromEntries(
-        next
-          .filter((row) => row.key.trim() !== "")
-          .map((row) => [row.key.trim(), row.value]),
+        next.filter((row) => row.key.trim() !== "").map((row) => [row.key.trim(), row.value]),
       ),
     });
   }
@@ -250,9 +248,7 @@ export function ProviderEditor(props: {
                     <Show when={props.view?.active}>
                       <span class="provider-active">{t("Active")}</span>
                     </Show>
-                    <span class="mono">
-                      {protocolLabel(props.draft.protocol ?? "openai_chat")}
-                    </span>
+                    <span class="mono">{protocolLabel(props.draft.protocol ?? "openai_chat")}</span>
                   </div>
                 </>
               }
@@ -380,12 +376,7 @@ export function ProviderEditor(props: {
             <Show
               when={confirmDelete()}
               fallback={
-                <button
-                  type="button"
-                  class="btn danger"
-                  disabled={props.busy}
-                  onClick={armDelete}
-                >
+                <button type="button" class="btn danger" disabled={props.busy} onClick={armDelete}>
                   <IconTrash size={14} />
                   {t("Delete provider")}
                 </button>
@@ -405,12 +396,7 @@ export function ProviderEditor(props: {
                 >
                   {t("Confirm delete")}
                 </button>
-                <button
-                  type="button"
-                  class="btn"
-                  disabled={props.busy}
-                  onClick={disarmDelete}
-                >
+                <button type="button" class="btn" disabled={props.busy} onClick={disarmDelete}>
                   {t("Cancel")}
                 </button>
               </div>

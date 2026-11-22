@@ -310,7 +310,9 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       </section>
 
       <Show when={error()}>
-        <div class="banner danger" role="alert">{error()}</div>
+        <div class="banner danger" role="alert">
+          {error()}
+        </div>
       </Show>
       <Show when={notice()}>
         <div class="settings-note" role="status">
@@ -364,10 +366,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
                 disabled={busy()}
                 onClick={() => forget(memory)}
               >
-                <Show
-                  when={pendingDelete() === memory.id}
-                  fallback={<IconTrash size={14} />}
-                >
+                <Show when={pendingDelete() === memory.id} fallback={<IconTrash size={14} />}>
                   <IconCheck size={14} />
                 </Show>
               </button>

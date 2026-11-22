@@ -111,9 +111,7 @@ describe("RichHtml sanitizer", () => {
   });
 
   test("a send button is disabled when onSend is absent", () => {
-    const host = mount(() =>
-      RichHtml({ html: "<button data-ui-send>Send report</button>" }),
-    );
+    const host = mount(() => RichHtml({ html: "<button data-ui-send>Send report</button>" }));
 
     expect(host.querySelector("button")?.disabled).toBe(true);
   });
@@ -129,9 +127,7 @@ describe("Markdown renderer", () => {
   });
 
   test("does not render a javascript: link as an href", () => {
-    const host = mount(() =>
-      Markdown({ text: "[click](javascript:alert(1)) and **bold**" }),
-    );
+    const host = mount(() => Markdown({ text: "[click](javascript:alert(1)) and **bold**" }));
 
     expect(host.querySelectorAll("a")).toHaveLength(0);
     expect(host.querySelector("a[href]")).toBeNull();

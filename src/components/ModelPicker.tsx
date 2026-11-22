@@ -1,14 +1,7 @@
 // Model chip and menu. Desktop reveals thinking effort on hover; coarse
 // pointers expand it inline. The selection itself lives in App.
 
-import {
-  For,
-  Show,
-  createEffect,
-  createSignal,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { t } from "../i18n";
 import {
   THINKING_LEVELS,
@@ -98,24 +91,17 @@ export function ModelPicker(props: {
     const enabled = provider.models.filter((model) => model.enabled);
     if (enabled.length > 0) return enabled;
     const fallback = props.fallbackModel || provider.model;
-    return fallback
-      ? [{ id: fallback, name: fallback, enabled: true }]
-      : [];
+    return fallback ? [{ id: fallback, name: fallback, enabled: true }] : [];
   };
 
-  const currentModel = () =>
-    models().find((model) => model.id === props.value?.modelId) ?? null;
+  const currentModel = () => models().find((model) => model.id === props.value?.modelId) ?? null;
 
   const currentName = () =>
-    currentModel()?.name ||
-    props.value?.modelId ||
-    props.fallbackModel ||
-    t("No model");
+    currentModel()?.name || props.value?.modelId || props.fallbackModel || t("No model");
 
   const currentThinking = (): ThinkingLevel => props.value?.thinking ?? "off";
 
-  const hoveredModel = () =>
-    models().find((model) => model.id === hovered()) ?? null;
+  const hoveredModel = () => models().find((model) => model.id === hovered()) ?? null;
 
   const floatingModel = () => {
     if (inlineEffort()) return null;
@@ -175,9 +161,7 @@ export function ModelPicker(props: {
     setOpen(true);
     queueMicrotask(() => {
       const rows = rootRef?.querySelectorAll<HTMLButtonElement>(".model-row");
-      const target =
-        rootRef?.querySelector<HTMLButtonElement>(".model-row.current") ??
-        rows?.[0];
+      const target = rootRef?.querySelector<HTMLButtonElement>(".model-row.current") ?? rows?.[0];
       target?.focus();
     });
   }
@@ -228,9 +212,7 @@ export function ModelPicker(props: {
       return;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      const rows = Array.from(
-        rootRef?.querySelectorAll<HTMLButtonElement>(".model-row") ?? [],
-      );
+      const rows = Array.from(rootRef?.querySelectorAll<HTMLButtonElement>(".model-row") ?? []);
       if (rows.length === 0) return;
       const active = document.activeElement as HTMLElement | null;
       const index = active ? rows.indexOf(active as HTMLButtonElement) : -1;
@@ -244,9 +226,7 @@ export function ModelPicker(props: {
     }
     if (event.key === "ArrowRight" && !inlineEffort()) {
       const row = (event.target as HTMLElement | null)?.closest(".model-row");
-      const effort = rootRef?.querySelector<HTMLButtonElement>(
-        ".model-submenu .model-effort",
-      );
+      const effort = rootRef?.querySelector<HTMLButtonElement>(".model-submenu .model-effort");
       if (row && effort) {
         effort.focus();
         event.preventDefault();
@@ -303,20 +283,13 @@ export function ModelPicker(props: {
       return t("No model provider is configured. Add one in Settings.");
     }
     if (props.disabled) {
-      return (
-        props.disabledHint ??
-        t("The model cannot be changed while a run is active.")
-      );
+      return props.disabledHint ?? t("The model cannot be changed while a run is active.");
     }
     return t("Choose the model and thinking effort");
   };
 
   return (
-    <div
-      class="model-picker"
-      classList={{ coarse: coarse(), open: open() }}
-      ref={rootRef}
-    >
+    <div class="model-picker" classList={{ coarse: coarse(), open: open() }} ref={rootRef}>
       <button
         type="button"
         class="model-chip"
@@ -348,11 +321,7 @@ export function ModelPicker(props: {
 
           <Show
             when={models().length > 0}
-            fallback={
-              <p class="model-note">
-                {t("No models are enabled for this provider.")}
-              </p>
-            }
+            fallback={<p class="model-note">{t("No models are enabled for this provider.")}</p>}
           >
             <div class="model-list" onScroll={() => setHovered(null)}>
               <For each={models()}>
@@ -362,9 +331,7 @@ export function ModelPicker(props: {
                     <div
                       class="model-item"
                       classList={{ expanded: expanded() === model.id }}
-                      onMouseEnter={(event) =>
-                        showHovered(model, event.currentTarget)
-                      }
+                      onMouseEnter={(event) => showHovered(model, event.currentTarget)}
                       onMouseLeave={scheduleHide}
                     >
                       <button
@@ -373,14 +340,10 @@ export function ModelPicker(props: {
                         classList={{ current: selected() }}
                         role="menuitem"
                         aria-haspopup="menu"
-                        onFocus={(event) =>
-                          showHovered(model, event.currentTarget)
-                        }
+                        onFocus={(event) => showHovered(model, event.currentTarget)}
                         onClick={() => handleModelClick(model)}
                       >
-                        <span class="model-row-name">
-                          {model.name || model.id}
-                        </span>
+                        <span class="model-row-name">{model.name || model.id}</span>
                         <Show when={selected()}>
                           <span class="model-row-check">
                             <IconCheck size={13} />
@@ -394,17 +357,11 @@ export function ModelPicker(props: {
                       </button>
 
                       <Show when={inlineEffort() && expanded() === model.id}>
-                        <div
-                          class="model-submenu"
-                          role="menu"
-                          aria-label={t("Thinking")}
-                        >
+                        <div class="model-submenu" role="menu" aria-label={t("Thinking")}>
                           <ThinkingChoices
                             model={model}
                             selected={selected()}
-                            current={
-                              selected() ? currentThinking() : "off"
-                            }
+                            current={selected() ? currentThinking() : "off"}
                             onChoose={chooseEffort}
                           />
                         </div>
@@ -429,11 +386,7 @@ export function ModelPicker(props: {
                   <ThinkingChoices
                     model={model()}
                     selected={props.value?.modelId === model().id}
-                    current={
-                      props.value?.modelId === model().id
-                        ? currentThinking()
-                        : "off"
-                    }
+                    current={props.value?.modelId === model().id ? currentThinking() : "off"}
                     onChoose={chooseEffort}
                   />
                 </div>

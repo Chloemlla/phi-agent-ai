@@ -15,6 +15,7 @@ use phi_contracts::ports::{
 use phi_contracts::util::{
     ResourceIdentity, action_digest, args_preview, resource_identity, truncate_chars,
 };
+use phi_domain::agent::{AgentRole, AgentStatus, MessageKind, WorkMode};
 use phi_domain::events::DomainEvent;
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
 use phi_i18n as i18n;
@@ -30,6 +31,9 @@ use crate::memory::redact_secrets;
 struct RunControl {
     cancel: CancellationToken,
     status: Arc<Mutex<RunStatus>>,
+    session_id: String,
+    root_agent_id: String,
+    parent_run_id: Option<String>,
 }
 
 pub struct LoopPlugin {
@@ -79,17 +83,164 @@ impl RuntimePort for LoopPlugin {
         let session = self.services.session().ok_or_else(|| {
             i18n::t("Session store is not available (session.store slot is missing)")
         })?;
-        if let Some(active) = session.active_run(&req.session_id) {
-            return Err(i18n::t_args(
-                "This session still has a running task: {run_id}",
-                &[("run_id", active)],
-            ));
-        }
+        let model = self
+            .services
+            .model()
+            .ok_or_else(|| i18n::t("Model gateway is not available"))?;
         if !req.workspace.is_dir() {
             return Err(i18n::t("Workspace does not exist or is not a directory"));
         }
 
         let run_id = self.ids.new_id("run");
+        let is_child = req.parent_run_id.is_some();
+        let mut root_agent_id = req.root_agent_id.clone();
+        let (agent_id, thread_id, work_mode, report_to, resolved_model, lead_scale) = if is_child {
+            let parent_run_id = req.parent_run_id.clone().unwrap_or_default();
+            let (parent_session, parent) = session.find_run(&parent_run_id).ok_or_else(|| {
+                i18n::t_args(
+                    "Parent run not found: {run_id}",
+                    &[("run_id", parent_run_id.clone())],
+                )
+            })?;
+            if parent_session != req.session_id {
+                return Err(i18n::t("The parent run belongs to another session"));
+            }
+            if !parent.is_active() {
+                return Err(i18n::t("The parent run is no longer active"));
+            }
+            if parent.parent_run_id.is_some() {
+                return Err(i18n::t("A subagent cannot delegate to another subagent"));
+            }
+            let agent_id = req
+                .agent_id
+                .clone()
+                .ok_or_else(|| i18n::t("A subagent run requires an agent id"))?;
+            let thread_id = req
+                .thread_id
+                .clone()
+                .ok_or_else(|| i18n::t("A subagent run requires a thread id"))?;
+            if session.agent(&agent_id).is_none() {
+                return Err(i18n::t_args(
+                    "Unknown subagent: {agent}",
+                    &[("agent", agent_id.clone())],
+                ));
+            }
+            if session.active_run_for_agent(&agent_id).is_some() {
+                return Err(i18n::t_args(
+                    "Subagent {agent} is already running",
+                    &[("agent", agent_id.clone())],
+                ));
+            }
+            let work_mode = req.work_mode;
+            if work_mode == WorkMode::Shared {
+                if let Some(holder) = session.write_lease_holder(&req.session_id) {
+                    if holder != agent_id {
+                        return Err(i18n::t("Another agent holds the workspace write lease"));
+                    }
+                }
+            }
+            let resolved = model.resolve_model(req.model.as_deref().unwrap_or(""));
+            let roster = model.roster();
+            let spec = roster
+                .iter()
+                .find(|model| model.id.eq_ignore_ascii_case(&resolved))
+                .ok_or_else(|| {
+                    i18n::t_args(
+                        "Unknown subagent model: {model}",
+                        &[("model", resolved.clone())],
+                    )
+                })?;
+            let lead_scale = req.lead_scale.unwrap_or_else(|| {
+                session
+                    .lead_agent(&req.session_id)
+                    .and_then(|lead| {
+                        roster
+                            .iter()
+                            .find(|model| model.id.eq_ignore_ascii_case(&lead.model))
+                            .map(|model| model.scale)
+                    })
+                    .unwrap_or(3)
+            });
+            if spec.scale > lead_scale {
+                return Err(i18n::t_args(
+                    "Subagent model {model} is more capable than the lead model",
+                    &[("model", resolved.clone())],
+                ));
+            }
+            if root_agent_id.is_none() {
+                root_agent_id = session
+                    .lead_agent(&req.session_id)
+                    .map(|lead| lead.id)
+                    .or_else(|| Some(agent_id.clone()));
+            }
+            (
+                agent_id,
+                thread_id,
+                work_mode,
+                req.report_to.clone(),
+                resolved,
+                lead_scale,
+            )
+        } else {
+            if session.active_root_run(&req.session_id).is_some() {
+                return Err(i18n::t_args(
+                    "This session still has a running task: {run_id}",
+                    &[(
+                        "run_id",
+                        session.active_root_run(&req.session_id).unwrap_or_default(),
+                    )],
+                ));
+            }
+            let resolved = model.resolve_model(req.model.as_deref().unwrap_or("default"));
+            let lead_scale = model
+                .roster()
+                .iter()
+                .find(|model| model.id.eq_ignore_ascii_case(&resolved))
+                .map(|model| model.scale)
+                .unwrap_or(3);
+            let lead = session.lead_agent(&req.session_id);
+            let (agent_id, thread_id) = match lead {
+                Some(lead) => (lead.id, lead.thread_id),
+                None => {
+                    let agent_id = self.ids.new_id("agent");
+                    let thread_id = "main".to_string();
+                    self.bus.publish(
+                        &req.session_id,
+                        "plugin-loop",
+                        &DomainEvent::AgentCreated {
+                            agent_id: agent_id.clone(),
+                            session_id: req.session_id.clone(),
+                            turn_id: req.turn_id.clone(),
+                            role: AgentRole::Lead,
+                            parent_agent_id: None,
+                            root_agent_id: agent_id.clone(),
+                            model: resolved.clone(),
+                            thinking: req.thinking.map(|thinking| thinking.as_str().to_string()),
+                            thread_id: thread_id.clone(),
+                            work_mode: WorkMode::Shared,
+                            report_to: None,
+                            spawned_by_run_id: run_id.clone(),
+                        },
+                    )?;
+                    (agent_id, thread_id)
+                }
+            };
+            (
+                agent_id,
+                thread_id,
+                WorkMode::Shared,
+                None,
+                resolved,
+                lead_scale,
+            )
+        };
+        let root_agent_id = root_agent_id.unwrap_or_else(|| agent_id.clone());
+        let role = if is_child {
+            AgentRole::Subagent
+        } else {
+            AgentRole::Lead
+        };
+        let parent_run_id = req.parent_run_id.clone();
 
         self.bus.publish(
             &req.session_id,
@@ -98,6 +249,9 @@ impl RuntimePort for LoopPlugin {
                 run_id: run_id.clone(),
                 session_id: req.session_id.clone(),
                 turn_id: req.turn_id.clone(),
+                agent_id: Some(agent_id.clone()),
+                thread_id: Some(thread_id.clone()),
+                parent_run_id: parent_run_id.clone(),
             },
         )?;
 
@@ -106,6 +260,9 @@ impl RuntimePort for LoopPlugin {
             session_id: req.session_id.clone(),
             state: "Scheduled".to_string(),
             steps: 0,
+            agent_id: Some(agent_id.clone()),
+            thread_id: Some(thread_id.clone()),
+            parent_run_id: parent_run_id.clone(),
         }));
         let cancel = CancellationToken::new();
         {
@@ -115,6 +272,9 @@ impl RuntimePort for LoopPlugin {
                 RunControl {
                     cancel: cancel.clone(),
                     status: status.clone(),
+                    session_id: req.session_id.clone(),
+                    root_agent_id: root_agent_id.clone(),
+                    parent_run_id: parent_run_id.clone(),
                 },
             );
         }
@@ -129,8 +289,16 @@ impl RuntimePort for LoopPlugin {
             session_id: req.session_id,
             turn_id: req.turn_id,
             workspace: req.workspace,
-            model: req.model,
+            resolved_model,
             thinking: req.thinking,
+            role,
+            agent_id,
+            root_agent_id,
+            thread_id,
+            parent_run_id,
+            work_mode,
+            report_to,
+            lead_scale,
             cancel,
             status,
         };
@@ -140,14 +308,29 @@ impl RuntimePort for LoopPlugin {
 
     fn cancel(&self, run_id: &str, reason: &str) -> bool {
         let running = self.running.lock().unwrap();
-        if let Some(control) = running.get(run_id) {
-            self.log
-                .info(&format!("cancel requested for {run_id}: {reason}"));
-            control.cancel.cancel();
-            true
-        } else {
-            false
+        let Some(control) = running.get(run_id) else {
+            return false;
+        };
+        self.log
+            .info(&format!("cancel requested for {run_id}: {reason}"));
+        control.cancel.cancel();
+        if control.parent_run_id.is_none() {
+            let session_id = control.session_id.clone();
+            let root_agent_id = control.root_agent_id.clone();
+            let descendants: Vec<CancellationToken> = running
+                .values()
+                .filter(|other| {
+                    other.session_id == session_id
+                        && other.root_agent_id == root_agent_id
+                        && other.parent_run_id.is_some()
+                })
+                .map(|other| other.cancel.clone())
+                .collect();
+            for token in descendants {
+                token.cancel();
+            }
         }
+        true
     }
 
     fn status(&self, run_id: &str) -> Option<RunStatus> {
@@ -169,10 +352,18 @@ struct RunContext {
     session_id: String,
     turn_id: String,
     workspace: PathBuf,
-    /// Per-message model override, if the shell selected one.
-    model: Option<String>,
+    /// The model id after provider mapping; this is what the gateway receives.
+    resolved_model: String,
     /// Per-message extended reasoning effort.
     thinking: Option<ThinkingEffort>,
+    role: AgentRole,
+    agent_id: String,
+    root_agent_id: String,
+    thread_id: String,
+    parent_run_id: Option<String>,
+    work_mode: WorkMode,
+    report_to: Option<String>,
+    lead_scale: u8,
     cancel: CancellationToken,
     status: Arc<Mutex<RunStatus>>,
 }
@@ -194,6 +385,32 @@ enum RunOutcome {
 
 async fn run_loop(ctx: RunContext) {
     let outcome = run_inner(&ctx).await;
+    let agent_status = outcome.agent_status();
+
+    if ctx.role == AgentRole::Lead {
+        cancel_descendants(&ctx);
+    }
+
+    let (report_message_id, delivered_to) = if ctx.role == AgentRole::Subagent {
+        deliver_report(&ctx, &outcome)
+    } else {
+        (None, None)
+    };
+
+    if ctx.role == AgentRole::Subagent {
+        let _ = ctx.bus.publish(
+            &ctx.session_id,
+            "plugin-loop",
+            &DomainEvent::AgentReported {
+                agent_id: ctx.agent_id.clone(),
+                session_id: ctx.session_id.clone(),
+                run_id: ctx.run_id.clone(),
+                status: agent_status,
+                report_message_id: report_message_id.clone().unwrap_or_default(),
+                delivered_to: delivered_to.clone(),
+            },
+        );
+    }
 
     let state = match outcome {
         RunOutcome::Succeeded => {
@@ -212,7 +429,7 @@ async fn run_loop(ctx: RunContext) {
                 "plugin-loop",
                 &DomainEvent::RunFailed {
                     run_id: ctx.run_id.clone(),
-                    error,
+                    error: error.clone(),
                 },
             );
             "Failed"
@@ -223,32 +440,158 @@ async fn run_loop(ctx: RunContext) {
                 "plugin-loop",
                 &DomainEvent::RunAborted {
                     run_id: ctx.run_id.clone(),
-                    reason,
-                    stop_confirmation: stop,
+                    reason: reason.clone(),
+                    stop_confirmation: stop.clone(),
                 },
             );
             "Aborted"
         }
     };
 
+    let _ = ctx.bus.publish(
+        &ctx.session_id,
+        "plugin-loop",
+        &DomainEvent::AgentStatusChanged {
+            agent_id: ctx.agent_id.clone(),
+            session_id: ctx.session_id.clone(),
+            status: agent_status,
+            note: None,
+        },
+    );
+
     {
         let mut status = ctx.status.lock().unwrap();
         status.state = state.to_string();
     }
 
-    let _ = ctx.bus.publish(
-        &ctx.session_id,
-        "plugin-loop",
-        &DomainEvent::TurnClosed {
-            turn_id: ctx.turn_id.clone(),
-            terminal_run_id: ctx.run_id.clone(),
-        },
-    );
+    if ctx.role == AgentRole::Lead {
+        let _ = ctx.bus.publish(
+            &ctx.session_id,
+            "plugin-loop",
+            &DomainEvent::TurnClosed {
+                turn_id: ctx.turn_id.clone(),
+                terminal_run_id: ctx.run_id.clone(),
+            },
+        );
+    }
 
     {
         let mut running = ctx.running.lock().unwrap();
         running.remove(&ctx.run_id);
     }
+}
+
+impl RunOutcome {
+    fn agent_status(&self) -> AgentStatus {
+        match self {
+            RunOutcome::Succeeded => AgentStatus::Succeeded,
+            RunOutcome::Failed(_) => AgentStatus::Failed,
+            RunOutcome::Aborted { .. } => AgentStatus::Cancelled,
+        }
+    }
+}
+
+fn cancel_descendants(ctx: &RunContext) {
+    let running = ctx.running.lock().unwrap();
+    let descendants: Vec<CancellationToken> = running
+        .values()
+        .filter(|control| {
+            control.session_id == ctx.session_id
+                && control.root_agent_id == ctx.root_agent_id
+                && control.parent_run_id.is_some()
+        })
+        .map(|control| control.cancel.clone())
+        .collect();
+    drop(running);
+    for token in descendants {
+        token.cancel();
+    }
+}
+
+fn deliver_report(ctx: &RunContext, outcome: &RunOutcome) -> (Option<String>, Option<String>) {
+    let Some(session) = ctx.services.session() else {
+        return (None, None);
+    };
+    // If the requester already reached a terminal state, do not append a
+    // report to a closed turn. The cancellation record still exists.
+    if let Some(parent_run_id) = &ctx.parent_run_id {
+        match session.find_run(parent_run_id) {
+            Some((_, parent)) if parent.is_active() => {}
+            _ => return (None, None),
+        }
+    }
+    let report = match outcome {
+        RunOutcome::Succeeded => last_assistant_text(&session, ctx),
+        RunOutcome::Failed(error) => {
+            i18n::t_args("The subagent failed: {error}", &[("error", error.clone())])
+        }
+        RunOutcome::Aborted { reason, stop } => i18n::t_args(
+            "The subagent was stopped: {reason}. {stop}",
+            &[("reason", reason.clone()), ("stop", stop.clone())],
+        ),
+    };
+    let requester = session
+        .agent(&ctx.agent_id)
+        .and_then(|agent| agent.report_to)
+        .or_else(|| session.lead_agent(&ctx.session_id).map(|agent| agent.id));
+    let Some(requester) = requester else {
+        return (None, None);
+    };
+    let lead_id = session.lead_agent(&ctx.session_id).map(|agent| agent.id);
+    let thread_id = if lead_id.as_deref() == Some(requester.as_str()) {
+        "main".to_string()
+    } else {
+        match session.agent(&requester) {
+            Some(agent) => agent.thread_id,
+            None => "main".to_string(),
+        }
+    };
+    let text = i18n::t_args(
+        "Report from subagent {agent} ({status}):\n{report}",
+        &[
+            ("agent", ctx.agent_id.clone()),
+            ("status", outcome.agent_status().as_str().to_string()),
+            ("report", report),
+        ],
+    );
+    let message_id = session
+        .append_message_in_thread(
+            &ctx.session_id,
+            Some(&ctx.turn_id),
+            &thread_id,
+            Some(&ctx.agent_id),
+            Some(&requester),
+            Some(MessageKind::Report),
+            Role::User,
+            vec![ContentBlock::text(text)],
+        )
+        .ok();
+    (message_id, Some(requester))
+}
+
+fn last_assistant_text(
+    session: &Arc<dyn phi_contracts::ports::SessionPort>,
+    ctx: &RunContext,
+) -> String {
+    let messages = session.messages_for_thread(&ctx.session_id, &ctx.thread_id);
+    for message in messages.into_iter().rev() {
+        if message.role != Role::Assistant {
+            continue;
+        }
+        let text = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.trim().is_empty() {
+            return text;
+        }
+    }
+    i18n::t("(the subagent produced no text report)")
 }
 
 async fn run_inner(ctx: &RunContext) -> RunOutcome {
@@ -268,12 +611,28 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         },
     );
 
-    let tools = ctx.services.tool_definitions();
+    let tools = {
+        let mut tools = ctx.services.tool_definitions();
+        if ctx.role == AgentRole::Subagent {
+            tools.retain(|tool| {
+                !matches!(
+                    tool.id.as_str(),
+                    "delegate" | "wait_for_agents" | "cancel_agent"
+                )
+            });
+        }
+        if ctx.work_mode == WorkMode::ReadOnly {
+            tools.retain(|tool| !matches!(tool.id.as_str(), "fs_write" | "shell_exec"));
+        }
+        tools
+    };
     let max_output_tokens = env_u64("PHI_MAX_OUTPUT_TOKENS", 8192) as u32;
     let context_budget = history_char_budget(model.status().context_window, max_output_tokens);
-    // The shell may select a model per message; "default" lets the gateway
-    // resolve the provider's primary model (including model mappings).
-    let requested_model = ctx.model.clone().unwrap_or_else(|| "default".to_string());
+    // Capture the role prompt once: agent statuses change during the run, and
+    // a mutating system prefix would invalidate the provider's prompt cache.
+    let role_system = role_prompt(&session, ctx);
+    // The model id was resolved (and pinned) when the run was scheduled.
+    let requested_model = ctx.resolved_model.clone();
     // There is no run-level step cap; the loop ends when the model stops
     // calling tools or the user cancels. Truncation is recovered a bounded
     // number of times before the run fails honestly.
@@ -281,6 +640,8 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
     // Malformed tool arguments are recoverable per call, but a model that
     // never produces parsable JSON must not get a fresh step forever.
     let mut invalid_tool_recoveries = 0_u32;
+    // A lead may not finish while subagents are still active.
+    let mut finish_guard = 0_u32;
     // A text-only truncation continues with an ephemeral prompt: the agent
     // must not fabricate a user-authored message in the transcript.
     let mut continuation_prompt: Option<String> = None;
@@ -299,13 +660,16 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             );
         }
 
-        let history = session.messages(&ctx.session_id);
+        let history = session.messages_for_thread(&ctx.session_id, &ctx.thread_id);
         let memory_query = last_user_text(&history);
         let mut assembled = match ctx.services.context() {
             Some(assembler) => assembler.assemble(history, &ctx.workspace, context_budget),
             None => fallback_context(history, &ctx.workspace),
         };
-        assembled.system = format!("{}\n\n{}", assembled.system, INLINE_UI_PROMPT);
+        assembled.system = format!("{}\n\n{}", assembled.system, role_system);
+        if ctx.role == AgentRole::Lead {
+            assembled.system = format!("{}\n\n{}", assembled.system, INLINE_UI_PROMPT);
+        }
         if !memory_injected {
             inject_memory(&ctx, memory_query.as_deref(), &mut assembled).await;
             memory_injected = true;
@@ -435,9 +799,13 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     // duplicates text.
                     if let Some(partial) = error.partial_text {
                         if !partial.trim().is_empty() {
-                            let _ = session.append_message(
+                            let _ = session.append_message_in_thread(
                                 &ctx.session_id,
                                 Some(&ctx.turn_id),
+                                &ctx.thread_id,
+                                Some(&ctx.agent_id),
+                                None,
+                                Some(MessageKind::Assistant),
                                 Role::Assistant,
                                 vec![ContentBlock::text(partial)],
                             );
@@ -498,9 +866,13 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             })
             .collect();
 
-        if let Err(error) = session.append_message(
+        if let Err(error) = session.append_message_in_thread(
             &ctx.session_id,
             Some(&ctx.turn_id),
+            &ctx.thread_id,
+            Some(&ctx.agent_id),
+            None,
+            Some(MessageKind::Assistant),
             Role::Assistant,
             response.blocks.clone(),
         ) {
@@ -531,9 +903,13 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             )
                         })
                         .collect();
-                    let _ = session.append_message(
+                    let _ = session.append_message_in_thread(
                         &ctx.session_id,
                         Some(&ctx.turn_id),
+                        &ctx.thread_id,
+                        Some(&ctx.agent_id),
+                        None,
+                        Some(MessageKind::Tool),
                         Role::User,
                         blocks,
                     );
@@ -566,9 +942,16 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                         )
                     })
                     .collect();
-                if let Err(error) =
-                    session.append_message(&ctx.session_id, Some(&ctx.turn_id), Role::User, blocks)
-                {
+                if let Err(error) = session.append_message_in_thread(
+                    &ctx.session_id,
+                    Some(&ctx.turn_id),
+                    &ctx.thread_id,
+                    Some(&ctx.agent_id),
+                    None,
+                    Some(MessageKind::Tool),
+                    Role::User,
+                    blocks,
+                ) {
                     return RunOutcome::Failed(i18n::t_args(
                         "Failed to save tool results: {error}",
                         &[("error", error)],
@@ -605,6 +988,22 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     "Failed to record the step completion: {error}",
                     &[("error", error)],
                 ));
+            }
+            if ctx.role == AgentRole::Lead {
+                let active = active_subagents(&session, ctx);
+                if !active.is_empty() {
+                    finish_guard += 1;
+                    if finish_guard > 3 {
+                        return RunOutcome::Failed(i18n::t(
+                            "The lead tried to finish while subagents were still active; the run stopped to avoid orphaned work.",
+                        ));
+                    }
+                    continuation_prompt = Some(i18n::t_args(
+                        "You still have active subagents: {agents}. Call wait_for_agents to collect their reports, or cancel_agent to stop them, before finishing.",
+                        &[("agents", active.join(", "))],
+                    ));
+                    continue;
+                }
             }
             return RunOutcome::Succeeded;
         }
@@ -667,9 +1066,13 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             result_blocks.push(outcome.block);
         }
 
-        if let Err(error) = session.append_message(
+        if let Err(error) = session.append_message_in_thread(
             &ctx.session_id,
             Some(&ctx.turn_id),
+            &ctx.thread_id,
+            Some(&ctx.agent_id),
+            None,
+            Some(MessageKind::Tool),
             Role::User,
             result_blocks,
         ) {
@@ -749,6 +1152,25 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
             cancelled: false,
             unknown_side_effect: false,
         };
+    }
+
+    // A shared subagent owns the workspace writer lease; the lead and other
+    // subagents must not write until it finishes or is cancelled.
+    if matches!(call.tool_id.as_str(), "fs_write" | "shell_exec") {
+        if let Some(holder) = ctx
+            .services
+            .session()
+            .and_then(|session| session.write_lease_holder(&ctx.session_id))
+        {
+            if holder != ctx.agent_id {
+                let rationale = i18n::t_args(
+                    "Another agent holds the workspace write lease ({agent}); the action was denied.",
+                    &[("agent", holder)],
+                );
+                let _ = decide(ctx, &call, "deny", &rationale);
+                return deny_result(&call, &rationale);
+            }
+        }
     }
 
     let policy_input = PolicyInput {
@@ -837,6 +1259,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 );
             }
             set_status(ctx, "WaitingApproval");
+            publish_agent_status(ctx, AgentStatus::WaitingApproval, None);
             let outcome = approver.wait(&pending.id, ctx.cancel.clone()).await;
             if outcome.status != "Approved" {
                 let status = outcome.status.clone();
@@ -874,6 +1297,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 );
             }
             set_status(ctx, "Running");
+            publish_agent_status(ctx, AgentStatus::Running, None);
             // Approval is bound to the resolved resource identity and content,
             // not just the path string. Recompute and compare before running.
             let current = action_digest_for(ctx, &call);
@@ -965,7 +1389,15 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
     let tool_ctx = ToolContext {
         workspace: ctx.workspace.clone(),
         session_id: ctx.session_id.clone(),
+        turn_id: ctx.turn_id.clone(),
         run_id: ctx.run_id.clone(),
+        agent_id: ctx.agent_id.clone(),
+        root_agent_id: ctx.root_agent_id.clone(),
+        thread_id: ctx.thread_id.clone(),
+        role: ctx.role,
+        parent_run_id: ctx.parent_run_id.clone(),
+        work_mode: ctx.work_mode,
+        lead_scale: ctx.lead_scale,
     };
     let started = Instant::now();
     // Do not drop this future on cancellation: the execution layer (sandbox)
@@ -1197,6 +1629,103 @@ fn set_status(ctx: &RunContext, state: &str) {
     status.state = state.to_string();
 }
 
+fn publish_agent_status(ctx: &RunContext, status: AgentStatus, note: Option<String>) {
+    let _ = ctx.bus.publish(
+        &ctx.session_id,
+        "plugin-loop",
+        &DomainEvent::AgentStatusChanged {
+            agent_id: ctx.agent_id.clone(),
+            session_id: ctx.session_id.clone(),
+            status,
+            note,
+        },
+    );
+}
+
+fn active_subagents(
+    session: &Arc<dyn phi_contracts::ports::SessionPort>,
+    ctx: &RunContext,
+) -> Vec<String> {
+    session
+        .agents(&ctx.session_id)
+        .into_iter()
+        .filter(|agent| {
+            agent.role == AgentRole::Subagent
+                && agent.status.is_active()
+                && agent.root_agent_id == ctx.root_agent_id
+        })
+        .map(|agent| agent.id)
+        .collect()
+}
+
+fn role_prompt(session: &Arc<dyn phi_contracts::ports::SessionPort>, ctx: &RunContext) -> String {
+    let agents = session.agents(&ctx.session_id);
+    match ctx.role {
+        AgentRole::Lead => {
+            let mut prompt = String::from(
+                "## Delegation\n\
+                 You are the lead agent and the only agent that talks to the user.\n\
+                 You may delegate separable work to subagents with the delegate tool. Each subagent runs in its own message thread; you only receive its report, not its full trajectory.\n\
+                 Choose the subagent model yourself from the list below. A subagent must not be more capable than you (scale must be <= your scale). The runtime rejects invalid choices; it never silently falls back.\n\
+                 You may run several subagents at once (at most 4 active). A subagent cannot delegate to another subagent.\n\
+                 Call wait_for_agents to collect reports before you finish. If you try to finish while subagents are active, the runtime will ask you to wait or cancel them. Never claim a subagent finished unless you have its report.\n\
+                 Use send_message only for directed questions; never broadcast.\n\nAvailable models:\n",
+            );
+            let roster = ctx
+                .services
+                .model()
+                .map(|model| model.roster())
+                .unwrap_or_default();
+            for model in roster {
+                let tags = if model.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", model.tags.join(", "))
+                };
+                prompt.push_str(&format!("- {}: scale {}{}\n", model.id, model.scale, tags));
+            }
+            prompt.push_str("\nCurrent agents:\n");
+            for agent in &agents {
+                prompt.push_str(&format!(
+                    "- {} ({}, {}, model {}, {})\n",
+                    agent.id,
+                    agent.role.as_str(),
+                    agent.status.as_str(),
+                    agent.model,
+                    agent.thread_id
+                ));
+            }
+            prompt
+        }
+        AgentRole::Subagent => {
+            let mut prompt = format!(
+                "## Subagent\n\
+                 You are a subagent working for the lead agent ({}). This thread contains your brief and your work.\n\
+                 - Work only on this brief; do not address the user directly.\n\
+                 - You cannot delegate to another subagent.\n\
+                 - Use send_message to ask a sibling agent a directed question. Do not block waiting for a reply; continue with what you can verify.\n\
+                 - Every write or shell command still requires human approval. Never claim a file changed without a tool call.\n\
+                 - When finished, reply with a concise report: what you did, files changed, verification results, and open questions. This final text is delivered to the lead.\n",
+                ctx.report_to.clone().unwrap_or_else(|| "lead".to_string())
+            );
+            prompt.push_str("\nOther agents in this session:\n");
+            for agent in &agents {
+                if agent.id == ctx.agent_id {
+                    continue;
+                }
+                prompt.push_str(&format!(
+                    "- {} ({}, {}, model {})\n",
+                    agent.id,
+                    agent.role.as_str(),
+                    agent.status.as_str(),
+                    agent.model
+                ));
+            }
+            prompt
+        }
+    }
+}
+
 fn set_status_progress(ctx: &RunContext, steps: u64) {
     let mut status = ctx.status.lock().unwrap();
     status.steps = steps;
@@ -1245,7 +1774,7 @@ async fn inject_memory(ctx: &RunContext, query: Option<&str>, assembled: &mut As
             .map(|session| session.node_id())
             .unwrap_or_default(),
         project_id: Some(ctx.workspace.to_string_lossy().to_string()),
-        agent_id: Some("main".to_string()),
+        agent_id: Some(ctx.agent_id.clone()),
         run_id: Some(ctx.run_id.clone()),
     };
     let request = MemoryQuery {

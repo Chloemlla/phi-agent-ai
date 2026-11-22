@@ -39,9 +39,7 @@ function controlLine(control: Element): string | null {
     const values = Array.from(select.selectedOptions)
       .map((option) => cleanText(option.value || option.textContent))
       .filter(Boolean);
-    return values.length > 0
-      ? `${fieldLabel(control, name)}: ${values.join(", ")}`
-      : null;
+    return values.length > 0 ? `${fieldLabel(control, name)}: ${values.join(", ")}` : null;
   }
 
   const value = cleanText((control as HTMLTextAreaElement).value);

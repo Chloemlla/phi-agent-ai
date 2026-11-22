@@ -1,8 +1,8 @@
 // Typed wrappers around the Tauri command/event boundary.
 //
-// The Rust side is the source of truth. These types are still hand-mirrored
-// from `src-tauri/src/api.rs`, `phi-node` and `phi-contracts`; keep them in
-// sync until generated bindings exist.
+// The Rust side is the source of truth. DTOs in `src/types.ts` and
+// `src/settings/types.ts` re-export the generated bindings; regenerate them
+// with `cargo run -p phi-node --bin export-types` after changing a Rust DTO.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -19,12 +19,7 @@ import type {
   SessionSummary,
   ThinkingLevel,
 } from "./types";
-import type {
-  ModelSpec,
-  ProviderInput,
-  ProviderTestView,
-  ProviderView,
-} from "./settings/types";
+import type { ModelSpec, ProviderInput, ProviderTestView, ProviderView } from "./settings/types";
 
 // ─────────────────────────── bootstrap / workspace ──────────────────────────
 
@@ -151,9 +146,7 @@ export function onPhiEvent(
 }
 
 /** A transient model delta for live rendering; never journaled. */
-export function onModelStream(
-  handler: (event: ModelStreamEvent) => void,
-): Promise<UnlistenFn> {
+export function onModelStream(handler: (event: ModelStreamEvent) => void): Promise<UnlistenFn> {
   return listen<ModelStreamEvent>(MODEL_STREAM_EVENT, (event) => {
     handler(event.payload);
   });

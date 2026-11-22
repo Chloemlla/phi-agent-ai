@@ -19,7 +19,7 @@ use crate::model_protocol::{
 use crate::provider_store::{ProviderStore, ResolvedProvider};
 use phi_contracts::SLOT_MODEL_INVOKE;
 use phi_contracts::ports::{ModelError, ModelPort, ModelRequest, ModelResponse, ModelStatus};
-use phi_contracts::provider::{AuthMode, ProviderProfile};
+use phi_contracts::provider::{AuthMode, ModelSpec, ProviderProfile};
 use phi_contracts::stream::{ModelStreamEvent, StreamHub};
 use phi_domain::message::ContentBlock;
 use phi_i18n as i18n;
@@ -473,6 +473,41 @@ impl ModelPort for ModelGateway {
     fn set_api_key(&self, key: &str) -> Result<ModelStatus, String> {
         self.providers.set_api_key(key)?;
         Ok(self.status())
+    }
+
+    fn roster(&self) -> Vec<ModelSpec> {
+        let Some(profile) = self.providers.active() else {
+            return Vec::new();
+        };
+        let mut models: Vec<ModelSpec> = profile
+            .models
+            .iter()
+            .filter(|model| model.enabled)
+            .cloned()
+            .collect();
+        if models.is_empty() && !profile.model.trim().is_empty() {
+            models.push(
+                profile
+                    .model_spec(&profile.model)
+                    .cloned()
+                    .unwrap_or_else(|| ModelSpec::from_id(&profile.model)),
+            );
+        }
+        models
+    }
+
+    fn resolve_model(&self, requested: &str) -> String {
+        match self.providers.active() {
+            Some(profile) => {
+                let resolved = profile.resolve_model(requested);
+                if resolved.trim().is_empty() {
+                    requested.trim().to_string()
+                } else {
+                    resolved
+                }
+            }
+            None => requested.trim().to_string(),
+        }
     }
 
     async fn invoke(

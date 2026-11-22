@@ -54,12 +54,7 @@ export function htmlProps(
   if (setExpression && tag !== "button") {
     const run = (event: Event) => {
       event.preventDefault();
-      applyAssignments(
-        setExpression,
-        context.state,
-        context.locals,
-        context.assign,
-      );
+      applyAssignments(setExpression, context.state, context.locals, context.assign);
     };
     props.onClick = run;
     props.onKeyDown = (event: KeyboardEvent) => {
@@ -67,9 +62,7 @@ export function htmlProps(
     };
     props.role = "button";
     props.tabIndex = 0;
-    props.class = [props.class as string | undefined, "ui-clickable"]
-      .filter(Boolean)
-      .join(" ");
+    props.class = [props.class as string | undefined, "ui-clickable"].filter(Boolean).join(" ");
   }
 
   return props;
@@ -200,11 +193,7 @@ function applyTagAttribute(
   }
 }
 
-function applyImage(
-  element: Element,
-  props: Record<string, unknown>,
-  context: RenderContext,
-) {
+function applyImage(element: Element, props: Record<string, unknown>, context: RenderContext) {
   const src = element.getAttribute("src") ?? "";
   if (src.includes("{{")) {
     defineGetter(props, "src", () => {
@@ -223,11 +212,7 @@ function applyImage(
   props.referrerPolicy = "no-referrer";
 }
 
-function applyOption(
-  element: Element,
-  props: Record<string, unknown>,
-  context: RenderContext,
-) {
+function applyOption(element: Element, props: Record<string, unknown>, context: RenderContext) {
   const select = element.closest("select");
   const bind = bindName(select?.getAttribute("data-ui-bind") ?? null);
   const value = element.getAttribute("value") ?? cleanText(element.textContent);
@@ -308,7 +293,7 @@ function applyBinding(
       const values = Array.from(select.selectedOptions).map(
         (option) => option.value || cleanText(option.textContent),
       );
-      context.assign(name, select.multiple ? values : values[0] ?? "");
+      context.assign(name, select.multiple ? values : (values[0] ?? ""));
     };
   }
 }
@@ -318,8 +303,7 @@ export function applyVisibility(
   props: Record<string, unknown>,
   context: RenderContext,
 ) {
-  const expression =
-    element.getAttribute("data-ui-show") ?? element.getAttribute("data-ui-if");
+  const expression = element.getAttribute("data-ui-show") ?? element.getAttribute("data-ui-if");
   if (!expression) return;
   defineGetter(props, "style", () => ({
     display: visible(expression, context) ? undefined : "none",
@@ -342,11 +326,7 @@ function bindName(raw: string | null): string | null {
   return BIND_NAME.test(name) && !BLOCKED_KEYS.has(name) ? name : null;
 }
 
-function defineGetter(
-  props: Record<string, unknown>,
-  name: string,
-  read: () => unknown,
-) {
+function defineGetter(props: Record<string, unknown>, name: string, read: () => unknown) {
   Object.defineProperty(props, name, {
     enumerable: true,
     configurable: true,
@@ -362,9 +342,7 @@ function textProp(
   limit: number,
 ) {
   if (value.includes("{{")) {
-    defineGetter(props, name, () =>
-      cap(interpolate(value, context.state, context.locals), limit),
-    );
+    defineGetter(props, name, () => cap(interpolate(value, context.state, context.locals), limit));
   } else {
     props[name] = cap(value, limit);
   }
@@ -382,9 +360,7 @@ function numberProp(
     return Number.isFinite(number) ? Math.min(Math.max(number, 0), limit) : undefined;
   };
   if (value.includes("{{")) {
-    defineGetter(props, name, () =>
-      read(interpolate(value, context.state, context.locals)),
-    );
+    defineGetter(props, name, () => read(interpolate(value, context.state, context.locals)));
   } else if (value) {
     props[name] = read(value);
   }

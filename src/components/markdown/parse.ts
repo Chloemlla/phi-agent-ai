@@ -98,8 +98,7 @@ export function parseInline(text: string): InlineNode[] {
         ? text.slice(index, index + 2)
         : "";
     if (strongMarker) {
-      const boundaryOk =
-        strongMarker === "**" || !isWordChar(text[index - 1]);
+      const boundaryOk = strongMarker === "**" || !isWordChar(text[index - 1]);
       const end = boundaryOk ? text.indexOf(strongMarker, index + 2) : -1;
       if (end > index + 2) {
         flush();
@@ -128,8 +127,7 @@ export function parseInline(text: string): InlineNode[] {
     if (char === "*" || char === "_") {
       const next = text[index + 1];
       const boundaryOk =
-        char === "*" ||
-        (!isWordChar(text[index - 1]) && !!next && !/\s/.test(next));
+        char === "*" || (!isWordChar(text[index - 1]) && !!next && !/\s/.test(next));
       const end = boundaryOk ? text.indexOf(char, index + 1) : -1;
       if (end > index + 1) {
         flush();
@@ -228,10 +226,7 @@ function isBlockStart(lines: string[], index: number): boolean {
   return false;
 }
 
-function parseList(
-  lines: string[],
-  start: number,
-): { node: BlockNode; next: number } {
+function parseList(lines: string[], start: number): { node: BlockNode; next: number } {
   const first = matchList(lines[start]);
   const base = first ? first.indent : 0;
   const ordered = first?.ordered ?? false;
@@ -249,8 +244,7 @@ function parseList(
       if (nextNonBlank >= lines.length) break;
       const nextIndent = leadingSpaces(lines[nextNonBlank]);
       const nextMarker = matchList(lines[nextNonBlank]);
-      const continues =
-        nextIndent > base || (nextMarker !== null && nextMarker.indent === base);
+      const continues = nextIndent > base || (nextMarker !== null && nextMarker.indent === base);
       if (!continues || items.length === 0) break;
       items[items.length - 1].push("");
       index = nextNonBlank;
@@ -303,11 +297,7 @@ export function parseBlocks(lines: string[]): BlockNode[] {
       index += 1;
       while (index < lines.length) {
         const closing = lines[index].match(CLOSING_FENCE);
-        if (
-          closing &&
-          closing[1][0] === marker &&
-          closing[1].length >= length
-        ) {
+        if (closing && closing[1][0] === marker && closing[1].length >= length) {
           index += 1;
           break;
         }
@@ -357,20 +347,14 @@ export function parseBlocks(lines: string[]): BlockNode[] {
       continue;
     }
 
-    if (
-      line.includes("|") &&
-      index + 1 < lines.length &&
-      isTableSeparator(lines[index + 1])
-    ) {
+    if (line.includes("|") && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
       const header = splitRow(line);
       const rows: string[][] = [];
       index += 2;
       while (index < lines.length && lines[index].includes("|")) {
         if (!lines[index].trim()) break;
         const row = splitRow(lines[index]);
-        rows.push(
-          header.map((_, column) => row[column] ?? ""),
-        );
+        rows.push(header.map((_, column) => row[column] ?? ""));
         index += 1;
       }
       blocks.push({ kind: "table", header, rows });
@@ -397,11 +381,7 @@ export function parseBlocks(lines: string[]): BlockNode[] {
 
     const paragraph: string[] = [line.trim()];
     index += 1;
-    while (
-      index < lines.length &&
-      lines[index].trim() &&
-      !isBlockStart(lines, index)
-    ) {
+    while (index < lines.length && lines[index].trim() && !isBlockStart(lines, index)) {
       paragraph.push(lines[index].trim());
       index += 1;
     }

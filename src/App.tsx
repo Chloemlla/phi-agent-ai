@@ -1,12 +1,4 @@
-import {
-  Show,
-  Suspense,
-  createEffect,
-  createSignal,
-  lazy,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { Show, Suspense, createEffect, createSignal, lazy, onCleanup, onMount } from "solid-js";
 import { exit, onBackButtonPress } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -53,7 +45,6 @@ function App() {
     typeof window !== "undefined" && window.innerWidth <= NARROW_QUERY,
   );
   const [now, setNow] = createSignal(Date.now());
-  let transcriptRef: HTMLElement | undefined;
   let inlineSendBusy = false;
   let sidebarInitialized = false;
 
@@ -99,14 +90,10 @@ function App() {
     const bootstrap = boot();
     return bootstrap ? activeProviderOf(bootstrap) : null;
   };
-  const composerDisabled = () =>
-    !modeOk() || isRunning() || !provider() || !selection();
+  const composerDisabled = () => !modeOk() || isRunning() || !provider() || !selection();
   const composerDisabledHint = () => {
     if (!modeOk()) {
-      return (
-        boot()?.modeReason ||
-        t("The node is not in normal mode; sending is disabled")
-      );
+      return boot()?.modeReason || t("The node is not in normal mode; sending is disabled");
     }
     if (isRunning()) return t("The model cannot be changed while a run is active.");
     if (!provider()) return t("No model provider is configured. Add one in Settings.");
@@ -129,11 +116,7 @@ function App() {
 
   function requestCloseSettings() {
     // Settings may have an unsaved provider draft and can cancel this event.
-    if (
-      window.dispatchEvent(
-        new CustomEvent("phi:settings-leave", { cancelable: true }),
-      )
-    ) {
+    if (window.dispatchEvent(new CustomEvent("phi:settings-leave", { cancelable: true }))) {
       setView("chat");
     }
   }
@@ -169,11 +152,7 @@ function App() {
       if (view() === "settings") {
         // Let a settings pane handle one level (provider detail) first, then
         // let the settings shell guard unsaved drafts.
-        if (
-          window.dispatchEvent(
-            new CustomEvent("phi:settings-back", { cancelable: true }),
-          )
-        ) {
+        if (window.dispatchEvent(new CustomEvent("phi:settings-back", { cancelable: true }))) {
           requestCloseSettings();
         }
         return;
@@ -211,28 +190,8 @@ function App() {
     const bootstrap = boot();
     if (!bootstrap || sidebarInitialized) return;
     sidebarInitialized = true;
-    const drawer =
-      isMobilePlatform(bootstrap.platform) ||
-      window.innerWidth <= NARROW_QUERY;
+    const drawer = isMobilePlatform(bootstrap.platform) || window.innerWidth <= NARROW_QUERY;
     setSidebarOpen(!drawer);
-  });
-
-  createEffect(() => {
-    const messages = detail()?.session.messages.length ?? 0;
-    const approvals = detail()?.pendingApprovals.length ?? 0;
-    const streaming = stream.streamText().length;
-    void messages;
-    void approvals;
-    void streaming;
-    const element = transcriptRef;
-    if (!element) return;
-    // Do not yank the transcript down while the user is reading earlier output.
-    const nearBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight < 96;
-    if (!nearBottom) return;
-    queueMicrotask(() => {
-      if (transcriptRef) transcriptRef.scrollTop = transcriptRef.scrollHeight;
-    });
   });
 
   async function sendText(text: string, fromComposer: boolean) {
@@ -245,9 +204,7 @@ function App() {
       const result = await sendMessage({
         sessionId: id,
         text,
-        ...(pick
-          ? { model: pick.modelId, thinking: pick.thinking }
-          : {}),
+        ...(pick ? { model: pick.modelId, thinking: pick.thinking } : {}),
       });
       stream.setStreamRunId(result.runId);
     } catch (error) {
@@ -337,11 +294,7 @@ function App() {
       }}
     >
       <Titlebar
-        title={
-          view() === "settings"
-            ? t("Settings")
-            : detail()?.session.title || t("New session")
-        }
+        title={view() === "settings" ? t("Settings") : detail()?.session.title || t("New session")}
         workspace={boot()?.workspace ?? null}
         mode={boot()?.mode ?? ""}
         modeReason={boot()?.modeReason ?? ""}
@@ -384,36 +337,25 @@ function App() {
             onNew={handleNewSession}
             onSelect={handleSelectSession}
           />
-          <main
-            class="main"
-            inert={drawerMode() && sidebarOpen() ? true : undefined}
-          >
+          <main class="main" inert={drawerMode() && sidebarOpen() ? true : undefined}>
             <section class="conversation">
-              <div class="transcript" ref={(element) => (transcriptRef = element)}>
-                <Conversation
-                  detail={detail()}
-                  run={currentRun()}
-                  streamText={stream.streamText()}
-                  streamEnded={stream.streamEnded()}
-                  modeOk={modeOk()}
-                  modeReason={boot()?.modeReason ?? ""}
-                  modelConfigured={boot()?.model.configured ?? false}
-                  now={now()}
-                  onResolve={resolveApproval}
-                  onOpenUrl={handleOpenUrl}
-                  onSend={handleInlineSend}
-                />
-              </div>
+              <Conversation
+                detail={detail()}
+                run={currentRun()}
+                streamText={stream.streamText()}
+                streamEnded={stream.streamEnded()}
+                modeOk={modeOk()}
+                modeReason={boot()?.modeReason ?? ""}
+                modelConfigured={boot()?.model.configured ?? false}
+                now={now()}
+                onResolve={resolveApproval}
+                onOpenUrl={handleOpenUrl}
+                onSend={handleInlineSend}
+              />
               <div class="dock-wrap">
                 <div class="dock">
                   <Show when={currentRun()}>
-                    {(run) => (
-                      <Runbar
-                        run={run()}
-                        now={now()}
-                        onCancel={cancelRun}
-                      />
-                    )}
+                    {(run) => <Runbar run={run()} now={now()} onCancel={cancelRun} />}
                   </Show>
                   <Composer
                     value={input()}
@@ -421,9 +363,7 @@ function App() {
                     disabledHint={composerDisabledHint()}
                     running={isRunning()}
                     provider={provider()}
-                    fallbackModel={
-                      boot()?.model.model ?? provider()?.model ?? ""
-                    }
+                    fallbackModel={boot()?.model.model ?? provider()?.model ?? ""}
                     selection={selection()}
                     onModelChange={updateSelection}
                     onInput={setInput}

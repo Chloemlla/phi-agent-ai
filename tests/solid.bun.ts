@@ -15,25 +15,19 @@ import typescript from "@babel/preset-typescript";
 plugin({
   name: "phi-solid-test",
   setup(build) {
-    build.onLoad(
-      { filter: /\.tsx$/, namespace: "file" },
-      async ({ path }) => {
-        const source = await Bun.file(path).text();
-        const result = await transformAsync(source, {
-          filename: path,
-          babelrc: false,
-          configFile: false,
-          sourceMaps: "inline",
-          presets: [
-            [solid, { generate: "dom", hydratable: false }],
-            [
-              typescript,
-              { isTSX: true, allExtensions: true, allowDeclareFields: true },
-            ],
-          ],
-        });
-        return { contents: result?.code ?? "", loader: "js" };
-      },
-    );
+    build.onLoad({ filter: /\.tsx$/, namespace: "file" }, async ({ path }) => {
+      const source = await Bun.file(path).text();
+      const result = await transformAsync(source, {
+        filename: path,
+        babelrc: false,
+        configFile: false,
+        sourceMaps: "inline",
+        presets: [
+          [solid, { generate: "dom", hydratable: false }],
+          [typescript, { isTSX: true, allExtensions: true, allowDeclareFields: true }],
+        ],
+      });
+      return { contents: result?.code ?? "", loader: "js" };
+    });
   },
 });

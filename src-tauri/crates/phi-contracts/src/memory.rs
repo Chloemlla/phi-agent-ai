@@ -7,6 +7,7 @@
 //! principal is allowed to read.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use phi_domain::memory::{
     AdmissionRejection, Episode, EpisodeSource, MemoryRecord, MemoryScope, MemoryState, SourceTrust,
@@ -83,7 +84,7 @@ pub struct MemoryListFilter {
     pub offset: usize,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryStats {
     pub total: u64,
@@ -137,7 +138,7 @@ impl MemoryAddRequest {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(
     tag = "status",
     rename_all = "camelCase",
@@ -158,7 +159,7 @@ pub enum MemoryAddOutcome {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryHit {
     pub record: MemoryRecord,
@@ -205,7 +206,7 @@ impl ForgetSelector {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ForgetReport {
     pub records: u64,

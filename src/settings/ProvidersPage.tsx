@@ -125,9 +125,7 @@ function buildConnection(
     // stored an explicit "none" for this provider. The protocol decides which
     // header the gateway sends.
     input.auth =
-      (draft.protocol ?? "openai_chat") === "anthropic_messages"
-        ? "x_api_key"
-        : "bearer";
+      (draft.protocol ?? "openai_chat") === "anthropic_messages" ? "x_api_key" : "bearer";
   } else if (key === "") {
     input.auth = "none";
   } else if (!view?.hasKey) {
@@ -166,16 +164,12 @@ export function ProvidersPage(props: {
   const [notice, setNotice] = createSignal("");
   const [testResult, setTestResult] = createSignal<ProviderTestView | null>(null);
   const [narrow, setNarrow] = createSignal(
-    typeof window !== "undefined" &&
-      window.matchMedia("(max-width: 760px)").matches,
+    typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches,
   );
   const [detailOpen, setDetailOpen] = createSignal(false);
-  const [pendingSwitch, setPendingSwitch] = createSignal<
-    ProviderView | "new" | null
-  >(null);
+  const [pendingSwitch, setPendingSwitch] = createSignal<ProviderView | "new" | null>(null);
 
-  const selectedView = () =>
-    providers().find((provider) => provider.id === selectedId()) ?? null;
+  const selectedView = () => providers().find((provider) => provider.id === selectedId()) ?? null;
 
   /// Draft differs from the selected saved provider, or a new form has content.
   function isDirty(): boolean {
@@ -185,8 +179,7 @@ export function ProvidersPage(props: {
     const view = selectedView();
     if (!view) return false;
     return (
-      draftSnapshot(current) !== draftSnapshot(viewToDraft(view)) ||
-      apiKeyDirty(current, view)
+      draftSnapshot(current) !== draftSnapshot(viewToDraft(view)) || apiKeyDirty(current, view)
     );
   }
 
@@ -195,9 +188,7 @@ export function ProvidersPage(props: {
   const visibleProviders = () => {
     if (!isNew()) return providers();
     const draftId = draft()?.id;
-    return draftId
-      ? providers().filter((provider) => provider.id !== draftId)
-      : providers();
+    return draftId ? providers().filter((provider) => provider.id !== draftId) : providers();
   };
 
   function selectView(view: ProviderView) {
@@ -390,8 +381,7 @@ export function ProvidersPage(props: {
   async function cancelNew() {
     setPendingSwitch(null);
     setDetailOpen(false);
-    const cleanupId =
-      createdInWizard() ? draft()?.id ?? selectedId() : null;
+    const cleanupId = createdInWizard() ? (draft()?.id ?? selectedId()) : null;
     setIsNew(false);
     setCreatedInWizard(false);
     setSelectedId(null);
@@ -521,10 +511,7 @@ export function ProvidersPage(props: {
         const currentPrimary = (current.model ?? "").trim();
         primary =
           currentPrimary &&
-          merged.some(
-            (model) =>
-              normalizeModelId(model.id) === normalizeModelId(currentPrimary),
-          )
+          merged.some((model) => normalizeModelId(model.id) === normalizeModelId(currentPrimary))
             ? currentPrimary
             : selectedPrimary || merged[0]?.id || "";
       }
@@ -555,9 +542,7 @@ export function ProvidersPage(props: {
       await refreshList();
       await props.onRefresh().catch(() => undefined);
       setNotice(
-        wasNew
-          ? tArgs("Added {count} models.", { count: wanted.length })
-          : t("Provider saved."),
+        wasNew ? tArgs("Added {count} models.", { count: wanted.length }) : t("Provider saved."),
       );
       return true;
     } catch (e) {
@@ -690,11 +675,7 @@ export function ProvidersPage(props: {
                       "provider-item": true,
                       active: !isNew() && provider.id === selectedId(),
                     }}
-                    aria-current={
-                      !isNew() && provider.id === selectedId()
-                        ? "true"
-                        : undefined
-                    }
+                    aria-current={!isNew() && provider.id === selectedId() ? "true" : undefined}
                     onClick={() => requestOpen(provider)}
                   >
                     <span class="provider-item-head">
@@ -708,9 +689,7 @@ export function ProvidersPage(props: {
                     <span class="provider-meta">
                       <span>{protocolLabel(provider.protocol)}</span>
                       <span class="provider-sep">·</span>
-                      <span>
-                        {tArgs("{count} models", { count: provider.models.length })}
-                      </span>
+                      <span>{tArgs("{count} models", { count: provider.models.length })}</span>
                       <span class="provider-sep">·</span>
                       <span>
                         {provider.auth === "none"
@@ -767,9 +746,7 @@ export function ProvidersPage(props: {
             >
               {(current) => (
                 <ProviderEditor
-                  selectionKey={
-                    isNew() ? `new-${newToken()}` : selectedId() ?? "none"
-                  }
+                  selectionKey={isNew() ? `new-${newToken()}` : (selectedId() ?? "none")}
                   draft={current()}
                   view={selectedView()}
                   isNew={isNew()}

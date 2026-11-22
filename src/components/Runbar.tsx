@@ -2,20 +2,12 @@
 // price; token counts are informational.
 
 import { Show } from "solid-js";
-import {
-  formatCompactTokens,
-  formatElapsed,
-  formatTokens,
-} from "../format";
+import { formatCompactTokens, formatElapsed, formatTokens } from "../format";
 import { t, tArgs } from "../i18n";
 import { isActiveState, runTone, stateLabel } from "../status";
 import type { Run } from "../types";
 
-export function Runbar(props: {
-  run: Run | null;
-  now: number;
-  onCancel: (runId: string) => void;
-}) {
+export function Runbar(props: { run: Run | null; now: number; onCancel: (runId: string) => void }) {
   const steps = () => props.run?.steps ?? 0;
   const inputTokens = () => props.run?.inputTokens ?? 0;
   const outputTokens = () => props.run?.outputTokens ?? 0;
@@ -30,8 +22,7 @@ export function Runbar(props: {
     return Math.max(0, (end - start) / 1000);
   };
 
-  const spinning = () =>
-    props.run?.state === "Scheduled" || props.run?.state === "Running";
+  const spinning = () => props.run?.state === "Scheduled" || props.run?.state === "Running";
 
   const tokenTitle = () =>
     tArgs("Input {input} · Output {output} tokens", {

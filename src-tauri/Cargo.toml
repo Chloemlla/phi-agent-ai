@@ -34,6 +34,9 @@ authors = ["phi-agent contributors"]
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# TypeScript bindings for the DTOs crossing the shell boundary. Large integers
+# are exported as `number` by the generator config so they match JSON.
+ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.11"

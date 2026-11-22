@@ -9,6 +9,9 @@
 !/.gitignore
 !/.gitattributes
 !/bunfig.toml
+!/eslint.config.js
+!/.prettierrc.json
+!/.prettierignore
 !/AGENT.md
 !/CLAUDE.md
 !/.github/

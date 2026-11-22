@@ -1,9 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import {
-  formatCompactTokens,
-  formatElapsed,
-  formatRelative,
-} from "../src/format";
+import { formatCompactTokens, formatElapsed, formatRelative } from "../src/format";
 import { setLang } from "../src/i18n";
 
 const NOW = Date.parse("2026-01-01T12:00:00Z");

@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
+use super::agent::{AgentView, MessageKind};
 use super::message::{ContentBlock, Role};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
     pub id: String,
@@ -14,7 +16,7 @@ pub struct SessionSummary {
     pub last_run_state: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageView {
     pub id: String,
@@ -22,9 +24,17 @@ pub struct MessageView {
     pub role: Role,
     pub ts: String,
     pub blocks: Vec<ContentBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MessageKind>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RunView {
     pub id: String,
@@ -42,9 +52,24 @@ pub struct RunView {
     pub stop_confirmation: Option<String>,
     pub started_at: Option<String>,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl RunView {
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.state.as_str(),
+            "Scheduled" | "Running" | "WaitingApproval"
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
     pub id: String,
@@ -54,9 +79,11 @@ pub struct SessionView {
     pub updated_at: String,
     pub messages: Vec<MessageView>,
     pub runs: Vec<RunView>,
+    #[serde(default)]
+    pub agents: Vec<AgentView>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingApprovalView {
     pub id: String,

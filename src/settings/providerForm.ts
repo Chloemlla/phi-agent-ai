@@ -24,9 +24,7 @@ function urlError(raw: string, kind: "base" | "website"): string {
   if (!value) return "";
   try {
     const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:"
-      ? ""
-      : urlMessage(kind);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? "" : urlMessage(kind);
   } catch {
     return urlMessage(kind);
   }

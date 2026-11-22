@@ -470,6 +470,91 @@ fn zh(msgid: &str) -> Option<&'static str> {
             "动作已执行，但审计记录写入失败：{error}"
         }
 
+        // Subagent delegation
+        "Only the lead agent can delegate to a subagent" => "只有主代理可以派发子代理",
+        "Only the lead agent can wait for subagents" => "只有主代理可以等待子代理",
+        "Only the lead agent can cancel a subagent" => "只有主代理可以取消子代理",
+        "Only subagents can be cancelled" => "只有子代理可以被取消",
+        "Missing required argument: {key}" => "缺少必填参数：{key}",
+        "Missing required argument: brief.objective" => "缺少必填参数：brief.objective",
+        "Unknown work mode {mode}; expected shared or read_only" => {
+            "未知工作模式 {mode}；应为 shared 或 read_only"
+        }
+        "Too many active subagents ({count}); wait for one to finish or cancel it first" => {
+            "活跃子代理过多（{count}）；请等待一个完成或先取消它"
+        }
+        "Unknown subagent model: {model}. Available models: {available}" => {
+            "未知子代理模型：{model}。可用模型：{available}"
+        }
+        "Unknown subagent model: {model}" => "未知子代理模型：{model}",
+        "Subagent model {model} (scale {scale}) is more capable than the lead model (scale {lead}); choose a smaller or equal model" => {
+            "子代理模型 {model}（规模 {scale}）强于主代理模型（规模 {lead}）；请选择更小或相等的模型"
+        }
+        "Subagent model {model} is more capable than the lead model" => {
+            "子代理模型 {model} 强于主代理模型"
+        }
+        "Another agent holds the workspace write lease ({agent}); wait for it to finish or use read_only" => {
+            "另一个代理持有工作区写租约（{agent}）；请等待它完成或改用 read_only"
+        }
+        "Another agent holds the workspace write lease" => "另一个代理持有工作区写租约",
+        "Another agent holds the workspace write lease ({agent}); the action was denied." => {
+            "另一个代理持有工作区写租约（{agent}）；动作已被拒绝。"
+        }
+        "Failed to record the subagent: {error}" => "记录子代理失败：{error}",
+        "Failed to save the subagent brief: {error}" => "保存子代理简报失败：{error}",
+        "Failed to start the subagent: {error}" => "启动子代理失败：{error}",
+        "The agent_ids argument must contain at least one agent id" => {
+            "agent_ids 参数至少需要包含一个代理 id"
+        }
+        "Unknown message mode {mode}; expected steer or queue" => {
+            "未知消息模式 {mode}；应为 steer 或 queue"
+        }
+        "The sending agent is not known" => "发送消息的代理不存在",
+        "Unknown agent: {agent}" => "未知代理：{agent}",
+        "An agent cannot send a message to itself" => "代理不能给自己发消息",
+        "The process restarted while this agent was active; it was not resumed." => {
+            "进程重启时该代理仍在活动；它没有被自动恢复。"
+        }
+        "The recipient is not part of this delegation family" => "接收者不属于同一委派家族",
+        "Agent {agent} is not part of this delegation family" => "代理 {agent} 不属于同一委派家族",
+        "Failed to deliver the message: {error}" => "投递消息失败：{error}",
+        "The lead is not running; start a new turn to talk to it" => {
+            "主代理当前没有运行；请开始新的轮次再与它对话"
+        }
+        "The turn is already closed; start a new turn to wake this subagent" => {
+            "当前轮次已关闭；请开始新的轮次唤醒该子代理"
+        }
+        "Failed to wake the subagent: {error}" => "唤醒子代理失败：{error}",
+        "The subagent is not part of this delegation family" => "该子代理不属于同一委派家族",
+        "Unknown agent tool: {tool}" => "未知代理工具：{tool}",
+        "Parent run not found: {run_id}" => "父运行不存在：{run_id}",
+        "The parent run belongs to another session" => "父运行属于另一个会话",
+        "The parent run is no longer active" => "父运行已不再活跃",
+        "A subagent cannot delegate to another subagent" => "子代理不能再派发子代理",
+        "A subagent run requires an agent id" => "子代理运行需要代理 id",
+        "A subagent run requires a thread id" => "子代理运行需要线程 id",
+        "Unknown subagent: {agent}" => "未知子代理：{agent}",
+        "Subagent {agent} is already running" => "子代理 {agent} 已在运行",
+        "The lead tried to finish while subagents were still active; the run stopped to avoid orphaned work." => {
+            "主代理在子代理仍活跃时尝试结束；运行已停止，避免留下无人管理的执行。"
+        }
+        "You still have active subagents: {agents}. Call wait_for_agents to collect their reports, or cancel_agent to stop them, before finishing." => {
+            "你仍有活跃的子代理：{agents}。结束前请调用 wait_for_agents 收集报告，或调用 cancel_agent 停止它们。"
+        }
+        "The subagent failed: {error}" => "子代理失败：{error}",
+        "The subagent was stopped: {reason}. {stop}" => "子代理已停止：{reason}。{stop}",
+        "Report from subagent {agent} ({status}):\n{report}" => {
+            "来自子代理 {agent} 的报告（{status}）：\n{report}"
+        }
+        "(the subagent produced no text report)" => "（子代理没有产生文本报告）",
+        "Agent coordination does not touch the workspace; each subagent action is still policy-checked" => {
+            "代理协调不触碰工作区；每个子代理动作仍会经过策略检查"
+        }
+        "Unknown agents subcommand: {command}" => "未知 agents 子命令：{command}",
+        "agents requires a subcommand: list <session-id> or show <agent-id>" => {
+            "agents 需要子命令：list <session-id> 或 show <agent-id>"
+        }
+
         _ => return None,
     })
 }

@@ -16,18 +16,12 @@
 // Allowlists, state and attribute validation live under `rich-html/`; this
 // file owns the component and the JSX rendering walk.
 
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  untrack,
-  type JSX,
-} from "solid-js";
+import { For, Show, createEffect, createMemo, untrack, type JSX } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import { t } from "../i18n";
 import { pushToast } from "../toast";
+import { createCoalesced } from "./inlineUi";
 import { InlineChart, readChartTable } from "./InlineChart";
 import {
   applyAssignments,
@@ -53,12 +47,7 @@ import {
   VOID_TAGS,
   allowedClasses,
 } from "./rich-html/allowlist";
-import {
-  applyVisibility,
-  cap,
-  htmlProps,
-  validImageSource,
-} from "./rich-html/attributes";
+import { applyVisibility, cap, htmlProps, validImageSource } from "./rich-html/attributes";
 import type { RenderContext } from "./rich-html/context";
 import { formMessage } from "./rich-html/forms";
 import {
@@ -87,12 +76,16 @@ export function RichHtml(props: {
   const [state, setState] = createStore<UiValues>(
     mergeState(firstBlock.state, stateCache.get(firstKey) ?? {}),
   );
-  const parsed = createMemo(() => parseBlock(props.html), firstBlock);
+  // Streaming appends to the same block. Parsing the growing document at most
+  // once per coalescing window keeps token-rate work out of the parser; a
+  // durable message that never changes parses once.
+  const liveHtml = createCoalesced(() => props.html, 64);
+  const parsed = createMemo(() => parseBlock(liveHtml()), firstBlock);
 
   // New content may add state names; already-known names keep their value.
   createEffect(() => {
     const block = parsed();
-    const key = `ui:${hashString(props.html)}`;
+    const key = `ui:${hashString(liveHtml())}`;
     const saved = stateCache.get(key) ?? {};
     for (const [name, value] of Object.entries(block.state)) {
       if (BLOCKED_KEYS.has(name)) continue;
@@ -109,7 +102,7 @@ export function RichHtml(props: {
   const assign = (name: string, value: unknown) => {
     if (!BIND_NAME.test(name) || BLOCKED_KEYS.has(name)) return;
     setState(name, plain(value));
-    cacheState(`ui:${hashString(props.html)}`, plain(untrack(() => state)) as UiValues);
+    cacheState(`ui:${hashString(liveHtml())}`, plain(untrack(() => state)) as UiValues);
   };
 
   const content = createMemo(() => {
@@ -126,11 +119,7 @@ export function RichHtml(props: {
     return <>{renderChildren(Array.from(block.body.childNodes), context)}</>;
   });
 
-  return (
-    <Show when={content()}>
-      {(rendered) => <div class="inline-ui">{rendered()}</div>}
-    </Show>
-  );
+  return <Show when={content()}>{(rendered) => <div class="inline-ui">{rendered()}</div>}</Show>;
 }
 
 function BoundText(props: { template: string; context: RenderContext }) {
@@ -145,9 +134,7 @@ function EachView(props: { element: HTMLTemplateElement; context: RenderContext 
   const requested = (props.element.getAttribute("data-ui-as") ?? "item").replace(/^\$/, "");
   const name = BIND_NAME.test(requested) ? requested : "item";
   const rows = createMemo(() =>
-    asList(
-      evaluate(expression, props.context.state, props.context.locals),
-    ).slice(0, MAX_EACH_ROWS),
+    asList(evaluate(expression, props.context.state, props.context.locals)).slice(0, MAX_EACH_ROWS),
   );
   return (
     <For each={rows()}>
@@ -261,8 +248,7 @@ function renderButton(
   const requested = (element.getAttribute("type") ?? "").toLowerCase();
   const type = BUTTON_TYPES.has(requested) ? requested : inForm ? "submit" : "button";
   const title = element.getAttribute("title");
-  const action =
-    setExpression !== null || sendExpression !== null || copyExpression !== null;
+  const action = setExpression !== null || sendExpression !== null || copyExpression !== null;
   const props: Record<string, unknown> = {};
   applyVisibility(element, props, context);
   if (title) props.title = cap(title, 200);
@@ -275,12 +261,7 @@ function renderButton(
     props.disabled = disabledAttr || requiresSend;
     props.onClick = () => {
       if (setExpression) {
-        applyAssignments(
-          setExpression,
-          context.state,
-          context.locals,
-          context.assign,
-        );
+        applyAssignments(setExpression, context.state, context.locals, context.assign);
       }
       if (copyExpression !== null) {
         void copyText(interpolate(copyExpression, context.state, context.locals));
@@ -332,12 +313,7 @@ function renderButton(
 }
 
 function buttonClass(classes: string[], primary: boolean, inert: boolean): string {
-  return [
-    "ui-btn",
-    primary ? "ui-btn-primary" : "",
-    inert ? "ui-btn-inert" : "",
-    ...classes,
-  ]
+  return ["ui-btn", primary ? "ui-btn-primary" : "", inert ? "ui-btn-inert" : "", ...classes]
     .filter(Boolean)
     .join(" ");
 }

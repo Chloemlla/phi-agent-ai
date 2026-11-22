@@ -9,6 +9,7 @@ phi-domain = { path = "../phi-domain" }
 phi-i18n = { path = "../phi-i18n" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+ts-rs = { workspace = true }
 async-trait = { workspace = true }
 tokio-util = { workspace = true }
 sha2 = { workspace = true }

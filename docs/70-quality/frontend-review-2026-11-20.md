@@ -194,14 +194,18 @@
   - 后端：新增结构化 `risk_level` 字段（`ApprovalSpec` / `ApprovalRequested` / `PendingApprovalView`），前端不再依赖中文风险句；`phi-i18n` 中文标点统一为全角。
   - 工程：Android 硬件返回键接入；根级 `ErrorBoundary`；工作区目录选择器（`tauri-plugin-dialog`）；Settings 页面独立 chunk；`typecheck`/`test`/`check` 脚本；新增 26 个纯函数测试；`tests/` 加入版本控制白名单。
 - **第三批（文件拆分与边界收敛）**：
-  - `App.tsx` 729 → 442 行；流/事件、模型选择、纯 helper 拆到 `src/app/`。
-  - `ProviderEditor.tsx` 1150 → 423 行；连接表单、模型列表、wizard 模型选择、共享表单 helper 拆为独立文件。
-  - `Markdown.tsx` 673 → 304 行；纯 parser 拆到 `markdown/parse.ts`。
-  - `RichHtml.tsx` 1063 → 396 行；allowlist、属性、SVG、表单、状态拆到 `rich-html/`。
+  - `App.tsx` 729 → 382 行；流/事件、模型选择、纯 helper 拆到 `src/app/`。
+  - `ProviderEditor.tsx` 1150 → 409 行；连接表单、模型列表、wizard 模型选择、共享表单 helper 拆为独立文件。
+  - `Markdown.tsx` 673 → 271 行；纯 parser 拆到 `markdown/parse.ts`。
+  - `RichHtml.tsx` 1063 → 372 行；allowlist、属性、SVG、表单、状态拆到 `rich-html/`。
   - `App.css` 3299 → 15 行 barrel；15 个有序模块在 `src/styles/app/`，拼接字节级一致。
   - `Settings.css` 1212 → 10 行 barrel；10 个有序模块在 `src/settings/styles/`，拼接字节级一致。
-  - 新增 `src/bridge.ts` 集中命令/事件边界；页面不再直接写 `invoke`/`listen` 字符串；Rust→TS 类型仍为手写镜像。
+  - 新增 `src/bridge.ts` 集中命令/事件边界；页面不再直接写 `invoke`/`listen` 字符串。
   - 抽屉增加焦点陷阱与关闭后焦点返还；移动端设置页显示节点存储说明；触摸命中区统一到 44px。
   - 新增 happy-dom + Babel Solid 的 DOM 级渲染测试（9 个），合计 35 个前端测试。
+- **第四批（类型、性能、静态检查）**：
+  - 用 `ts-rs` 从 Rust DTO 生成 `src/generated/`（34 个 TS 文件）；`bun run types:generate` 可重跑，`src/types.ts` / `src/settings/types.ts` 改为 re-export 生成类型。
+  - `Conversation` 接入 `VirtualTranscript`：≤80 行保持原 DOM，超过后按测量高度窗口化；自动滚动、details 状态、键盘焦点保持；流式文本 64ms 合并 + 增量 `splitInlineUi`，避免每 token 全量重解析。
+  - 新增 ESLint flat config（TS + Solid + jsx-a11y）与 Prettier；`lint`/`format`/`format:check` 脚本与 CI 步骤；`bun run lint` 0 error（56 个 intentional-pattern warning），`format:check` 通过。
 
-仍未处理（后续）：Rust→TS 类型生成（bridge facade 已落地）、ESLint/格式化、虚拟列表与流式 O(n²)。
+原审查清单的后续项已清空；更深一层的架构项（事件游标/增量投影、provider 规则全部回 Rust、i18n ICU/复数）另行规划。

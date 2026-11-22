@@ -30,8 +30,30 @@ type Node =
   | { kind: "array"; items: Node[] };
 
 const OPERATORS = [
-  "===", "!==", "==", "!=", "<=", ">=", "&&", "||",
-  "+", "-", "*", "/", "%", "<", ">", "!", "?", ":", ".", ",", "(", ")", "[", "]",
+  "===",
+  "!==",
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "+",
+  "-",
+  "*",
+  "/",
+  "%",
+  "<",
+  ">",
+  "!",
+  "?",
+  ":",
+  ".",
+  ",",
+  "(",
+  ")",
+  "[",
+  "]",
 ];
 
 const BLOCKED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -265,7 +287,8 @@ function tokenize(source: string): Token[] {
         if (next === "\\") {
           const escaped = source[cursor + 1];
           if (escaped === undefined) break;
-          value += escaped === "n" ? "\n" : escaped === "t" ? "\t" : escaped === "r" ? "\r" : escaped;
+          value +=
+            escaped === "n" ? "\n" : escaped === "t" ? "\t" : escaped === "r" ? "\r" : escaped;
           cursor += 2;
           continue;
         }
@@ -328,7 +351,12 @@ function evaluateNode(node: Node, state: UiValues, locals: UiValues): unknown {
       const object = evaluateNode(node.object, state, locals);
       const index = evaluateNode(node.index, state, locals);
       if (Array.isArray(object)) return object[toNumber(index)];
-      if (object && typeof object === "object" && typeof index === "string" && !BLOCKED_KEYS.has(index)) {
+      if (
+        object &&
+        typeof object === "object" &&
+        typeof index === "string" &&
+        !BLOCKED_KEYS.has(index)
+      ) {
         return (object as Record<string, unknown>)[index];
       }
       return typeof object === "string" ? object[toNumber(index)] : undefined;
@@ -477,7 +505,7 @@ const FUNCTIONS: Record<string, (args: unknown[]) => unknown> = {
   },
   avg: (args) => {
     const list = toList(args[0]);
-    return list.length ? FUNCTIONS.sum([list]) as number / list.length : 0;
+    return list.length ? (FUNCTIONS.sum([list]) as number) / list.length : 0;
   },
   min: (args) => {
     const list = toList(args[0]).map(toNumber);
@@ -505,20 +533,32 @@ const FUNCTIONS: Record<string, (args: unknown[]) => unknown> = {
     const value = toNumber(args[0]);
     const style = String(args[1] ?? "compact");
     if (style === "percent") return `${compactNumber(value)}%`;
-    if (style === "currency") return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+    if (style === "currency")
+      return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
     return compactNumber(value);
   },
-  join: (args) => toList(args[0]).map(displayValue).filter(Boolean).join(String(args[1] ?? ", ")),
+  join: (args) =>
+    toList(args[0])
+      .map(displayValue)
+      .filter(Boolean)
+      .join(String(args[1] ?? ", ")),
   filter: (args) =>
-    toList(args[0]).filter((item) => matches(fieldOf(item, args[1]), String(args[2] ?? "=="), args[3])),
+    toList(args[0]).filter((item) =>
+      matches(fieldOf(item, args[1]), String(args[2] ?? "=="), args[3]),
+    ),
   sort: (args) => {
     const field = args[1];
     const direction = String(args[2] ?? "asc") === "desc" ? -1 : 1;
     return toList(args[0])
       .slice()
-      .sort((left, right) => compareValues(fieldOf(left, field), fieldOf(right, field)) * direction);
+      .sort(
+        (left, right) => compareValues(fieldOf(left, field), fieldOf(right, field)) * direction,
+      );
   },
-  includes: (args) => toList(args[0]).some((item) => item === args[1] || displayValue(item) === displayValue(args[1])),
+  includes: (args) =>
+    toList(args[0]).some(
+      (item) => item === args[1] || displayValue(item) === displayValue(args[1]),
+    ),
   toggle: (args) => {
     const list = toList(args[0]);
     return list.some((item) => item === args[1])
@@ -538,15 +578,12 @@ const FUNCTIONS: Record<string, (args: unknown[]) => unknown> = {
   default: (args) => (args[0] == null || args[0] === "" ? args[1] : args[0]),
   upper: (args) => displayValue(args[0]).toUpperCase(),
   lower: (args) => displayValue(args[0]).toLowerCase(),
-  plural: (args) => `${toNumber(args[0])} ${toNumber(args[0]) === 1 ? String(args[1] ?? "") : String(args[2] ?? args[1] ?? "")}`,
+  plural: (args) =>
+    `${toNumber(args[0])} ${toNumber(args[0]) === 1 ? String(args[1] ?? "") : String(args[2] ?? args[1] ?? "")}`,
 };
 
 /** Evaluate one expression. Throws `UiExpressionError` on bad input. */
-export function evaluate(
-  source: string,
-  state: UiValues = {},
-  locals: UiValues = {},
-): unknown {
+export function evaluate(source: string, state: UiValues = {}, locals: UiValues = {}): unknown {
   const text = source.trim();
   if (!text) return undefined;
   if (text.length > MAX_EXPRESSION_CHARS) {
@@ -577,11 +614,7 @@ const INTERPOLATION = /\{\{([^{}]*)\}\}/g;
 
 /** Replace `{{ expression }}` in a string. A malformed expression is left as
  * written instead of erasing the surrounding copy. */
-export function interpolate(
-  template: string,
-  state: UiValues = {},
-  locals: UiValues = {},
-): string {
+export function interpolate(template: string, state: UiValues = {}, locals: UiValues = {}): string {
   const result = template.replace(INTERPOLATION, (match, expression: string) => {
     try {
       return displayValue(evaluate(expression, state, locals));

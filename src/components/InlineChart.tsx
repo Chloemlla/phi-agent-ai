@@ -41,16 +41,15 @@ function parseNumber(text: string): number | null {
   const value = Number.parseFloat(match[1]);
   if (!Number.isFinite(value)) return null;
   const suffix = match[2]?.toLowerCase();
-  const scale = suffix === "k" ? 1_000 : suffix === "m" ? 1_000_000 : suffix === "b" ? 1_000_000_000 : 1;
+  const scale =
+    suffix === "k" ? 1_000 : suffix === "m" ? 1_000_000 : suffix === "b" ? 1_000_000_000 : 1;
   return value * scale;
 }
 
 /** Returns null when the table cannot be read as data; the caller then renders
  * it as an ordinary table instead of guessing. */
 export function readChartTable(table: Element): ChartTableData | null {
-  const headerCells = Array.from(
-    table.querySelectorAll("thead tr:first-child > th"),
-  );
+  const headerCells = Array.from(table.querySelectorAll("thead tr:first-child > th"));
   const headerNames = headerCells.map(cellText);
   if (headerNames.length < 2) return null;
   const seriesNames = headerNames.slice(1);
@@ -72,9 +71,7 @@ export function readChartTable(table: Element): ChartTableData | null {
   if (labels.length === 0) return null;
 
   const heightAttr = Number.parseInt(table.getAttribute("data-height") ?? "", 10);
-  const height = Number.isFinite(heightAttr)
-    ? Math.min(420, Math.max(140, heightAttr))
-    : 200;
+  const height = Number.isFinite(heightAttr) ? Math.min(420, Math.max(140, heightAttr)) : 200;
 
   const type = table.getAttribute("data-type");
   return {
@@ -112,7 +109,9 @@ export function InlineChart(props: { data: ChartTableData }) {
   // Bars always start at zero. Lines and areas use the data range so a small
   // change does not collapse into a flat line at the top of the plot.
   const bounds = () => {
-    const values = data().values.flat().filter((value) => Number.isFinite(value));
+    const values = data()
+      .values.flat()
+      .filter((value) => Number.isFinite(value));
     if (data().kind === "bar") {
       return { low: 0, high: Math.max(1, ...values, 0) * 1.05 };
     }
@@ -171,13 +170,10 @@ export function InlineChart(props: { data: ChartTableData }) {
   const linePoints = () => {
     const count = data().labels.length;
     return data().series.map((line, lineIndex) => {
-      const points = (data().values[lineIndex] ?? [])
-        .slice(0, count)
-        .map((value, index) => {
-          const x =
-            count <= 1 ? left + plotWidth / 2 : left + (index / (count - 1)) * plotWidth;
-          return { x, y: yFor(value), value, label: data().labels[index] ?? "" };
-        });
+      const points = (data().values[lineIndex] ?? []).slice(0, count).map((value, index) => {
+        const x = count <= 1 ? left + plotWidth / 2 : left + (index / (count - 1)) * plotWidth;
+        return { x, y: yFor(value), value, label: data().labels[index] ?? "" };
+      });
       return { name: line.name, color: line.color, points };
     });
   };
@@ -259,9 +255,7 @@ export function InlineChart(props: { data: ChartTableData }) {
               <polygon
                 points={[
                   `${left},${top + plotHeight}`,
-                  ...line.points.map(
-                    (point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`,
-                  ),
+                  ...line.points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`),
                   `${WIDTH - left},${top + plotHeight}`,
                 ].join(" ")}
                 fill={line.color}
@@ -288,7 +282,14 @@ export function InlineChart(props: { data: ChartTableData }) {
                 />
                 <For each={line.points}>
                   {(point) => (
-                    <circle cx={point.x} cy={point.y} r="3.5" fill={line.color} stroke="var(--bg-surface)" stroke-width="2">
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r="3.5"
+                      fill={line.color}
+                      stroke="var(--bg-surface)"
+                      stroke-width="2"
+                    >
                       <title>{`${point.label} · ${line.name}: ${formatValue(point.value)}`}</title>
                     </circle>
                   )}

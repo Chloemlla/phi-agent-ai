@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use phi_contracts::SLOT_SESSION_STORE;
 use phi_contracts::ports::{SessionPort, TurnInfo};
+use phi_domain::agent::{AgentRole, AgentStatus, AgentView, MessageKind, WorkMode};
 use phi_domain::events::DomainEvent;
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
 use phi_domain::view::{MessageView, RunView, SessionSummary, SessionView};
@@ -19,6 +20,16 @@ struct StoredMessage {
     role: Role,
     ts: String,
     content_ref: String,
+    thread_id: String,
+    agent_id: Option<String>,
+    to_agent_id: Option<String>,
+    kind: Option<MessageKind>,
+}
+
+const MAIN_THREAD: &str = "main";
+
+fn thread_of(message: &StoredMessage) -> &str {
+    &message.thread_id
 }
 
 #[derive(Clone)]
@@ -35,6 +46,32 @@ struct RunRecord {
     error: Option<String>,
     stop_confirmation: Option<String>,
     started_at: Option<String>,
+    updated_at: String,
+    agent_id: Option<String>,
+    thread_id: String,
+    parent_run_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct AgentRecord {
+    id: String,
+    session_id: String,
+    turn_id: String,
+    role: AgentRole,
+    parent_agent_id: Option<String>,
+    root_agent_id: String,
+    model: String,
+    thinking: Option<String>,
+    thread_id: String,
+    work_mode: WorkMode,
+    status: AgentStatus,
+    report_to: Option<String>,
+    spawned_by_run_id: String,
+    report_message_id: Option<String>,
+    steps: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    created_at: String,
     updated_at: String,
 }
 
@@ -64,6 +101,7 @@ struct StoredSession {
     messages: Vec<StoredMessage>,
     runs: HashMap<String, RunRecord>,
     run_order: Vec<String>,
+    agents: HashMap<String, AgentRecord>,
     turn_count: u64,
 }
 
@@ -150,6 +188,40 @@ impl SessionPlugin {
             );
         }
 
+        // An agent can be left in an active state if the process died before
+        // its run started, or between a terminal run event and the status
+        // sync. Never leave it holding the write lease.
+        let stranded: Vec<(String, String)> = {
+            let projection = self.state.read().unwrap();
+            let mut out = Vec::new();
+            for session in projection.sessions.values() {
+                for agent in session.agents.values() {
+                    if agent.status.is_active()
+                        && !session.runs.values().any(|run| {
+                            run.agent_id.as_deref() == Some(agent.id.as_str()) && run.is_active()
+                        })
+                    {
+                        out.push((session.id.clone(), agent.id.clone()));
+                    }
+                }
+            }
+            out
+        };
+        for (session_id, agent_id) in stranded {
+            let _ = self.bus.publish(
+                &session_id,
+                "plugin-session",
+                &DomainEvent::AgentStatusChanged {
+                    agent_id,
+                    session_id: session_id.clone(),
+                    status: AgentStatus::Interrupted,
+                    note: Some(i18n::t(
+                        "The process restarted while this agent was active; it was not resumed.",
+                    )),
+                },
+            );
+        }
+
         // A crash or a failed result append can leave an unpaired tool_use.
         // Repair every session, not only the ones with a still-active run: the
         // append may have failed after the run was already marked terminal,
@@ -183,12 +255,16 @@ impl SessionPlugin {
             }
         }
 
-        let mut missing: Vec<String> = Vec::new();
+        let mut missing: HashMap<String, Vec<String>> = HashMap::new();
         for message in &stored {
             for block in self.resolve_blocks(&message.content_ref) {
                 if let ContentBlock::ToolUse { id, .. } = block {
-                    if !resolved.contains(&id) && !missing.contains(&id) {
-                        missing.push(id);
+                    if !resolved.contains(&id) {
+                        let thread = message.thread_id.clone();
+                        let entries = missing.entry(thread).or_default();
+                        if !entries.contains(&id) {
+                            entries.push(id);
+                        }
                     }
                 }
             }
@@ -197,18 +273,31 @@ impl SessionPlugin {
             return Ok(0);
         }
 
-        let blocks = missing
-            .iter()
-            .map(|tool_use_id| {
-                ContentBlock::tool_result(
-                    tool_use_id.clone(),
-                    i18n::t("Run interrupted before the tool result was recorded; the action may have executed. The run needs manual reconciliation and will not be retried automatically."),
-                    true,
-                )
-            })
-            .collect();
-        self.append_message(session_id, None, Role::User, blocks)?;
-        Ok(missing.len())
+        let mut repaired = 0usize;
+        for (thread_id, ids) in missing {
+            let blocks = ids
+                .iter()
+                .map(|tool_use_id| {
+                    ContentBlock::tool_result(
+                        tool_use_id.clone(),
+                        i18n::t("Run interrupted before the tool result was recorded; the action may have executed. The run needs manual reconciliation and will not be retried automatically."),
+                        true,
+                    )
+                })
+                .collect();
+            self.append_message_in_thread(
+                session_id,
+                None,
+                &thread_id,
+                None,
+                None,
+                Some(MessageKind::Tool),
+                Role::User,
+                blocks,
+            )?;
+            repaired += ids.len();
+        }
+        Ok(repaired)
     }
 
     fn summary_of(session: &StoredSession) -> SessionSummary {
@@ -217,11 +306,17 @@ impl SessionPlugin {
             title: session.title.clone(),
             created_at: session.created_at.clone(),
             updated_at: session.updated_at.clone(),
-            message_count: session.messages.len(),
+            message_count: session
+                .messages
+                .iter()
+                .filter(|message| thread_of(message) == MAIN_THREAD)
+                .count(),
             last_run_state: session
                 .run_order
-                .last()
-                .and_then(|id| session.runs.get(id))
+                .iter()
+                .rev()
+                .filter_map(|id| session.runs.get(id))
+                .find(|run| run.parent_run_id.is_none())
                 .map(|r| r.state.clone()),
         }
     }
@@ -272,12 +367,17 @@ impl SessionPort for SessionPlugin {
         let messages = stored
             .messages
             .iter()
+            .filter(|message| thread_of(message) == MAIN_THREAD)
             .map(|m| MessageView {
                 id: m.id.clone(),
                 turn_id: m.turn_id.clone(),
                 role: m.role,
                 ts: m.ts.clone(),
                 blocks: self.resolve_blocks(&m.content_ref),
+                thread_id: Some(m.thread_id.clone()),
+                agent_id: m.agent_id.clone(),
+                to_agent_id: m.to_agent_id.clone(),
+                kind: m.kind,
             })
             .collect();
 
@@ -288,6 +388,9 @@ impl SessionPort for SessionPlugin {
             .map(run_view)
             .collect();
 
+        let mut agents: Vec<AgentView> = stored.agents.values().map(agent_view).collect();
+        agents.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
         Some(SessionView {
             id: stored.id.clone(),
             owner_node_id: stored.owner_node_id.clone(),
@@ -296,6 +399,7 @@ impl SessionPort for SessionPlugin {
             updated_at: stored.updated_at.clone(),
             messages,
             runs,
+            agents,
         })
     }
 
@@ -327,6 +431,29 @@ impl SessionPort for SessionPlugin {
         role: Role,
         blocks: Vec<ContentBlock>,
     ) -> Result<String, String> {
+        self.append_message_in_thread(
+            session_id,
+            turn_id,
+            MAIN_THREAD,
+            None,
+            None,
+            None,
+            role,
+            blocks,
+        )
+    }
+
+    fn append_message_in_thread(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        thread_id: &str,
+        agent_id: Option<&str>,
+        to_agent_id: Option<&str>,
+        kind: Option<MessageKind>,
+        role: Role,
+        blocks: Vec<ContentBlock>,
+    ) -> Result<String, String> {
         {
             let projection = self.state.read().unwrap();
             if !projection.sessions.contains_key(session_id) {
@@ -352,12 +479,20 @@ impl SessionPort for SessionPlugin {
                 message_id: message_id.clone(),
                 role,
                 content_ref,
+                thread_id: Some(thread_id.to_string()),
+                agent_id: agent_id.map(str::to_string),
+                to_agent_id: to_agent_id.map(str::to_string),
+                kind,
             },
         )?;
         Ok(message_id)
     }
 
     fn messages(&self, session_id: &str) -> Vec<ChatMessage> {
+        self.messages_for_thread(session_id, MAIN_THREAD)
+    }
+
+    fn messages_for_thread(&self, session_id: &str, thread_id: &str) -> Vec<ChatMessage> {
         let stored = {
             let projection = self.state.read().unwrap();
             match projection.sessions.get(session_id) {
@@ -367,6 +502,7 @@ impl SessionPort for SessionPlugin {
         };
         stored
             .iter()
+            .filter(|m| thread_of(m) == thread_id)
             .map(|m| ChatMessage {
                 role: m.role,
                 blocks: self.resolve_blocks(&m.content_ref),
@@ -383,6 +519,64 @@ impl SessionPort for SessionPlugin {
             .filter_map(|id| session.runs.get(id))
             .find(|r| r.is_active())
             .map(|r| r.id.clone())
+    }
+
+    fn active_root_run(&self, session_id: &str) -> Option<String> {
+        let projection = self.state.read().unwrap();
+        let session = projection.sessions.get(session_id)?;
+        session
+            .run_order
+            .iter()
+            .filter_map(|id| session.runs.get(id))
+            .find(|r| r.is_active() && r.parent_run_id.is_none())
+            .map(|r| r.id.clone())
+    }
+
+    fn active_run_for_agent(&self, agent_id: &str) -> Option<String> {
+        let projection = self.state.read().unwrap();
+        for session in projection.sessions.values() {
+            if let Some(run) = session
+                .run_order
+                .iter()
+                .filter_map(|id| session.runs.get(id))
+                .find(|run| run.agent_id.as_deref() == Some(agent_id) && run.is_active())
+            {
+                return Some(run.id.clone());
+            }
+        }
+        None
+    }
+
+    fn agents(&self, session_id: &str) -> Vec<AgentView> {
+        let projection = self.state.read().unwrap();
+        projection
+            .sessions
+            .get(session_id)
+            .map(|session| session.agents.values().map(agent_view).collect())
+            .unwrap_or_default()
+    }
+
+    fn agent(&self, agent_id: &str) -> Option<AgentView> {
+        let projection = self.state.read().unwrap();
+        projection
+            .sessions
+            .values()
+            .find_map(|session| session.agents.get(agent_id))
+            .map(agent_view)
+    }
+
+    fn write_lease_holder(&self, session_id: &str) -> Option<String> {
+        let projection = self.state.read().unwrap();
+        let session = projection.sessions.get(session_id)?;
+        session
+            .agents
+            .values()
+            .find(|agent| {
+                agent.role == AgentRole::Subagent
+                    && agent.work_mode == WorkMode::Shared
+                    && agent.status.is_active()
+            })
+            .map(|agent| agent.id.clone())
     }
 
     fn find_run(&self, run_id: &str) -> Option<(String, RunView)> {
@@ -460,6 +654,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     messages: Vec::new(),
                     runs: HashMap::new(),
                     run_order: Vec::new(),
+                    agents: HashMap::new(),
                     turn_count: 0,
                 });
         }
@@ -477,6 +672,10 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             message_id,
             role,
             content_ref,
+            thread_id,
+            agent_id,
+            to_agent_id,
+            kind,
         } => {
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 session.messages.push(StoredMessage {
@@ -485,7 +684,83 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     role,
                     ts: record.ts.clone(),
                     content_ref,
+                    thread_id: thread_id.unwrap_or_else(|| MAIN_THREAD.to_string()),
+                    agent_id,
+                    to_agent_id,
+                    kind,
                 });
+                session.updated_at = record.ts.clone();
+            }
+        }
+        DomainEvent::AgentCreated {
+            agent_id,
+            session_id,
+            turn_id,
+            role,
+            parent_agent_id,
+            root_agent_id,
+            model,
+            thinking,
+            thread_id,
+            work_mode,
+            report_to,
+            spawned_by_run_id,
+        } => {
+            if let Some(session) = projection.sessions.get_mut(&session_id) {
+                session.agents.insert(
+                    agent_id.clone(),
+                    AgentRecord {
+                        id: agent_id,
+                        session_id,
+                        turn_id,
+                        role,
+                        parent_agent_id,
+                        root_agent_id,
+                        model,
+                        thinking,
+                        thread_id,
+                        work_mode,
+                        status: AgentStatus::Created,
+                        report_to,
+                        spawned_by_run_id,
+                        report_message_id: None,
+                        steps: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        created_at: record.ts.clone(),
+                        updated_at: record.ts.clone(),
+                    },
+                );
+                session.updated_at = record.ts.clone();
+            }
+        }
+        DomainEvent::AgentStatusChanged {
+            agent_id,
+            session_id,
+            status,
+            note: _,
+        } => {
+            if let Some(session) = projection.sessions.get_mut(&session_id) {
+                if let Some(agent) = session.agents.get_mut(&agent_id) {
+                    agent.status = status;
+                    agent.updated_at = record.ts.clone();
+                }
+                session.updated_at = record.ts.clone();
+            }
+        }
+        DomainEvent::AgentReported {
+            agent_id,
+            session_id,
+            status,
+            report_message_id,
+            ..
+        } => {
+            if let Some(session) = projection.sessions.get_mut(&session_id) {
+                if let Some(agent) = session.agents.get_mut(&agent_id) {
+                    agent.status = status;
+                    agent.report_message_id = Some(report_message_id);
+                    agent.updated_at = record.ts.clone();
+                }
                 session.updated_at = record.ts.clone();
             }
         }
@@ -493,6 +768,9 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             run_id,
             session_id,
             turn_id,
+            agent_id,
+            thread_id,
+            parent_run_id,
         } => {
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 if !session.runs.contains_key(&run_id) {
@@ -514,30 +792,30 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                         stop_confirmation: None,
                         started_at: None,
                         updated_at: record.ts.clone(),
+                        agent_id,
+                        thread_id: thread_id.unwrap_or_else(|| MAIN_THREAD.to_string()),
+                        parent_run_id,
                     },
                 );
                 session.updated_at = record.ts.clone();
             }
         }
-        DomainEvent::RunStarted { run_id }
-        | DomainEvent::StepCompleted { run_id, .. }
-        | DomainEvent::RunResumed { run_id, .. } => {
-            update_run(
-                projection,
-                record,
-                &run_id,
-                |run| match record.payload["type"].as_str() {
-                    Some("RunStarted") => {
-                        run.state = "Running".to_string();
-                        run.started_at = Some(record.ts.clone());
-                    }
-                    Some("RunResumed") => {
-                        run.state = "Running".to_string();
-                        run.pending_approval_id = None;
-                    }
-                    _ => {}
-                },
-            );
+        DomainEvent::RunStarted { run_id } => {
+            update_run(projection, record, &run_id, |run| {
+                run.state = "Running".to_string();
+                run.started_at = Some(record.ts.clone());
+            });
+            sync_agent_status(projection, &run_id, AgentStatus::Running, &record.ts);
+        }
+        DomainEvent::RunResumed { run_id, .. } => {
+            update_run(projection, record, &run_id, |run| {
+                run.state = "Running".to_string();
+                run.pending_approval_id = None;
+            });
+            sync_agent_status(projection, &run_id, AgentStatus::Running, &record.ts);
+        }
+        DomainEvent::StepCompleted { run_id, .. } => {
+            update_run(projection, record, &run_id, |_| {});
         }
         DomainEvent::StepStarted { run_id, index, .. } => {
             update_run(projection, record, &run_id, |run| {
@@ -546,6 +824,8 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     run.state = "Running".to_string();
                 }
             });
+            sync_agent_progress(projection, &run_id, &record.ts);
+            sync_agent_status(projection, &run_id, AgentStatus::Running, &record.ts);
         }
         DomainEvent::RunWaitingApproval {
             run_id,
@@ -555,6 +835,12 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.state = "WaitingApproval".to_string();
                 run.pending_approval_id = Some(approval_id);
             });
+            sync_agent_status(
+                projection,
+                &run_id,
+                AgentStatus::WaitingApproval,
+                &record.ts,
+            );
         }
         DomainEvent::ModelCallReturned {
             run_id,
@@ -570,12 +856,14 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.cache_read_tokens += cache_read_tokens;
                 run.cache_write_tokens += cache_write_tokens;
             });
+            add_agent_tokens(projection, &run_id, input_tokens, output_tokens, &record.ts);
         }
         DomainEvent::RunSucceeded { run_id } => {
             update_run(projection, record, &run_id, |run| {
                 run.state = "Succeeded".to_string();
                 run.pending_approval_id = None;
             });
+            sync_agent_status(projection, &run_id, AgentStatus::Succeeded, &record.ts);
         }
         DomainEvent::RunFailed { run_id, error } => {
             update_run(projection, record, &run_id, |run| {
@@ -583,6 +871,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.error = Some(error);
                 run.pending_approval_id = None;
             });
+            sync_agent_status(projection, &run_id, AgentStatus::Failed, &record.ts);
         }
         DomainEvent::RunAborted {
             run_id,
@@ -595,6 +884,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.stop_confirmation = Some(stop_confirmation);
                 run.pending_approval_id = None;
             });
+            sync_agent_status(projection, &run_id, AgentStatus::Cancelled, &record.ts);
         }
         DomainEvent::RunAwaitingReconciliation { run_id, note } => {
             update_run(projection, record, &run_id, |run| {
@@ -602,6 +892,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.error = Some(note);
                 run.pending_approval_id = None;
             });
+            sync_agent_status(projection, &run_id, AgentStatus::Failed, &record.ts);
         }
         DomainEvent::RunInterrupted {
             run_id,
@@ -617,6 +908,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 }
                 session.updated_at = record.ts.clone();
             }
+            sync_agent_status(projection, &run_id, AgentStatus::Interrupted, &record.ts);
         }
         _ => {
             // Tool/model/approval leaf events only bump activity timestamps.
@@ -642,6 +934,86 @@ fn update_run(
     }
 }
 
+fn sync_agent_status(projection: &mut Projection, run_id: &str, status: AgentStatus, ts: &str) {
+    for session in projection.sessions.values_mut() {
+        let Some(run) = session.runs.get(run_id) else {
+            continue;
+        };
+        let Some(agent_id) = run.agent_id.clone() else {
+            return;
+        };
+        if let Some(agent) = session.agents.get_mut(&agent_id) {
+            agent.status = status;
+            agent.updated_at = ts.to_string();
+        }
+        return;
+    }
+}
+
+fn sync_agent_progress(projection: &mut Projection, run_id: &str, ts: &str) {
+    for session in projection.sessions.values_mut() {
+        let Some(run) = session.runs.get(run_id) else {
+            continue;
+        };
+        let Some(agent_id) = run.agent_id.clone() else {
+            return;
+        };
+        let steps = run.steps;
+        if let Some(agent) = session.agents.get_mut(&agent_id) {
+            agent.steps = agent.steps.max(steps);
+            agent.updated_at = ts.to_string();
+        }
+        return;
+    }
+}
+
+fn add_agent_tokens(
+    projection: &mut Projection,
+    run_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    ts: &str,
+) {
+    for session in projection.sessions.values_mut() {
+        let Some(run) = session.runs.get(run_id) else {
+            continue;
+        };
+        let Some(agent_id) = run.agent_id.clone() else {
+            return;
+        };
+        if let Some(agent) = session.agents.get_mut(&agent_id) {
+            agent.input_tokens += input_tokens;
+            agent.output_tokens += output_tokens;
+            agent.updated_at = ts.to_string();
+        }
+        return;
+    }
+}
+
+fn agent_view(agent: &AgentRecord) -> AgentView {
+    AgentView {
+        id: agent.id.clone(),
+        session_id: agent.session_id.clone(),
+        turn_id: agent.turn_id.clone(),
+        role: agent.role,
+        parent_agent_id: agent.parent_agent_id.clone(),
+        root_agent_id: agent.root_agent_id.clone(),
+        model: agent.model.clone(),
+        thinking: agent.thinking.clone(),
+        thread_id: agent.thread_id.clone(),
+        work_mode: agent.work_mode,
+        status: agent.status,
+        report_to: agent.report_to.clone(),
+        spawned_by_run_id: agent.spawned_by_run_id.clone(),
+        report_message_id: agent.report_message_id.clone(),
+        steps: agent.steps,
+        input_tokens: agent.input_tokens,
+        output_tokens: agent.output_tokens,
+        created_at: agent.created_at.clone(),
+        updated_at: agent.updated_at.clone(),
+    }
+}
+
 fn run_view(r: &RunRecord) -> RunView {
     RunView {
         id: r.id.clone(),
@@ -657,6 +1029,9 @@ fn run_view(r: &RunRecord) -> RunView {
         stop_confirmation: r.stop_confirmation.clone(),
         started_at: r.started_at.clone(),
         updated_at: r.updated_at.clone(),
+        agent_id: r.agent_id.clone(),
+        thread_id: Some(r.thread_id.clone()),
+        parent_run_id: r.parent_run_id.clone(),
     }
 }
 

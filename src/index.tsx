@@ -22,9 +22,7 @@ import { setLang, t } from "./i18n";
 // Mirror the browser language before bootstrap so the first paint (loading
 // state included) has the right document language. The node's saved setting
 // corrects it once Bootstrap arrives.
-const initialLang = navigator.language.toLowerCase().startsWith("zh")
-  ? "zh-CN"
-  : "en";
+const initialLang = navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
 setLang(initialLang);
 
 function errorText(error: unknown): string {
@@ -40,11 +38,7 @@ render(
           <div class="empty-state">
             <h1 class="empty-title">{t("Something went wrong.")}</h1>
             <p class="empty-text">{errorText(error)}</p>
-            <button
-              type="button"
-              class="btn primary"
-              onClick={() => window.location.reload()}
-            >
+            <button type="button" class="btn primary" onClick={() => window.location.reload()}>
               {t("Reload")}
             </button>
           </div>

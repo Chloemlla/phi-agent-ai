@@ -234,7 +234,8 @@
   background: var(--bg-surface);
   font-size: 11px;
   color: var(--text-secondary);
-  transition: background var(--dur-fast) var(--ease),
+  transition:
+    background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
 }
 

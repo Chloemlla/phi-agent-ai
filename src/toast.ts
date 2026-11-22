@@ -41,9 +41,7 @@ export function pushToast(tone: ToastTone, message: string): void {
   // Identical messages collapse into the existing toast; the timer restarts so
   // the notice stays visible for a moment after the last occurrence. Tone is
   // part of the identity so a later warning is never hidden by an info toast.
-  const existing = toasts().find(
-    (toast) => toast.message === text && toast.tone === tone,
-  );
+  const existing = toasts().find((toast) => toast.message === text && toast.tone === tone);
   if (existing) {
     armTimer(existing.id);
     return;

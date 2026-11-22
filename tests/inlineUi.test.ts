@@ -25,9 +25,7 @@ describe("splitInlineUi", () => {
   });
 
   test("supports tilde fences", () => {
-    expect(splitInlineUi("~~~html\n<i>x</i>\n~~~")).toEqual([
-      { kind: "html", html: "<i>x</i>" },
-    ]);
+    expect(splitInlineUi("~~~html\n<i>x</i>\n~~~")).toEqual([{ kind: "html", html: "<i>x</i>" }]);
   });
 
   test("leaves non-html fences as prose", () => {

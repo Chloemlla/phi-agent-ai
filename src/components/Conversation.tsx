@@ -1,27 +1,11 @@
 // Conversation transcript: document flow with role rows, collapsible tool
 // blocks and risk-graded approval cards. No left/right bubbles.
 
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-} from "solid-js";
-import {
-  formatClock,
-  lastAssistantText,
-  streamMatchesDurable,
-} from "../format";
+import { For, Index, Show, createEffect, createMemo, createSignal, type Accessor } from "solid-js";
+import { formatClock, lastAssistantText, streamMatchesDurable } from "../format";
 import { t, tArgs } from "../i18n";
 import { isActiveState, runTone, stateLabel } from "../status";
-import type {
-  Block,
-  Message,
-  PendingApproval,
-  Run,
-  SessionDetail,
-} from "../types";
+import type { Block, Message, PendingApproval, Run, SessionDetail } from "../types";
 import { ApprovalCard } from "./ApprovalCard";
 import {
   IconAlert,
@@ -34,7 +18,20 @@ import {
 } from "./Icons";
 import { CopyButton, Markdown } from "./Markdown";
 import { RichHtml } from "./RichHtml";
-import { splitInlineUi } from "./inlineUi";
+import { createCoalesced, createInlineUiSplitter, type InlineUiSegment } from "./inlineUi";
+import { VIRTUALIZE_THRESHOLD, VirtualTranscript } from "./VirtualTranscript";
+
+// Native <details> open state lives in the DOM. Windowed rows are unmounted
+// when they leave the viewport, so remember the user's choice by block (the
+// durable block objects are reused across refreshes). The initial `open`
+// expression is deliberately non-reactive: it restores the choice on mount
+// without fighting the browser's own toggling afterwards.
+const blockOpen = new WeakMap<Block, boolean>();
+const runDetailsOpen = new Map<string, boolean>();
+
+function rememberBlockOpen(block: Block, element: HTMLDetailsElement) {
+  blockOpen.set(block, element.open);
+}
 
 function ToolBlock(props: {
   block: Block;
@@ -47,11 +44,7 @@ function ToolBlock(props: {
     case "text": {
       const block = props.block;
       return props.assistant ? (
-        <Markdown
-          text={block.text}
-          onOpenUrl={props.onOpenUrl}
-          onSend={props.onSend}
-        />
+        <Markdown text={block.text} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />
       ) : (
         <div class="text">{block.text}</div>
       );
@@ -59,7 +52,11 @@ function ToolBlock(props: {
     case "thinking": {
       const block = props.block;
       return (
-        <details class="thinking-block">
+        <details
+          class="thinking-block"
+          open={blockOpen.get(block) ?? false}
+          onToggle={(event) => rememberBlockOpen(block, event.currentTarget)}
+        >
           <summary>
             <span class="thinking-glyph">
               <IconBrain size={13} />
@@ -70,10 +67,7 @@ function ToolBlock(props: {
             </span>
           </summary>
           <div class="thinking-body">
-            <Markdown
-              text={block.thinking || t("(empty)")}
-              onOpenUrl={props.onOpenUrl}
-            />
+            <Markdown text={block.thinking || t("(empty)")} onOpenUrl={props.onOpenUrl} />
           </div>
         </details>
       );
@@ -84,22 +78,22 @@ function ToolBlock(props: {
           <span class="thinking-glyph">
             <IconBrain size={13} />
           </span>
-          <span class="thinking-label">
-            {t("Reasoning hidden by the provider")}
-          </span>
+          <span class="thinking-label">{t("Reasoning hidden by the provider")}</span>
         </div>
       );
     case "tool_use": {
       const block = props.block;
       return (
-        <details class="tool">
+        <details
+          class="tool"
+          open={blockOpen.get(block) ?? false}
+          onToggle={(event) => rememberBlockOpen(block, event.currentTarget)}
+        >
           <summary>
             <span class="tool-glyph ok">
               <IconWrench size={13} />
             </span>
-            <span class="tool-name mono">
-              {tArgs("Call {name}", { name: block.name })}
-            </span>
+            <span class="tool-name mono">{tArgs("Call {name}", { name: block.name })}</span>
             <span class="chevron">
               <IconChevron size={13} />
             </span>
@@ -121,7 +115,11 @@ function ToolBlock(props: {
           : t("Tool result");
       };
       return (
-        <details class="tool" open={block.is_error}>
+        <details
+          class="tool"
+          open={blockOpen.get(block) ?? block.is_error}
+          onToggle={(event) => rememberBlockOpen(block, event.currentTarget)}
+        >
           <summary>
             <span
               classList={{
@@ -130,10 +128,7 @@ function ToolBlock(props: {
                 ok: !block.is_error,
               }}
             >
-              <Show
-                when={block.is_error}
-                fallback={<IconCheck size={13} />}
-              >
+              <Show when={block.is_error} fallback={<IconCheck size={13} />}>
                 <IconClose size={12} />
               </Show>
             </span>
@@ -147,9 +142,7 @@ function ToolBlock(props: {
               <CopyButton text={block.content} />
             </div>
           </Show>
-          <pre classList={{ mono: true, error: block.is_error }}>
-            {block.content}
-          </pre>
+          <pre classList={{ mono: true, error: block.is_error }}>{block.content}</pre>
         </details>
       );
     }
@@ -197,15 +190,70 @@ function MessageRow(props: {
               block={block}
               assistant={!user()}
               toolName={
-                block.type === "tool_result"
-                  ? props.toolNames.get(block.tool_use_id)
-                  : undefined
+                block.type === "tool_result" ? props.toolNames.get(block.tool_use_id) : undefined
               }
               onOpenUrl={props.onOpenUrl}
               onSend={props.onSend}
             />
           )}
         </For>
+      </div>
+    </article>
+  );
+}
+
+function segmentText(segment: InlineUiSegment): string {
+  return segment.kind === "text" ? segment.text : "";
+}
+
+function segmentHtml(segment: InlineUiSegment): string {
+  return segment.kind === "html" ? segment.html : "";
+}
+
+function StreamingMessage(props: {
+  segments: Accessor<InlineUiSegment[]>;
+  ended: boolean;
+  onOpenUrl?: (url: string) => void;
+  onSend?: (text: string) => void;
+}) {
+  return (
+    <article class="msg assistant streaming">
+      <header class="msg-head">
+        <span class="avatar agent">
+          <IconPhi size={13} />
+        </span>
+        <span class="msg-name">{t("Agent")}</span>
+      </header>
+      <div class="msg-body">
+        {/* Plain text while streaming: reparsing Markdown on every token
+            recreates blocks and loses code-copy state. An `html` fence is
+            rendered live because its content is self-contained, then the
+            durable message renders the whole reply once. Index keeps existing
+            segments mounted while the tail grows. */}
+        <Index each={props.segments()}>
+          {(segment) => (
+            <Show
+              when={segment().kind === "html"}
+              fallback={
+                <Show when={segmentText(segment()).trim()}>
+                  <div class="streaming-text">{segmentText(segment())}</div>
+                </Show>
+              }
+            >
+              <RichHtml
+                html={segmentHtml(segment())}
+                onOpenUrl={props.onOpenUrl}
+                onSend={props.onSend}
+              />
+            </Show>
+          )}
+        </Index>
+        <Show when={props.ended}>
+          <div class="stream-stopped">
+            <span class="dot tone-idle" />
+            {t("Stopped")}
+          </div>
+        </Show>
       </div>
     </article>
   );
@@ -272,7 +320,11 @@ function RunNotice(props: { run: Run }) {
         </span>
       </div>
       <Show when={details()}>
-        <details class="run-notice-details">
+        <details
+          class="run-notice-details"
+          open={runDetailsOpen.get(props.run.id) ?? false}
+          onToggle={(event) => runDetailsOpen.set(props.run.id, event.currentTarget.open)}
+        >
           <summary>{t("Details")}</summary>
           <div class="run-notice-body">
             <CopyButton text={details()} />
@@ -285,6 +337,63 @@ function RunNotice(props: { run: Run }) {
 }
 
 const FAILED_STATES = ["AwaitingReconciliation", "Failed", "Aborted"];
+
+type MessageRowData = { key: string; kind: "message"; message: Message };
+type StreamRowData = { key: string; kind: "stream" };
+type ApprovalRowData = {
+  key: string;
+  kind: "approval";
+  approval: Accessor<PendingApproval>;
+  update: (approval: PendingApproval) => void;
+};
+type RunRowData = { key: string; kind: "run" };
+type TranscriptRow = MessageRowData | StreamRowData | ApprovalRowData | RunRowData;
+
+const STREAM_ROW: StreamRowData = { key: "stream", kind: "stream" };
+const RUN_ROW: RunRowData = { key: "run", kind: "run" };
+const messageRows = new WeakMap<Message, MessageRowData>();
+const approvalRows = new Map<string, ApprovalRowData>();
+
+function messageRow(message: Message): MessageRowData {
+  let row = messageRows.get(message);
+  if (!row) {
+    row = { key: `message:${message.id}`, kind: "message", message };
+    messageRows.set(message, row);
+  }
+  return row;
+}
+
+// Approval objects are rebuilt by every projection refresh; keep one row and
+// update its accessor so the card keeps local state (busy buttons, focus).
+function approvalRow(approval: PendingApproval): ApprovalRowData {
+  const existing = approvalRows.get(approval.id);
+  if (existing) {
+    existing.update(approval);
+    return existing;
+  }
+  const [value, setValue] = createSignal(approval);
+  const row: ApprovalRowData = {
+    key: `approval:${approval.id}`,
+    kind: "approval",
+    approval: value,
+    update: (next) => setValue(next),
+  };
+  approvalRows.set(approval.id, row);
+  return row;
+}
+
+function estimateRow(row: TranscriptRow): number {
+  switch (row.kind) {
+    case "message":
+      return 120;
+    case "stream":
+      return 72;
+    case "approval":
+      return 180;
+    case "run":
+      return 96;
+  }
+}
 
 export function Conversation(props: {
   detail: SessionDetail | null;
@@ -299,8 +408,12 @@ export function Conversation(props: {
   onOpenUrl?: (url: string) => void;
   onSend?: (text: string) => void;
 }) {
-  const failedRun = () =>
-    props.run && FAILED_STATES.includes(props.run.state) ? props.run : null;
+  const [transcript, setTranscript] = createSignal<HTMLDivElement>();
+  const coalescedText = createCoalesced(() => props.streamText, 64);
+  const splitter = createInlineUiSplitter();
+  const streamSegments = createMemo(() => splitter.update(coalescedText()));
+
+  const failedRun = () => (props.run && FAILED_STATES.includes(props.run.state) ? props.run : null);
 
   const toolNames = createMemo(() => {
     const names = new Map<string, string>();
@@ -312,128 +425,123 @@ export function Conversation(props: {
     return names;
   });
 
-  const durableStream = () =>
-    streamMatchesDurable(props.streamText, lastAssistantText(props.detail));
+  const durableText = createMemo(() => lastAssistantText(props.detail));
+  const durableStream = () => streamMatchesDurable(props.streamText, durableText());
+  // Boolean memo: token-rate text changes do not rebuild the row list while
+  // the live row stays on screen.
+  const streamVisible = createMemo(() => props.streamText.length > 0 && !durableStream());
 
-  const showStream = () => props.streamText.length > 0 && !durableStream();
-  const streamSegments = () => splitInlineUi(props.streamText);
+  const rows = createMemo<TranscriptRow[]>(() => {
+    const detail = props.detail;
+    if (!detail) return [];
+    const result: TranscriptRow[] = [];
+    for (const message of detail.session.messages) {
+      result.push(messageRow(message));
+    }
+    if (streamVisible()) result.push(STREAM_ROW);
+    const liveApprovals = new Set<string>();
+    for (const approval of detail.pendingApprovals) {
+      liveApprovals.add(approval.id);
+      result.push(approvalRow(approval));
+    }
+    for (const id of approvalRows.keys()) {
+      if (!liveApprovals.has(id)) approvalRows.delete(id);
+    }
+    if (failedRun()) result.push(RUN_ROW);
+    return result;
+  });
+
+  // Pinning follows the coalesced live text, which is also the DOM cadence.
+  const revision = () => `${coalescedText().length}:${props.streamEnded ? 1 : 0}`;
+
+  function renderRow(row: TranscriptRow) {
+    switch (row.kind) {
+      case "message":
+        return (
+          <MessageRow
+            message={row.message}
+            toolNames={toolNames()}
+            onOpenUrl={props.onOpenUrl}
+            onSend={props.onSend}
+          />
+        );
+      case "stream":
+        return (
+          <StreamingMessage
+            segments={streamSegments}
+            ended={props.streamEnded}
+            onOpenUrl={props.onOpenUrl}
+            onSend={props.onSend}
+          />
+        );
+      case "approval":
+        return (
+          <ApprovalCard
+            approval={row.approval()}
+            now={props.now}
+            onResolve={(approved) => props.onResolve(row.approval().id, approved)}
+          />
+        );
+      case "run":
+        return <Show when={failedRun()}>{(run) => <RunNotice run={run()} />}</Show>;
+    }
+  }
 
   // Announce pending approvals once per count change; the transcript itself is
   // not a live region.
-  const approvalCount = createMemo(
-    () => props.detail?.pendingApprovals.length ?? 0,
-  );
+  const approvalCount = createMemo(() => props.detail?.pendingApprovals.length ?? 0);
   const [approvalNotice, setApprovalNotice] = createSignal("");
   createEffect(() => {
     const count = approvalCount();
-    setApprovalNotice(
-      count > 0 ? tArgs("Approval required ({count})", { count }) : "",
-    );
+    setApprovalNotice(count > 0 ? tArgs("Approval required ({count})", { count }) : "");
   });
 
   return (
-    <div class="conversation-inner">
-      <div
-        class="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        {approvalNotice()}
-      </div>
-      <Show when={!props.modeOk}>
-        <div class="banner warn" role="status">
-          <IconAlert size={15} />
-          <div>
-            {props.modeReason ||
-              t("The node is not in normal mode; sending is disabled")}
-          </div>
+    <div
+      class="transcript"
+      tabindex={rows().length > VIRTUALIZE_THRESHOLD ? 0 : undefined}
+      ref={(element) => setTranscript(element)}
+    >
+      <div class="conversation-inner">
+        <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {approvalNotice()}
         </div>
-      </Show>
+        <Show when={!props.modeOk}>
+          <div class="banner warn" role="status">
+            <IconAlert size={15} />
+            <div>
+              {props.modeReason || t("The node is not in normal mode; sending is disabled")}
+            </div>
+          </div>
+        </Show>
 
-      <Show
-        when={props.detail}
-        fallback={<div class="loading">{t("Loading…")}</div>}
-      >
-        {(detail) => (
-          <>
-            <Show
-              when={
-                detail().session.messages.length === 0 &&
-                !props.streamText &&
-                detail().pendingApprovals.length === 0 &&
-                !(props.run && isActiveState(props.run.state))
-              }
-            >
-              <EmptyState modelConfigured={props.modelConfigured} />
-            </Show>
+        <Show when={props.detail} fallback={<div class="loading">{t("Loading…")}</div>}>
+          {(detail) => (
+            <>
+              <Show
+                when={
+                  detail().session.messages.length === 0 &&
+                  !props.streamText &&
+                  detail().pendingApprovals.length === 0 &&
+                  !(props.run && isActiveState(props.run.state))
+                }
+              >
+                <EmptyState modelConfigured={props.modelConfigured} />
+              </Show>
 
-            <For each={detail().session.messages}>
-              {(message: Message) => (
-                <MessageRow
-                  message={message}
-                  toolNames={toolNames()}
-                  onOpenUrl={props.onOpenUrl}
-                  onSend={props.onSend}
+              <Show when={rows().length > 0}>
+                <VirtualTranscript
+                  rows={rows()}
+                  scroll={() => transcript()}
+                  estimate={estimateRow}
+                  render={renderRow}
+                  revision={revision}
                 />
-              )}
-            </For>
-
-            <Show when={showStream()}>
-              <article class="msg assistant streaming">
-                <header class="msg-head">
-                  <span class="avatar agent">
-                    <IconPhi size={13} />
-                  </span>
-                  <span class="msg-name">{t("Agent")}</span>
-                </header>
-                <div class="msg-body">
-                  {/* Plain text while streaming: reparsing Markdown on every
-                      token recreates blocks and loses code-copy state. An
-                      `html` fence is rendered live because its content is
-                      self-contained, then the durable message renders the
-                      whole reply once. */}
-                  <For each={streamSegments()}>
-                    {(segment) =>
-                      segment.kind === "html" ? (
-                        <RichHtml
-                          html={segment.html}
-                          onOpenUrl={props.onOpenUrl}
-                          onSend={props.onSend}
-                        />
-                      ) : (
-                        <Show when={segment.text.trim()}>
-                          <div class="streaming-text">{segment.text}</div>
-                        </Show>
-                      )
-                    }
-                  </For>
-                  <Show when={props.streamEnded}>
-                    <div class="stream-stopped">
-                      <span class="dot tone-idle" />
-                      {t("Stopped")}
-                    </div>
-                  </Show>
-                </div>
-              </article>
-            </Show>
-
-            <For each={detail().pendingApprovals}>
-              {(approval: PendingApproval) => (
-                <ApprovalCard
-                  approval={approval}
-                  now={props.now}
-                  onResolve={(approved) => props.onResolve(approval.id, approved)}
-                />
-              )}
-            </For>
-
-            <Show when={failedRun()}>
-              {(run) => <RunNotice run={run()} />}
-            </Show>
-          </>
-        )}
-      </Show>
+              </Show>
+            </>
+          )}
+        </Show>
+      </div>
     </div>
   );
 }

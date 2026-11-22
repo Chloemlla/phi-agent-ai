@@ -27,11 +27,7 @@ export function ApprovalCard(props: {
 }) {
   const [busy, setBusy] = createSignal(false);
   const level = () =>
-    riskLevel(
-      props.approval.riskLevel,
-      props.approval.toolId,
-      props.approval.risk,
-    );
+    riskLevel(props.approval.riskLevel, props.approval.toolId, props.approval.risk);
   const expired = () => {
     const expires = Date.parse(props.approval.expiresAt);
     return Number.isFinite(expires) && expires <= props.now;
@@ -65,10 +61,7 @@ export function ApprovalCard(props: {
               expired: expired(),
             }}
           >
-            <Show
-              when={!expired()}
-              fallback={<span>{t("Expired")}</span>}
-            >
+            <Show when={!expired()} fallback={<span>{t("Expired")}</span>}>
               {tArgs("Expires in {time}", { time: countdown() })}
             </Show>
           </span>
@@ -78,12 +71,8 @@ export function ApprovalCard(props: {
       <div class="approval-reason">{props.approval.risk}</div>
 
       <Show when={level() !== "low"}>
-        <pre class="approval-preview mono">
-          {previewText(props.approval.argsPreview)}
-        </pre>
-        <div
-          classList={{ "approval-digest": true, mono: true, strong: level() === "high" }}
-        >
+        <pre class="approval-preview mono">{previewText(props.approval.argsPreview)}</pre>
+        <div classList={{ "approval-digest": true, mono: true, strong: level() === "high" }}>
           {tArgs("Action digest {digest}", {
             digest: `${props.approval.actionDigest.slice(0, 24)}…`,
           })}

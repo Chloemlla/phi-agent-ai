@@ -5,9 +5,13 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+use ts_rs::TS;
 
+use phi_domain::agent::{AgentRole, AgentView, MessageKind, WorkMode};
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
 use phi_domain::view::{PendingApprovalView, RunView, SessionSummary, SessionView};
+
+use super::provider::ModelSpec;
 
 // ─────────────────────────── tools ───────────────────────────
 
@@ -40,7 +44,15 @@ pub struct ToolCall {
 pub struct ToolContext {
     pub workspace: PathBuf,
     pub session_id: String,
+    pub turn_id: String,
     pub run_id: String,
+    pub agent_id: String,
+    pub root_agent_id: String,
+    pub thread_id: String,
+    pub role: AgentRole,
+    pub parent_run_id: Option<String>,
+    pub work_mode: WorkMode,
+    pub lead_scale: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,7 +79,7 @@ pub trait ToolPort: Send + Sync {
 
 // ─────────────────────────── model ───────────────────────────
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
     /// Human-facing provider name (`none` when no provider is configured).
@@ -93,7 +105,7 @@ pub struct ModelStatus {
 /// The wire representation differs per protocol: Anthropic takes a token
 /// budget, while the OpenAI protocols take a named effort. `Off` and `None`
 /// both mean "do not ask for reasoning".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingEffort {
     Off,
@@ -203,6 +215,14 @@ impl ModelError {
 #[async_trait]
 pub trait ModelPort: Send + Sync {
     fn status(&self) -> ModelStatus;
+    /// Models available for delegation. Empty when no provider is configured.
+    fn roster(&self) -> Vec<ModelSpec> {
+        Vec::new()
+    }
+    /// Resolve a requested model id (`default` selects the primary model).
+    fn resolve_model(&self, requested: &str) -> String {
+        requested.trim().to_string()
+    }
     /// Empty string clears the key. Returns the new status.
     fn set_api_key(&self, key: &str) -> Result<ModelStatus, String>;
     async fn invoke(
@@ -330,6 +350,44 @@ pub trait SessionPort: Send + Sync {
     /// Find a run by id across all sessions. Shells use this after the run has
     /// left the in-memory runtime map (or when they are a different process).
     fn find_run(&self, run_id: &str) -> Option<(String, RunView)>;
+
+    // ── agent / thread read model (defaults keep older implementations valid) ──
+    fn agents(&self, _session_id: &str) -> Vec<AgentView> {
+        Vec::new()
+    }
+    fn agent(&self, _agent_id: &str) -> Option<AgentView> {
+        None
+    }
+    fn lead_agent(&self, session_id: &str) -> Option<AgentView> {
+        self.agents(session_id)
+            .into_iter()
+            .find(|agent| agent.role == AgentRole::Lead)
+    }
+    fn messages_for_thread(&self, session_id: &str, _thread_id: &str) -> Vec<ChatMessage> {
+        self.messages(session_id)
+    }
+    fn append_message_in_thread(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        _thread_id: &str,
+        _agent_id: Option<&str>,
+        _to_agent_id: Option<&str>,
+        _kind: Option<MessageKind>,
+        role: Role,
+        blocks: Vec<ContentBlock>,
+    ) -> Result<String, String> {
+        self.append_message(session_id, turn_id, role, blocks)
+    }
+    fn active_root_run(&self, session_id: &str) -> Option<String> {
+        self.active_run(session_id)
+    }
+    fn active_run_for_agent(&self, _agent_id: &str) -> Option<String> {
+        None
+    }
+    fn write_lease_holder(&self, _session_id: &str) -> Option<String> {
+        None
+    }
 }
 
 // ─────────────────────────── context ───────────────────────────
@@ -362,6 +420,16 @@ pub struct StartRunRequest {
     pub model: Option<String>,
     /// Per-message extended reasoning effort.
     pub thinking: Option<ThinkingEffort>,
+    /// Set for a child run created by a subagent delegation.
+    pub parent_run_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub root_agent_id: Option<String>,
+    pub role: AgentRole,
+    pub report_to: Option<String>,
+    pub work_mode: WorkMode,
+    /// The lead model's capability scale, used to enforce the delegation cap.
+    pub lead_scale: Option<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -371,6 +439,12 @@ pub struct RunStatus {
     pub session_id: String,
     pub state: String,
     pub steps: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
 }
 
 pub trait RuntimePort: Send + Sync {

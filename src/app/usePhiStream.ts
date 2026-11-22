@@ -5,11 +5,7 @@ import { onModelStream, onPhiEvent } from "../bridge";
 import type { Run } from "../types";
 import type { PendingCall } from "./sessionStream";
 
-const TERMINAL_EVENTS = new Set([
-  "RunSucceeded",
-  "RunFailed",
-  "RunAborted",
-]);
+const TERMINAL_EVENTS = new Set(["RunSucceeded", "RunFailed", "RunAborted"]);
 
 export type PhiStreamOptions = {
   currentId: Accessor<string | null>;
@@ -25,9 +21,7 @@ export function usePhiStream(options: PhiStreamOptions) {
       .map((call) => call.text)
       .join("\n\n");
   const [streamRunId, setStreamRunId] = createSignal<string | null>(null);
-  const [streamSessionId, setStreamSessionId] = createSignal<string | null>(
-    null,
-  );
+  const [streamSessionId, setStreamSessionId] = createSignal<string | null>(null);
   const [streamEnded, setStreamEnded] = createSignal(false);
   const [runTerminal, setRunTerminal] = createSignal(false);
   let refreshTimer: number | undefined;
@@ -82,18 +76,12 @@ export function usePhiStream(options: PhiStreamOptions) {
       if (type === "ModelCallFailed" && payload?.callId) {
         // The failed attempt's partial text is dropped; a retry streams as a
         // fresh call and the durable message carries any kept text.
-        setPendingCalls((calls) =>
-          calls.filter((call) => call.callId !== payload.callId),
-        );
+        setPendingCalls((calls) => calls.filter((call) => call.callId !== payload.callId));
       }
       if (type && TERMINAL_EVENTS.has(type)) {
         // Ignore another session's run finishing while this one streams.
         const activeStream = streamRunId();
-        if (
-          !activeStream ||
-          !payload?.runId ||
-          payload.runId === activeStream
-        ) {
+        if (!activeStream || !payload?.runId || payload.runId === activeStream) {
           // Keep the live text until the durable message arrives. One delayed
           // refresh covers the case where the first projection missed it; only
           // if the handoff really missed do we mark the stream as stopped.
@@ -125,24 +113,20 @@ export function usePhiStream(options: PhiStreamOptions) {
           const source = streamSessionId();
           const current = options.currentRun();
           const known =
-            source === options.currentId() ||
-            (current !== null && current.id === payload.runId);
+            source === options.currentId() || (current !== null && current.id === payload.runId);
           if (!known) return;
           setStreamRunId(payload.runId);
           if (!source) setStreamSessionId(options.currentId());
           setStreamEnded(false);
           setRunTerminal(false);
         }
-        const callId =
-          payload.callId || `${payload.runId}:${payload.index ?? 0}`;
+        const callId = payload.callId || `${payload.runId}:${payload.index ?? 0}`;
         setPendingCalls((calls) => {
           const index = calls.findIndex((call) => call.callId === callId);
           if (index === -1) {
             return [...calls, { callId, runId: payload.runId, text }];
           }
-          return calls.map((call, i) =>
-            i === index ? { ...call, text: call.text + text } : call,
-          );
+          return calls.map((call, i) => (i === index ? { ...call, text: call.text + text } : call));
         });
       }
       // `done` is a model-call boundary, not the end of the run. That call's

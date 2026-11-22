@@ -4,7 +4,8 @@
 import { SVG_ATTRS } from "./allowlist";
 import { cap } from "./attributes";
 
-const SVG_COLOR = /^(none|currentColor|transparent|#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?)\([0-9.,%\s/]+\)|[A-Za-z]{3,20})$/;
+const SVG_COLOR =
+  /^(none|currentColor|transparent|#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?)\([0-9.,%\s/]+\)|[A-Za-z]{3,20})$/;
 const SVG_NUMBER = /^[0-9eE+\-.,%\s]+$/;
 const SVG_PATH = /^[0-9A-Za-z+\-.,\s]*$/;
 const SVG_TRANSFORM = /^[0-9A-Za-z+\-.,()\s]*$/;

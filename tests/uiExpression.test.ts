@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  evaluate,
-  UiExpressionError,
-} from "../src/components/uiExpression";
+import { evaluate, UiExpressionError } from "../src/components/uiExpression";
 
 describe("evaluate", () => {
   test("evaluates arithmetic with precedence", () => {
@@ -33,12 +30,8 @@ describe("evaluate", () => {
   });
 
   test("rejects blocked prototype member access", () => {
-    expect(() => evaluate("value.__proto__", { value: {} })).toThrow(
-      UiExpressionError,
-    );
-    expect(() => evaluate("value.constructor", { value: {} })).toThrow(
-      UiExpressionError,
-    );
+    expect(() => evaluate("value.__proto__", { value: {} })).toThrow(UiExpressionError);
+    expect(() => evaluate("value.constructor", { value: {} })).toThrow(UiExpressionError);
   });
 
   test("does not expose blocked keys through indexing", () => {

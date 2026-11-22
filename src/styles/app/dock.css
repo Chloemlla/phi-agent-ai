@@ -13,7 +13,8 @@
   background: var(--bg-surface);
   box-shadow: var(--shadow-xs);
   overflow: visible;
-  transition: border-color var(--dur-fast) var(--ease),
+  transition:
+    border-color var(--dur-fast) var(--ease),
     box-shadow var(--dur-fast) var(--ease);
 }
 

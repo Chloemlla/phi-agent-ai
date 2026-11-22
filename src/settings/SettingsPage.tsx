@@ -2,13 +2,7 @@
 // Panes mount on first visit and then stay mounted, so switching sections never
 // discards a provider draft (and Memory is not queried until it is opened).
 
-import {
-  Show,
-  createEffect,
-  createSignal,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { t } from "../i18n";
 import { IconArrowLeft, IconBrain, IconServer, IconSettings } from "../components/Icons";
 import { GeneralPage } from "./GeneralPage";
@@ -27,9 +21,7 @@ export function SettingsPage(props: {
   onRefresh: () => Promise<void>;
 }) {
   const [section, setSection] = createSignal<Section>(lastSection);
-  const [visited, setVisited] = createSignal<ReadonlySet<Section>>(
-    new Set([lastSection]),
-  );
+  const [visited, setVisited] = createSignal<ReadonlySet<Section>>(new Set([lastSection]));
   const [providersDirty, setProvidersDirty] = createSignal(false);
   const [leavePrompt, setLeavePrompt] = createSignal(false);
   let contentRef: HTMLElement | undefined;
@@ -115,18 +107,10 @@ export function SettingsPage(props: {
           <div class="draft-guard settings-leave-guard" role="alert">
             <span>{t("Discard unsaved changes?")}</span>
             <div class="draft-guard-actions">
-              <button
-                type="button"
-                class="btn danger"
-                onClick={() => props.onBack()}
-              >
+              <button type="button" class="btn danger" onClick={() => props.onBack()}>
                 {t("Discard")}
               </button>
-              <button
-                type="button"
-                class="btn"
-                onClick={() => setLeavePrompt(false)}
-              >
+              <button type="button" class="btn" onClick={() => setLeavePrompt(false)}>
                 {t("Cancel")}
               </button>
             </div>
@@ -157,9 +141,7 @@ export function SettingsPage(props: {
             </div>
           </Show>
         </div>
-        <p class="settings-content-foot hint">
-          {t("Settings are stored on this node.")}
-        </p>
+        <p class="settings-content-foot hint">{t("Settings are stored on this node.")}</p>
       </main>
     </div>
   );

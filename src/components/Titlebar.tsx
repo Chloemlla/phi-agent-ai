@@ -85,8 +85,7 @@ export function Titlebar(props: {
     toggleMaximize();
   }
 
-  const sidebarLabel = () =>
-    props.sidebarOpen ? t("Collapse sidebar") : t("Expand sidebar");
+  const sidebarLabel = () => (props.sidebarOpen ? t("Collapse sidebar") : t("Expand sidebar"));
 
   return (
     <header
@@ -148,11 +147,7 @@ export function Titlebar(props: {
           {props.title}
         </span>
         <Show when={!mobile() && props.workspace}>
-          <span
-            class="tb-path mono"
-            data-tauri-drag-region
-            title={props.workspace ?? ""}
-          >
+          <span class="tb-path mono" data-tauri-drag-region title={props.workspace ?? ""}>
             {props.workspace}
           </span>
         </Show>

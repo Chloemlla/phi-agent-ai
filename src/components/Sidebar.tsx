@@ -70,11 +70,7 @@ export function Sidebar(props: {
       inert={props.open ? undefined : true}
     >
       <div class="sidebar-inner">
-        <button
-          type="button"
-          class="btn primary block new-session"
-          onClick={props.onNew}
-        >
+        <button type="button" class="btn primary block new-session" onClick={props.onNew}>
           <IconPlus size={15} />
           {t("New session")}
         </button>
@@ -96,9 +92,7 @@ export function Sidebar(props: {
                 aria-current={session.id === props.currentId ? "true" : undefined}
                 onClick={() => props.onSelect(session.id)}
               >
-                <span class="session-title">
-                  {session.title || t("New session")}
-                </span>
+                <span class="session-title">{session.title || t("New session")}</span>
                 <span class="session-meta">
                   <Show when={session.lastRunState}>
                     <span
@@ -125,9 +119,7 @@ export function Sidebar(props: {
         <div class="sidebar-foot" title={props.nodeId}>
           <Show when={props.nodeId}>
             <div class="foot-row">
-              <span class="mono">
-                {tArgs("Node {id}", { id: props.nodeId.slice(0, 18) })}
-              </span>
+              <span class="mono">{tArgs("Node {id}", { id: props.nodeId.slice(0, 18) })}</span>
             </div>
             <div class="foot-row">
               <span

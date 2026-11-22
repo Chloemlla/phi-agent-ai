@@ -7,12 +7,7 @@ import { describeModels, previewModels } from "../bridge";
 import { t, tArgs } from "../i18n";
 import { errorText } from "../errors";
 import { IconCircleAlert, IconPlus, IconRefresh } from "../components/Icons";
-import {
-  cloneModel,
-  modelFromId,
-  normalizeModelId,
-  type ModelSpec,
-} from "./types";
+import { cloneModel, modelFromId, normalizeModelId, type ModelSpec } from "./types";
 import { formatWindow } from "./providerForm";
 
 function parseModelIds(raw: string): string[] {
@@ -131,14 +126,11 @@ export function ModelSelectionStep(props: {
     const text = query().trim().toLowerCase();
     if (!text) return rows();
     return rows().filter(
-      (row) =>
-        row.id.toLowerCase().includes(text) ||
-        row.spec.name.toLowerCase().includes(text),
+      (row) => row.id.toLowerCase().includes(text) || row.spec.name.toLowerCase().includes(text),
     );
   };
 
-  const selectedCount = () =>
-    rows().filter((row) => checked()[normalizeModelId(row.id)]).length;
+  const selectedCount = () => rows().filter((row) => checked()[normalizeModelId(row.id)]).length;
 
   const selectedSpecs = (): ModelSpec[] =>
     rows()
@@ -207,9 +199,7 @@ export function ModelSelectionStep(props: {
           <Show when={props.isWizard}>
             <WizardSteps step={2} />
           </Show>
-          <p class="hint">
-            {t("Select the models to add to this provider.")}
-          </p>
+          <p class="hint">{t("Select the models to add to this provider.")}</p>
         </div>
       </div>
 
@@ -224,9 +214,7 @@ export function ModelSelectionStep(props: {
 
       <section class="editor-section">
         <Show when={!props.isWizard}>
-          <p class="hint">
-            {t("Existing models are kept; selected models are added.")}
-          </p>
+          <p class="hint">{t("Existing models are kept; selected models are added.")}</p>
         </Show>
 
         <Show when={loading()}>
@@ -358,11 +346,7 @@ export function ModelSelectionStep(props: {
                 autocorrect="off"
                 spellcheck={false}
               />
-              <button
-                class="btn"
-                disabled={!manual().trim()}
-                onClick={() => void addManual()}
-              >
+              <button class="btn" disabled={!manual().trim()} onClick={() => void addManual()}>
                 <IconPlus size={14} />
                 {t("Add manually")}
               </button>

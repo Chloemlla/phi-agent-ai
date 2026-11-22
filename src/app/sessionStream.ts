@@ -60,20 +60,11 @@ export function prunePendingCalls(
  * objects every time; without this, Solid's referential `<For>` rebuilds the
  * whole transcript and resets open tool blocks and inline UI form state.
  */
-export function reuseMessages(
-  prev: SessionDetail | null,
-  next: SessionDetail,
-): SessionDetail {
+export function reuseMessages(prev: SessionDetail | null, next: SessionDetail): SessionDetail {
   if (!prev || prev.session.id !== next.session.id) return next;
-  const byId = new Map(
-    prev.session.messages.map((message) => [message.id, message]),
-  );
-  const messages = next.session.messages.map(
-    (message) => byId.get(message.id) ?? message,
-  );
-  return messages.every(
-    (message, index) => message === next.session.messages[index],
-  )
+  const byId = new Map(prev.session.messages.map((message) => [message.id, message]));
+  const messages = next.session.messages.map((message) => byId.get(message.id) ?? message);
+  return messages.every((message, index) => message === next.session.messages[index])
     ? next
     : { ...next, session: { ...next.session, messages } };
 }

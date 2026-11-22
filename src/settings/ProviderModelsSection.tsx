@@ -30,11 +30,7 @@ export function ProviderModelsSection(props: {
       <section class="editor-section">
         <div class="section-head">
           <h3>{t("Models")}</h3>
-          <button
-            class="btn"
-            disabled={props.busy || !props.canFetch}
-            onClick={props.onFetch}
-          >
+          <button class="btn" disabled={props.busy || !props.canFetch} onClick={props.onFetch}>
             <IconRefresh size={14} />
             {t("Fetch models")}
           </button>
@@ -68,10 +64,7 @@ export function ProviderModelsSection(props: {
                   <span class="model-tag" title={t("Model scale (1-5)")}>
                     S{model.scale ?? 3}
                   </span>
-                  <span
-                    class="provider-model-ctx mono"
-                    title={formatWindow(model.contextWindow)}
-                  >
+                  <span class="provider-model-ctx mono" title={formatWindow(model.contextWindow)}>
                     {formatWindow(model.contextWindow) || "—"}
                   </span>
                   <button

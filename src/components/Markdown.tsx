@@ -9,12 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { t } from "../i18n";
 import { IconCheck, IconCopy } from "./Icons";
 import { RichHtml } from "./RichHtml";
-import {
-  parseBlocks,
-  parseInline,
-  type BlockNode,
-  type InlineNode,
-} from "./markdown/parse";
+import { parseBlocks, parseInline, type BlockNode, type InlineNode } from "./markdown/parse";
 
 function openExternal(url: string, onOpenUrl?: (url: string) => void) {
   if (onOpenUrl) {
@@ -127,10 +122,7 @@ function ListItems(props: {
     <For each={props.items}>
       {(item) => (
         <li>
-          <Show
-            when={item.length > 1}
-            fallback={<Inline text={item[0] ?? ""} />}
-          >
+          <Show when={item.length > 1} fallback={<Inline text={item[0] ?? ""} />}>
             <BlockList
               blocks={parseBlocks(item)}
               onOpenUrl={props.onOpenUrl}
@@ -187,13 +179,7 @@ function BlockView(props: {
     case "code":
       return <CodeBlock lang={block.lang} code={block.code} />;
     case "html":
-      return (
-        <RichHtml
-          html={block.html}
-          onOpenUrl={props.onOpenUrl}
-          onSend={props.onSend}
-        />
-      );
+      return <RichHtml html={block.html} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />;
     case "quote":
       return (
         <blockquote>
@@ -210,20 +196,12 @@ function BlockView(props: {
           when={block.ordered}
           fallback={
             <ul class="md-list">
-              <ListItems
-                items={block.items}
-                onOpenUrl={props.onOpenUrl}
-                onSend={props.onSend}
-              />
+              <ListItems items={block.items} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />
             </ul>
           }
         >
           <ol class="md-list" start={block.start}>
-            <ListItems
-              items={block.items}
-              onOpenUrl={props.onOpenUrl}
-              onSend={props.onSend}
-            />
+            <ListItems items={block.items} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />
           </ol>
         </Show>
       );
@@ -274,13 +252,7 @@ function BlockList(props: {
 }) {
   return (
     <For each={props.blocks}>
-      {(block) => (
-        <BlockView
-          block={block}
-          onOpenUrl={props.onOpenUrl}
-          onSend={props.onSend}
-        />
-      )}
+      {(block) => <BlockView block={block} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />}
     </For>
   );
 }
@@ -290,15 +262,10 @@ export function Markdown(props: {
   onOpenUrl?: (url: string) => void;
   onSend?: (text: string) => void;
 }) {
-  const blocks = () =>
-    parseBlocks(props.text.replace(/\r\n?/g, "\n").split("\n"));
+  const blocks = () => parseBlocks(props.text.replace(/\r\n?/g, "\n").split("\n"));
   return (
     <div class="md">
-      <BlockList
-        blocks={blocks()}
-        onOpenUrl={props.onOpenUrl}
-        onSend={props.onSend}
-      />
+      <BlockList blocks={blocks()} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />
     </div>
   );
 }

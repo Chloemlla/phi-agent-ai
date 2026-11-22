@@ -63,7 +63,8 @@
   border: 1px solid transparent;
   border-radius: var(--r-sm);
   text-align: left;
-  transition: background var(--dur-fast) var(--ease),
+  transition:
+    background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease);
 }
 

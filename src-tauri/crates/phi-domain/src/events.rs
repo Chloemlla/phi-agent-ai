@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::agent::{AgentRole, AgentStatus, MessageKind, WorkMode};
 use super::memory::{MemoryScope, SourceTrust};
 use super::message::Role;
 
@@ -36,6 +37,46 @@ pub enum DomainEvent {
         message_id: String,
         role: Role,
         content_ref: String,
+        /// Message thread: `main` for the user/lead conversation,
+        /// `agent:<agentId>` for a subagent. Missing on old journals.
+        #[serde(default)]
+        thread_id: Option<String>,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        to_agent_id: Option<String>,
+        #[serde(default)]
+        kind: Option<MessageKind>,
+    },
+
+    // ── agents ────────────────────────────────────────────────────────
+    AgentCreated {
+        agent_id: String,
+        session_id: String,
+        turn_id: String,
+        role: AgentRole,
+        parent_agent_id: Option<String>,
+        root_agent_id: String,
+        model: String,
+        thinking: Option<String>,
+        thread_id: String,
+        work_mode: WorkMode,
+        report_to: Option<String>,
+        spawned_by_run_id: String,
+    },
+    AgentStatusChanged {
+        agent_id: String,
+        session_id: String,
+        status: AgentStatus,
+        note: Option<String>,
+    },
+    AgentReported {
+        agent_id: String,
+        session_id: String,
+        run_id: String,
+        status: AgentStatus,
+        report_message_id: String,
+        delivered_to: Option<String>,
     },
 
     // ── run / step ────────────────────────────────────────────────────
@@ -43,6 +84,12 @@ pub enum DomainEvent {
         run_id: String,
         session_id: String,
         turn_id: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        thread_id: Option<String>,
+        #[serde(default)]
+        parent_run_id: Option<String>,
     },
     RunStarted {
         run_id: String,

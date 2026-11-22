@@ -8,11 +8,12 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
+use ts_rs::TS;
 
 use phi_i18n as i18n;
 
 /// Wire protocol used by a provider endpoint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
     AnthropicMessages,
@@ -116,7 +117,7 @@ impl AuthMode {
 /// metadata: output limits shape the per-call output cap, `scale` ranks
 /// capability for delegation caps, while `description` and `tags` are
 /// catalogue data for humans and future model routing.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSpec {
     pub id: String,
@@ -421,8 +422,9 @@ fn default_scale() -> u8 {
 }
 
 /// Provider settings read model. Never contains a credential value.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(optional_fields)]
 pub struct ProviderView {
     pub id: String,
     pub name: String,
@@ -457,8 +459,9 @@ pub struct ProviderView {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(optional_fields)]
 pub struct ProviderTestView {
     pub ok: bool,
     pub latency_ms: u64,
@@ -527,7 +530,7 @@ impl ProviderProfile {
 
 /// Patch-style input used by both the settings UI and the headless CLI.
 /// Omitted fields keep their current value on update.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInput {
     #[serde(default)]

@@ -1,13 +1,7 @@
 // Composer: the primary surface. The run bar above it shows live usage; the
 // composer itself stays focused on the task input and the model choice.
 
-import {
-  Show,
-  createEffect,
-  createSignal,
-  onCleanup,
-  onMount,
-} from "solid-js";
+import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { t } from "../i18n";
 import type { ModelSelection, ProviderView } from "../types";
 import { IconArrowUp } from "./Icons";
@@ -17,8 +11,7 @@ const MAX_COMPOSER_HEIGHT = 180;
 
 /** Touch keyboards have no Shift+Enter, so Enter must insert a newline there. */
 function coarsePointerQuery(): MediaQueryList | null {
-  return typeof window !== "undefined" &&
-    typeof window.matchMedia === "function"
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(pointer: coarse)")
     : null;
 }
@@ -38,9 +31,7 @@ export function Composer(props: {
   let textareaRef: HTMLTextAreaElement | undefined;
   // 2-in-1 devices can switch between touch and a trackpad, so keep this live
   // instead of sampling matchMedia once during render.
-  const [coarsePointer, setCoarsePointer] = createSignal(
-    coarsePointerQuery()?.matches ?? false,
-  );
+  const [coarsePointer, setCoarsePointer] = createSignal(coarsePointerQuery()?.matches ?? false);
 
   onMount(() => {
     const query = coarsePointerQuery();

@@ -144,7 +144,10 @@ impl TestEnv {
                 "baseUrl": format!("http://127.0.0.1:{}", provider.port),
                 "auth": "none",
                 "model": "test-model",
-                "models": [{ "id": "test-model" }]
+                "models": [
+                    { "id": "test-model", "scale": 5 },
+                    { "id": "small-model", "scale": 2, "name": "Small model" }
+                ]
             }]
         });
         std::fs::write(
@@ -312,6 +315,82 @@ fn scripted_response(request: &Value) -> Value {
     let lower = last_user_text.to_lowercase();
     let next_id = || format!("toolu_{}", TOOL_CALL_SEQ.fetch_add(1, Ordering::Relaxed));
 
+    // The subagent thread receives a brief; answer it with a plain report so
+    // the delegation path can be tested without a workspace side effect.
+    if lower.contains("you are a subagent") || lower.contains("brief from the lead agent") {
+        return message_response(
+            vec![json!({
+                "type": "text",
+                "text": "Subagent report: inspected the workspace and finished the brief."
+            })],
+            "end_turn",
+        );
+    }
+
+    if let Some(result) = last_tool_result.as_deref() {
+        if result.contains("\"timedOut\":false") {
+            return message_response(
+                vec![
+                    json!({ "type": "text", "text": "Lead done after collecting the subagent report." }),
+                ],
+                "end_turn",
+            );
+        }
+        if result.contains("more capable") {
+            return message_response(
+                vec![json!({ "type": "text", "text": "Model cap enforced." })],
+                "end_turn",
+            );
+        }
+    }
+
+    if lower.contains("too capable") {
+        return message_response(
+            vec![json!({
+                "type": "tool_use",
+                "id": next_id(),
+                "name": "delegate",
+                "input": {
+                    "model": "test-model",
+                    "work_mode": "read_only",
+                    "brief": { "objective": "This model is larger than the lead" }
+                }
+            })],
+            "tool_use",
+        );
+    }
+
+    if lower.contains("delegate") || lower.contains("active subagents") {
+        if let Some(agent_id) = last_tool_result.as_deref().and_then(extract_agent_id) {
+            return message_response(
+                vec![json!({
+                    "type": "tool_use",
+                    "id": next_id(),
+                    "name": "wait_for_agents",
+                    "input": { "agent_ids": [agent_id], "mode": "all", "timeout_secs": 60 }
+                })],
+                "tool_use",
+            );
+        }
+        return message_response(
+            vec![json!({
+                "type": "tool_use",
+                "id": next_id(),
+                "name": "delegate",
+                "input": {
+                    "model": "small-model",
+                    "work_mode": "read_only",
+                    "wait": false,
+                    "brief": {
+                        "objective": "Inspect the workspace and produce a short report",
+                        "acceptance": "A report naming what was inspected"
+                    }
+                }
+            })],
+            "tool_use",
+        );
+    }
+
     if lower.contains("truncate forever") {
         // Every request is cut off with a tool call, so the bounded recovery
         // limit is exercised rather than a one-off truncation.
@@ -431,6 +510,14 @@ fn scripted_response(request: &Value) -> Value {
         ],
         "tool_use",
     )
+}
+
+fn extract_agent_id(result: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(result).ok()?;
+    value
+        .get("agentId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn message_response(content: Vec<Value>, stop_reason: &str) -> Value {
@@ -1255,4 +1342,162 @@ fn memory_cli_forgets_and_rejects_secrets() {
         String::from_utf8_lossy(&forget.stderr)
     );
     assert!(env.memory_list(Some("tabs")).is_empty());
+}
+
+fn text_blocks(messages: &Value) -> String {
+    let mut out = String::new();
+    for message in messages.as_array().into_iter().flatten() {
+        for block in message["blocks"].as_array().into_iter().flatten() {
+            if block["type"] == "text" {
+                if let Some(text) = block["text"].as_str() {
+                    out.push_str(text);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn delegates_work_to_a_subagent_in_its_own_thread() {
+    let env = TestEnv::new("subagent");
+    let provider = env.with_scripted_provider();
+
+    let result = env.run("delegate work to a subagent", &["--approval", "allow"]);
+    assert_eq!(
+        result["run"]["state"], "Succeeded",
+        "lead run should succeed: {result}"
+    );
+    let session_id = result["sessionId"].as_str().expect("session id");
+
+    let detail = env.show(session_id);
+    let agents = detail["session"]["agents"]
+        .as_array()
+        .expect("agents array");
+    assert_eq!(agents.len(), 2, "expected lead + subagent: {detail}");
+    let lead = agents
+        .iter()
+        .find(|agent| agent["role"] == "lead")
+        .expect("lead agent");
+    let subagent = agents
+        .iter()
+        .find(|agent| agent["role"] == "subagent")
+        .expect("subagent");
+    assert_eq!(lead["status"], "succeeded");
+    assert_eq!(subagent["status"], "succeeded");
+    assert_eq!(subagent["model"], "small-model");
+    assert_eq!(subagent["workMode"], "read_only");
+
+    let main_text = text_blocks(&detail["session"]["messages"]);
+    assert!(
+        main_text.contains("Report from subagent"),
+        "main thread should contain the report: {main_text}"
+    );
+    assert!(
+        main_text.contains("Subagent report"),
+        "report body should reach the lead: {main_text}"
+    );
+    assert!(
+        !main_text.contains("Brief from the lead agent"),
+        "the subagent trajectory leaked into the main thread: {main_text}"
+    );
+
+    let agent_id = subagent["id"].as_str().expect("agent id");
+    let output = env.command(&["agents", "show", agent_id]);
+    assert!(
+        output.status.success(),
+        "agents show failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let agent = last_json(&output.stdout);
+    assert_eq!(agent["agent"]["id"], agent_id);
+    let agent_text = text_blocks(&agent["messages"]);
+    assert!(
+        agent_text.contains("Brief from the lead agent"),
+        "subagent thread should contain its brief: {agent_text}"
+    );
+    assert!(
+        agent_text.contains("Subagent report"),
+        "subagent thread should contain its report: {agent_text}"
+    );
+
+    let requests = provider.requests();
+    let lead_request = requests
+        .iter()
+        .find(|request| {
+            request["system"]
+                .to_string()
+                .contains("You are the lead agent")
+        })
+        .expect("lead request");
+    let lead_tools: Vec<&str> = lead_request["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        lead_tools.contains(&"delegate"),
+        "lead tools: {lead_tools:?}"
+    );
+    assert!(
+        lead_tools.contains(&"wait_for_agents"),
+        "lead tools: {lead_tools:?}"
+    );
+
+    let child_request = requests
+        .iter()
+        .find(|request| request["system"].to_string().contains("You are a subagent"))
+        .expect("subagent request");
+    let child_tools: Vec<&str> = child_request["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        !child_tools.contains(&"delegate"),
+        "subagents must not see delegate: {child_tools:?}"
+    );
+    assert!(
+        !child_tools.contains(&"wait_for_agents"),
+        "subagents must not block-wait: {child_tools:?}"
+    );
+    assert!(
+        !child_tools.contains(&"cancel_agent"),
+        "subagents must not cancel peers: {child_tools:?}"
+    );
+    assert!(
+        child_tools.contains(&"send_message"),
+        "subagents can send directed messages: {child_tools:?}"
+    );
+    assert!(
+        !child_tools.contains(&"fs_write") && !child_tools.contains(&"shell_exec"),
+        "read_only subagents must not see write tools: {child_tools:?}"
+    );
+}
+
+#[test]
+fn delegation_rejects_a_model_more_capable_than_the_lead() {
+    let env = TestEnv::new("subagent-scale");
+    let _provider = env.with_scripted_provider();
+
+    let result = env.run(
+        "delegate to a model that is too capable",
+        &["--approval", "allow", "--model", "small-model"],
+    );
+    assert_eq!(
+        result["run"]["state"], "Succeeded",
+        "run should recover from the rejected delegation: {result}"
+    );
+    let session_id = result["sessionId"].as_str().expect("session id");
+    let detail = env.show(session_id);
+    let agents = detail["session"]["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1, "no subagent should be created: {detail}");
+    let tool_results = tool_result_text(&detail);
+    assert!(
+        tool_results.contains("more capable"),
+        "the tool error should explain the scale cap: {tool_results}"
+    );
 }

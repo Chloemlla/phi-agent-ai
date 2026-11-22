@@ -13,9 +13,7 @@ const STORAGE_PREFIX = "phi.model.";
 
 export function activeProviderOf(bootstrap: Bootstrap): ProviderView | null {
   return (
-    bootstrap.providers.find(
-      (provider) => provider.id === bootstrap.activeProviderId,
-    ) ??
+    bootstrap.providers.find((provider) => provider.id === bootstrap.activeProviderId) ??
     bootstrap.providers.find((provider) => provider.active) ??
     bootstrap.providers[0] ??
     null
@@ -76,16 +74,12 @@ export function deriveSelection(
   const enabled = active.models.filter((candidate) => candidate.enabled);
   if (enabled.length === 0) return null;
 
-  const primary =
-    enabled.find((candidate) => candidate.id === active.model) ?? enabled[0];
+  const primary = enabled.find((candidate) => candidate.id === active.model) ?? enabled[0];
   const stored = readStoredSelection(active.id);
-  const storedModel = stored
-    ? enabled.find((candidate) => candidate.id === stored.modelId)
-    : null;
+  const storedModel = stored ? enabled.find((candidate) => candidate.id === stored.modelId) : null;
 
   const modelId = storedModel?.id ?? primary.id;
-  const thinking: ThinkingLevel =
-    stored && stored.modelId === modelId ? stored.thinking : "off";
+  const thinking: ThinkingLevel = stored && stored.modelId === modelId ? stored.thinking : "off";
   return { providerId: active.id, modelId, thinking };
 }
 

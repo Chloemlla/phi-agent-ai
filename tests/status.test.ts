@@ -3,9 +3,7 @@ import { riskLevel } from "../src/status";
 
 describe("riskLevel", () => {
   test("uses the structured backend level first", () => {
-    expect(riskLevel("high", "fs_write", "Reversible: data modification")).toBe(
-      "high",
-    );
+    expect(riskLevel("high", "fs_write", "Reversible: data modification")).toBe("high");
     expect(riskLevel("low", "shell_exec", "Irreversible")).toBe("low");
   });
 

@@ -27,11 +27,7 @@ export function stateLabel(state: string | null | undefined): string {
 }
 
 export function isActiveState(state: string | null | undefined): boolean {
-  return (
-    state === "Scheduled" ||
-    state === "Running" ||
-    state === "WaitingApproval"
-  );
+  return state === "Scheduled" || state === "Running" || state === "WaitingApproval";
 }
 
 export function runTone(state: string | null | undefined): Tone {
@@ -68,11 +64,7 @@ export function modeTone(mode: string | null | undefined): Tone {
 // The backend reports a structured risk tier; the human sentence is only a
 // fallback for journals written before the field existed. Tool identity is the
 // last resort because it is a stable semantic signal.
-export function riskLevel(
-  level: string | undefined,
-  toolId: string,
-  risk: string,
-): RiskLevel {
+export function riskLevel(level: string | undefined, toolId: string, risk: string): RiskLevel {
   if (level === "low" || level === "medium" || level === "high") return level;
   if (toolId === "shell_exec") return "high";
   if (toolId === "fs_write") return "medium";

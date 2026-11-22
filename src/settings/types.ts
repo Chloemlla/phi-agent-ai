@@ -1,87 +1,35 @@
-// Mirrors of the provider / model-gateway contract
-// (`phi-contracts/src/provider.rs`). The settings page is the only writer;
-// the node validates every value before it is persisted.
+// Provider / model-gateway shapes. The DTOs are generated from
+// `phi-contracts/src/provider.rs` by `cargo run -p phi-node --bin export-types`.
+// The settings page is the only writer; the node validates every value before
+// it is persisted.
 
+import type {
+  ModelSpec,
+  Protocol as GeneratedProtocol,
+  ProviderInput as GeneratedProviderInput,
+  ProviderTestView,
+  ProviderView,
+} from "../generated";
+
+export type { ModelSpec, ProviderTestView, ProviderView };
+
+/** Provenance for the model editor. `ModelSpec.source` is a string on the wire. */
 export type ModelSource = "catalog" | "fetched" | "manual";
 
-export type ModelSpec = {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  contextWindow?: number | null;
-  maxOutputTokens?: number | null;
-  temperature?: number | null;
-  /** Capability scale from 1 (small, fast) to 5 (frontier); 3 when unknown. */
-  scale: number;
-  enabled: boolean;
-  /** `catalog`, `fetched` or `manual` — provenance for the editor. */
-  source: ModelSource;
-};
+/** Mirrors the Rust `Protocol` wire values. */
+export type Protocol = GeneratedProtocol;
 
-export type ProviderView = {
-  id: string;
-  name: string;
-  protocol: string;
-  baseUrl: string;
-  model: string;
-  models: ModelSpec[];
-  modelMap: Record<string, string>;
-  headers: Record<string, string>;
-  enabled: boolean;
-  active: boolean;
-  hasKey: boolean;
-  keyHint?: string;
-  auth: string;
-  maxOutputTokens?: number;
-  temperature?: number;
-  sortIndex: number;
-  icon?: string;
-  iconColor?: string;
-  websiteUrl?: string;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-};
+/**
+ * Patch-style input. Omitted keys keep their current value, matching the
+ * `#[serde(default)]` fields on the Rust `ProviderInput`. `null` is not a
+ * meaningful patch value for these fields: omitted means "keep", `""` clears
+ * the secret.
+ */
+export type ProviderInput = Partial<{
+  [K in keyof GeneratedProviderInput]: Exclude<GeneratedProviderInput[K], null>;
+}>;
 
-export type ProviderInput = {
-  id?: string;
-  name?: string;
-  protocol?: string;
-  baseUrl?: string;
-  /** Omit to keep the current secret; `""` clears it. */
-  apiKey?: string;
-  model?: string;
-  models?: ModelSpec[];
-  modelMap?: Record<string, string>;
-  auth?: string;
-  headers?: Record<string, string>;
-  maxOutputTokens?: number;
-  temperature?: number;
-  clearMaxOutputTokens?: boolean;
-  clearTemperature?: boolean;
-  enabled?: boolean;
-  sortIndex?: number;
-  icon?: string;
-  iconColor?: string;
-  websiteUrl?: string;
-  notes?: string;
-};
-
-export type ProviderTestView = {
-  ok: boolean;
-  latencyMs: number;
-  modelCount: number;
-  error?: string;
-};
-
-export type Protocol = "anthropic_messages" | "openai_chat" | "openai_responses";
-
-export const PROTOCOLS: Protocol[] = [
-  "openai_chat",
-  "openai_responses",
-  "anthropic_messages",
-];
+export const PROTOCOLS: Protocol[] = ["openai_chat", "openai_responses", "anthropic_messages"];
 
 /** Provider APIs are inconsistent about id casing, so identity is normalized. */
 export function normalizeModelId(id: string): string {

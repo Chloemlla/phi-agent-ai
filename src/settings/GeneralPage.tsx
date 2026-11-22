@@ -2,10 +2,7 @@
 
 import { Show, createSignal } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
-import {
-  setLanguage as setNodeLanguage,
-  setWorkspace as setNodeWorkspace,
-} from "../bridge";
+import { setLanguage as setNodeLanguage, setWorkspace as setNodeWorkspace } from "../bridge";
 import { setLang, t } from "../i18n";
 import { errorText } from "../errors";
 import { IconCheck, IconFolderOpen } from "../components/Icons";
@@ -16,9 +13,7 @@ export function GeneralPage(props: {
   onRefresh: () => Promise<void>;
 }) {
   const [workspace, setWorkspace] = createSignal(props.workspace);
-  const [language, setLanguage] = createSignal(
-    props.language === "zh-CN" ? "zh-CN" : "en",
-  );
+  const [language, setLanguage] = createSignal(props.language === "zh-CN" ? "zh-CN" : "en");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal<"workspace" | "language" | null>(null);
@@ -37,7 +32,8 @@ export function GeneralPage(props: {
     }
   }
 
-  async function saveWorkspace() {    setError("");
+  async function saveWorkspace() {
+    setError("");
     setBusy(true);
     try {
       const savedPath = await setNodeWorkspace(workspace());
@@ -80,7 +76,9 @@ export function GeneralPage(props: {
       </div>
 
       <Show when={error()}>
-        <div class="banner danger" role="alert">{error()}</div>
+        <div class="banner danger" role="alert">
+          {error()}
+        </div>
       </Show>
 
       <section class="settings-card">
@@ -94,7 +92,12 @@ export function GeneralPage(props: {
             placeholder={t("Absolute workspace path")}
             aria-label={t("Workspace")}
           />
-          <button class="btn" type="button" disabled={busy()} onClick={() => void chooseWorkspace()}>
+          <button
+            class="btn"
+            type="button"
+            disabled={busy()}
+            onClick={() => void chooseWorkspace()}
+          >
             <IconFolderOpen size={14} />
             {t("Choose folder")}
           </button>
@@ -112,9 +115,7 @@ export function GeneralPage(props: {
 
       <section class="settings-card">
         <h3>{t("Interface language")}</h3>
-        <p class="hint">
-          {t("Changes apply to this node and to every shell connected to it.")}
-        </p>
+        <p class="hint">{t("Changes apply to this node and to every shell connected to it.")}</p>
         <div class="settings-actions">
           <select
             class="settings-input"

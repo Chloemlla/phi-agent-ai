@@ -6,8 +6,9 @@
 use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
+use ts_rs::TS;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStreamEvent {
     pub run_id: String,
@@ -16,11 +17,11 @@ pub struct ModelStreamEvent {
     pub index: u32,
     /// `text`, `tool_use_start`, `tool_use_delta`, `tool_use_end`, `done`.
     pub kind: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
 }
 

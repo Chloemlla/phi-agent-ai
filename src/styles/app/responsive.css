@@ -75,7 +75,8 @@
     background: var(--bg-surface);
     transform: translateX(-100%);
     visibility: hidden;
-    transition: transform var(--dur-med) var(--ease),
+    transition:
+      transform var(--dur-med) var(--ease),
       visibility 0s linear var(--dur-med);
     box-shadow: 8px 0 24px rgba(28, 34, 40, 0.14);
   }
