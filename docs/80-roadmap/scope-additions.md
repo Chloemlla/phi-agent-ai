@@ -47,6 +47,7 @@
 | 26 | Janus 风格界面对齐 | 界面 | 已实现（2026-11-22） | `src/components/`、`src/styles/app/` |
 | 27 | 上下文占用面板 | 运行时 + 界面 | 已实现（2026-11-22） | `ContextUsageView`、`src/components/ContextMeter.tsx`、`session.rs` |
 | 28 | 审批白名单与安全命令自动放行 | 安全 + 运行时 | 已实现（2026-11-22） | `policy.rs`、`tools.rs`、`context.rs` |
+| 29 | Android 崩溃诊断 | 外壳 + 可观测性 | 已实现（2026-11-22） | `gen/android/`、`src-tauri/src/android.rs`、`src/platform/crash.ts`、`70-quality/android-crash-reporting.md` |
 | 22 | 结构化审批风险等级 | 协议 / 界面 | 已实现（2026-11-22） | `phi-contracts/src/ports.rs`、`phi-domain`、`phi-plugins`、`src/status.ts`、`src/types.ts` |
 
 ---
@@ -382,6 +383,29 @@
 - **安全边界**：白名单是保守的**展示前分类**之外的另一套实现（Rust 侧），不复用前端的展示分类；任意命令仍以人工审批卡为最终边界；审批仍绑定 action digest。
 - **测试**：`policy.rs` 单元测试覆盖只读/验证/未知/重定向/危险命令；headless 32 个集成测试覆盖自动写入、审批放行/拒绝、triage 自动放行、取消与崩溃恢复、会话删除。
 - **文档影响**：`docs/40-runtime/policy-and-approval.md` §5.2；README / README.zh-CN；`tools.rs`、`context.rs`、`loop_plugin.rs`。
+
+### 2.29 Android 崩溃诊断（2026-11-22）
+
+- **原状**：Android 外壳崩溃后没有任何本机记录。Rust panic 走 `abort()`，JVM 看不到异常；
+  WebView renderer 死亡只表现为白屏；前端异常只在页面里抛错。用户反馈只能写成「打开就闪退」。
+- **为什么加**：三层运行时（Kotlin 宿主 / Rust / WebView）任意一层死亡都需要可诊断的报告，
+  否则线上问题无法定位；Tauri 的 `panic = "abort"` 让 Rust 侧尤其不可见。
+- **当前实现**：
+  - 接入 Lumen Crash SDK（`lumen-crash` + `lumen-crash-core`，从 GitHub Release 的 AAR 落地到
+    本地 Maven 树，`scripts/fetch-lumen-crash.mjs` + `gradle.properties` 的版本 pin）。
+  - `PhiApplication` 安装 SDK（关闭自动上传、创建 `crash-inbox` 目录）；`LaunchGateActivity`
+    作为 MAIN/LAUNCHER 路由到 `CrashReportActivity`（SDK Compose 崩溃页）或 `MainActivity`，
+    避免从 `TauriActivity.onCreate` 里弹崩溃页造成崩溃循环。
+  - `src-tauri/src/android.rs` 在 `run()` 早期替换 panic hook：JNI 取 `getFilesDir()`，
+    把 panic 消息/线程/backtrace 写成 inbox JSON（先写 `.tmp` 再 rename），前端未捕获异常
+    通过 `record_web_failure` 命令写入同一目录并标记 `fatal: false`。
+  - 报告默认只在本机：`crashReportBackendEnabled = false`，复制/分享是显式用户动作。
+- **工具链影响**：`compileSdk 36 → 37`、`minSdk 24 → 26`（SDK 用 `java.time`）、
+  Java/Kotlin 目标 `11 → 17`、引入 Compose（`org.jetbrains.kotlin.plugin.compose`）。
+- **取舍**：不做符号化、不开启 `startupHangWatchdogEnabled`（首帧在 WebView，Android 侧无法判定）；
+  renderer tombstone 仅 API 31+ 可得。
+- **文档影响**：新增 `docs/70-quality/android-crash-reporting.md`（本文件 §1 第 29 条）；
+  `AGENT.md` 的 Android shell 段。
 
 ---
 

@@ -92,6 +92,27 @@ The Android build lives in `src-tauri/gen/android/` and reuses the same
   (`src-tauri/src/android.rs`, called from `run()`). Without either half the
   verifier panics, and release builds abort on panic. The release build keeps
   the component through `proguard-rules.pro`.
+- **Toolchain floor.** `compileSdk 37`, `minSdk 26` and Java/Kotlin target 17:
+  the Lumen Crash SDK is compiled against 37 and uses `java.time`, which does
+  not exist below API 26. Compose is enabled because the crash report screen is
+  Compose; the compiler plugin version must match the Kotlin plugin version
+  (both are pinned in the root `build.gradle.kts`).
+- **Crash reporting.** `LumenCrash` is installed in `PhiApplication` and the
+  SDK artifacts come from a GitHub release staged into
+  `src-tauri/gen/android/lumen-crash-maven` by
+  `node scripts/fetch-lumen-crash.mjs`; the pin lives in
+  `src-tauri/gen/android/gradle.properties` (`lumenCrashSdkVersion`), and the
+  staged tree is gitignored. The launcher intent belongs to
+  `LaunchGateActivity`, not `MainActivity`: `TauriActivity.onCreate` builds the
+  Rust webview, which is the code path a crash may have come from, so the crash
+  screen must be shown without entering it. Rust panics are recorded by the
+  hook installed in `src-tauri/src/android.rs` and webview errors by
+  `src/platform/crash.ts`; both write files into `<files>/crash-inbox`, which the
+  SDK turns into a report on the next launch. Webview entries must keep
+  `fatal: false` — a recoverable JS error must never take the pending-report
+  slot. Uploads are disabled (`crashReportBackendEnabled = false`): reports stay
+  on the device until the user copies or shares one. See
+  `docs/70-quality/android-crash-reporting.md`.
 - **Release signing.** `app/build.gradle.kts` reads `keystore.properties`
   (gitignored) with `keyAlias`, `keyPassword`, `storeFile`, `storePassword` and
   an optional `storeType` (AGP's default applies when it is omitted). Without

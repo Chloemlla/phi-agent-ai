@@ -6,17 +6,19 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
+        android:name=".PhiApplication"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.phi_agent"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <!-- Launcher entry point: routes to the crash report when the previous
+             run left one behind, otherwise straight to MainActivity. It shows
+             no window of its own. -->
         <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
-            android:launchMode="singleTask"
-            android:label="@string/main_activity_title"
-            android:name=".MainActivity"
-            android:windowSoftInputMode="adjustResize"
-            android:exported="true">
+            android:name=".LaunchGateActivity"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.phi_agent.Gate">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -24,6 +26,22 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false">
+        </activity>
+
+        <!-- Compose screen from the Lumen Crash SDK; reached only through the
+             launcher gate. -->
+        <activity
+            android:name=".CrashReportActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

@@ -18,6 +18,11 @@ pub fn run() {
     #[cfg(target_os = "android")]
     android::init_platform_certificates();
 
+    // Panics on this shell are invisible to the JVM and end in `abort()`, so the
+    // hook that preserves their message goes in before any node work starts.
+    #[cfg(target_os = "android")]
+    android::init_crash_reports();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -53,6 +58,7 @@ pub fn run() {
             api::get_memory_stats,
             api::add_memory,
             api::forget_memories,
+            api::record_web_failure,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

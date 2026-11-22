@@ -313,7 +313,10 @@ jobs:
       - uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+        # android-37 is the Lumen Crash SDK's compile target. AGP can also fetch
+        # a missing platform on demand, but installing it up front keeps the
+        # failure mode out of the Gradle step.
+        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
 
       - name: Configure Android environment
         run: |
@@ -341,6 +344,12 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
+
+      - name: Stage Lumen Crash SDK
+        # Downloads the pinned SDK artifacts from their GitHub release into the
+        # local Maven tree that the Gradle build consumes. Fails loudly on a
+        # checksum mismatch or an unpublished pin.
+        run: node scripts/fetch-lumen-crash.mjs
 
       - name: Configure release signing
         env:

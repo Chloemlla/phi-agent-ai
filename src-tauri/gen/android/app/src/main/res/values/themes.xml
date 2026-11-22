@@ -9,4 +9,8 @@
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+
+    <!-- The launcher gate renders nothing; it only routes. Activities with
+         NoDisplay must finish inside onCreate, which the gate does. -->
+    <style name="Theme.phi_agent.Gate" parent="android:Theme.NoDisplay" />
 </resources>

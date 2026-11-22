@@ -18,6 +18,11 @@ import { ErrorBoundary } from "solid-js";
 import { render } from "solid-js/web";
 import App from "./app/App";
 import { setLang, t } from "./i18n";
+import { installWebFailureReporting, reportWebFailure } from "./platform/crash";
+
+// Before the first render: a failure during startup is exactly the case where
+// the shell has no other evidence of what happened.
+installWebFailureReporting();
 
 // Mirror the browser language before bootstrap so the first paint (loading
 // state included) has the right document language. The node's saved setting
@@ -33,17 +38,20 @@ function errorText(error: unknown): string {
 render(
   () => (
     <ErrorBoundary
-      fallback={(error) => (
-        <div style={{ display: "flex", height: "100%" }}>
-          <div class="empty-state">
-            <h1 class="empty-title">{t("Something went wrong.")}</h1>
-            <p class="empty-text">{errorText(error)}</p>
-            <button type="button" class="btn primary" onClick={() => window.location.reload()}>
-              {t("Reload")}
-            </button>
+      fallback={(error) => {
+        reportWebFailure("webview.solid", errorText(error));
+        return (
+          <div style={{ display: "flex", height: "100%" }}>
+            <div class="empty-state">
+              <h1 class="empty-title">{t("Something went wrong.")}</h1>
+              <p class="empty-text">{errorText(error)}</p>
+              <button type="button" class="btn primary" onClick={() => window.location.reload()}>
+                {t("Reload")}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      }}
     >
       <App />
     </ErrorBoundary>

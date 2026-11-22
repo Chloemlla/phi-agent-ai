@@ -290,3 +290,30 @@ pub async fn forget_memories(
     })
     .await
 }
+
+/// Hands an uncaught webview failure to the shell's crash inbox.
+///
+/// The Android shell turns inbox files into Lumen Crash reports on the next
+/// launch, so a frontend crash arrives with the native evidence of the same
+/// session. Desktop platforms have no crash inbox; the call is a no-op there.
+#[tauri::command]
+pub async fn record_web_failure(
+    source: String,
+    message: String,
+    stack: String,
+) -> Result<(), String> {
+    // The report is a file write, so it stays off the event loop.
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "android")]
+        {
+            crate::android::record_web_failure(&source, &message, &stack)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (source, message, stack);
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}

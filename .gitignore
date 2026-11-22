@@ -50,3 +50,8 @@
 # committed, even though the shell directories are whitelisted above.
 /.phi/
 /src-tauri/.phi/
+
+# The Lumen Crash SDK artifacts are staged here from a GitHub release by
+# `node scripts/fetch-lumen-crash.mjs`. They are build inputs, not sources: the
+# version pin in gradle.properties plus that script reproduce them exactly.
+/src-tauri/gen/android/lumen-crash-maven/

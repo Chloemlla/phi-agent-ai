@@ -9,7 +9,11 @@ buildscript {
     }
     dependencies {
         classpath("com.android.tools.build:gradle:9.3.1")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.10")
+        // 2.4.10 is the version the Lumen Crash SDK is compiled with: Kotlin
+        // refuses to read AAR metadata newer than the compiler, so the two must
+        // agree. The Compose plugin version always equals the Kotlin one.
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.10")
+        classpath("org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.4.10")
     }
 }
 
@@ -49,6 +53,13 @@ allprojects {
         mavenCentral()
         maven {
             url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
+        }
+        // Lumen Crash SDK artifacts, staged from their GitHub release by
+        // `node scripts/fetch-lumen-crash.mjs`. A local tree keeps the build
+        // offline-reproducible: no token, no package registry, no network call
+        // during dependency resolution.
+        maven {
+            url = rootProject.layout.projectDirectory.dir("lumen-crash-maven").asFile.toURI()
         }
     }
 
