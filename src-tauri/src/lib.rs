@@ -5,11 +5,19 @@ mod api;
 mod app;
 mod tauri_sink;
 
+#[cfg(target_os = "android")]
+mod android;
+
 use app::{AppStateHandle, compose};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The certificate verifier must be ready before the first HTTPS request;
+    // the model gateway can fetch models as soon as the UI is interactive.
+    #[cfg(target_os = "android")]
+    android::init_platform_certificates();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

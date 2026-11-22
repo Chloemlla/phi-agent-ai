@@ -76,6 +76,15 @@ phi-domain = { path = "crates/phi-domain" }
 phi-i18n = { path = "crates/phi-i18n" }
 phi-node = { path = "crates/phi-node" }
 
+# rustls on Android verifies certificates through the JVM, which requires the
+# shell to hand rustls-platform-verifier the app's VM and context at startup.
+# Keeping these versions in step with reqwest's rustls feature is a hard
+# requirement; both resolve from the workspace lockfile.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1"
+rustls-platform-verifier = "0.7"
+
 [profile.dev]
 # Debug builds become noticeably more responsive at a small compile-time cost.
 opt-level = 1

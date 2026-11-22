@@ -79,6 +79,26 @@ and `phi-adapters` depend on the contracts/domain/kernel set; `phi-node`
 composes everything; shells only talk to `phi-node`. Never add a dependency
 from a lower crate to a higher one.
 
+## Android shell
+
+The Android build lives in `src-tauri/gen/android/` and reuses the same
+`src-tauri/src/lib.rs` entry point.
+
+- **TLS verification.** reqwest uses rustls on Android, which hands server
+  certificates to `rustls-platform-verifier`. Its JVM component must be in the
+  APK (`org.rustls:rustls-platform-verifier` in `app/build.gradle.kts`, with the
+  version read from `Cargo.lock` by the root build script) and it must be
+  initialized with the app's VM and context before the first HTTPS request
+  (`src-tauri/src/android.rs`, called from `run()`). Without either half the
+  verifier panics, and release builds abort on panic. The release build keeps
+  the component through `proguard-rules.pro`.
+- **Release signing.** `app/build.gradle.kts` reads `keystore.properties`
+  (gitignored) with `keyAlias`, `keyPassword`, `storeFile`, `storePassword` and
+  an optional `storeType` (AGP's default applies when it is omitted). Without
+  the file, release builds fall back to the debug keystore and must not be
+  distributed. The keystore and its properties file are local credentials: back
+  them up, because losing the key blocks updates to installed apps.
+
 ## Headless workflow
 
 ```bash

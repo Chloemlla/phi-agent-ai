@@ -15,9 +15,11 @@ val tauriProperties = Properties().apply {
 }
 
 // Release signing: create src-tauri/gen/android/keystore.properties
-// (gitignored) with keyAlias, keyPassword, storeFile, storePassword.
-// Without it the release build falls back to the debug keystore, which
-// is fine for local testing but must never be shipped to users.
+// (gitignored) with keyAlias, keyPassword, storeFile, storePassword and an
+// optional storeType (for example `pkcs12`; AGP's default applies when it is
+// omitted). Without the file the release build falls back to the debug
+// keystore, which is fine for local testing but must never be shipped to
+// users.
 val keystoreProperties = Properties().apply {
     val propFile = rootProject.file("keystore.properties")
     if (propFile.exists()) {
@@ -49,6 +51,7 @@ android {
                 keyPassword = keystoreProperties.getProperty("keyPassword")
                 storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
+                keystoreProperties.getProperty("storeType")?.let { storeType = it }
             }
         }
     }
@@ -106,6 +109,9 @@ rust {
 }
 
 dependencies {
+    // Required by rustls-platform-verifier's Android certificate verification;
+    // the version is pinned to Cargo.lock by the root build script.
+    implementation("org.rustls:rustls-platform-verifier")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

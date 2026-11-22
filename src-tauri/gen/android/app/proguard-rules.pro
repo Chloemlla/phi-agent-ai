@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# rustls-platform-verifier reaches this component only through JNI, so R8
+# cannot see the usage and would strip it from release builds.
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }

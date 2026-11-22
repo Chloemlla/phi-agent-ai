@@ -2780,11 +2780,14 @@ dependencies = [
 name = "phi-agent"
 version = "0.1.0"
 dependencies = [
+ "jni 0.22.4",
+ "ndk-context",
  "phi-contracts",
  "phi-domain",
  "phi-i18n",
  "phi-kernel",
  "phi-node",
+ "rustls-platform-verifier",
  "serde_json",
  "tauri",
  "tauri-build",
