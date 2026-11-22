@@ -24,6 +24,7 @@ import {
 } from "./activity";
 import { IconAlert, IconPhi } from "./Icons";
 import { CopyButton, Markdown } from "./Markdown";
+import { MessageImage } from "./MessageImage";
 import { RichHtml } from "./RichHtml";
 import { createCoalesced, createInlineUiSplitter, type InlineUiSegment } from "./inlineUi";
 import { SideScrollbar } from "./SideScrollbar";
@@ -32,6 +33,7 @@ import { VIRTUALIZE_THRESHOLD, VirtualTranscript } from "./VirtualTranscript";
 type TextRowData = { key: string; kind: "text"; text: string; ts: string };
 type RedactedRowData = { key: string; kind: "redacted" };
 type UserRowData = { key: string; kind: "user"; message: Message };
+type ImageRowData = { key: string; kind: "image"; assetId: string };
 type StreamRowData = { key: string; kind: "stream" };
 type ApprovalRowData = {
   key: string;
@@ -45,6 +47,7 @@ type ActivityRow = ActivityItemRow | GroupRowData;
 
 type TranscriptRow =
   | UserRowData
+  | ImageRowData
   | TextRowData
   | RedactedRowData
   | ActivityRow
@@ -57,7 +60,7 @@ const RUN_ROW: RunRowData = { key: "run", kind: "run" };
 const userRows = new WeakMap<Message, UserRowData>();
 const blockRows = new WeakMap<
   Block,
-  TextRowData | ThinkingRowData | ToolRowData | ResultRowData | RedactedRowData
+  TextRowData | ThinkingRowData | ToolRowData | ResultRowData | RedactedRowData | ImageRowData
 >();
 const groupCache = new Map<string, GroupRowData>();
 const approvalRows = new Map<string, ApprovalRowData>();
@@ -158,6 +161,23 @@ function redactedRow(
   return row;
 }
 
+function imageRow(
+  message: Message,
+  block: Extract<Block, { type: "image" }>,
+  index: number,
+): ImageRowData {
+  let row = blockRows.get(block) as ImageRowData | undefined;
+  if (!row) {
+    row = {
+      key: `image:${message.id}:${index}`,
+      kind: "image",
+      assetId: block.asset_id,
+    };
+    blockRows.set(block, row);
+  }
+  return row;
+}
+
 function isActivityItemRow(row: TranscriptRow): row is ActivityItemRow {
   return row.kind === "thinking" || row.kind === "tool" || row.kind === "result";
 }
@@ -185,6 +205,8 @@ function estimateRow(row: TranscriptRow): number {
   switch (row.kind) {
     case "user":
       return 58;
+    case "image":
+      return 220;
     case "text":
       return 96;
     case "redacted":
@@ -227,6 +249,14 @@ function UserMessageRow(props: { row: UserRowData }) {
       <div class="user-bubble" title={formatFullTime(props.row.message.ts)}>
         {userText(props.row.message)}
       </div>
+    </div>
+  );
+}
+
+function UserImageRow(props: { row: ImageRowData }) {
+  return (
+    <div class="message message--user">
+      <MessageImage assetId={props.row.assetId} alt={t("Attached image")} variant="inline" />
     </div>
   );
 }
@@ -457,8 +487,10 @@ export function Conversation(props: {
 
       if (message.role === "user") {
         if (userText(message)) raw.push(userRow(message));
-        for (const block of message.blocks) {
-          if (block.type === "tool_result" && !toolUseIds.has(block.tool_use_id)) {
+        for (const [index, block] of message.blocks.entries()) {
+          if (block.type === "image") {
+            raw.push(imageRow(message, block, index));
+          } else if (block.type === "tool_result" && !toolUseIds.has(block.tool_use_id)) {
             raw.push(resultRow(message, block));
           }
         }
@@ -489,6 +521,9 @@ export function Conversation(props: {
             if (!toolUseIds.has(block.tool_use_id)) {
               raw.push(resultRow(message, block));
             }
+            break;
+          case "image":
+            // Models do not emit image blocks; ignore any in assistant turns.
             break;
         }
       }
@@ -558,6 +593,8 @@ export function Conversation(props: {
     switch (row.kind) {
       case "user":
         return <UserMessageRow row={row} />;
+      case "image":
+        return <UserImageRow row={row} />;
       case "text":
         return <AssistantTextRow row={row} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />;
       case "redacted":

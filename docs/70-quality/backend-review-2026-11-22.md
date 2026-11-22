@@ -8,6 +8,8 @@
 
 审查基于当前工作区代码；行号会随后续提交漂移。本次只做审查，没有改代码。
 
+> **修复状态（2026-11-22）**：§1 两个高风险问题、§2.1/2.3/2.5、§3.1–§3.4 的主要项、§4.1/4.4/4.5/4.6/4.8、§5.3/5.5 已修复或有实质进展；图片上传已作为新增产品能力落地。完整差异与仍开放项见 §9「修复记录」。
+
 ---
 
 ## 0. 结论
@@ -34,6 +36,8 @@
 
 ### 1.1 `shell_exec` 的“只读白名单”不是只读，也不是工作区内边界
 
+> ✅ 已修复（2026-11-22）：白名单现在拒绝带路径的命令名（`/tmp/cat`、`./cat`）、绝对/盘符/UNC/父目录路径、`~`、以及会执行子进程的选项（`rg --pre`、`rg -z`、`sed` 整体、`sort --compress-program`、`git --ext-diff/--textconv/-O` 等）；Windows 的反斜杠、单引号与 `/b` 开关也按 cmd 语义处理。命令引用工作区外路径时不再自动放行，而是进入审批。回归测试在 `policy.rs`。这仍是文本分类器，不是 OS 级沙箱，符号链接、项目脚本和 shell 内建命令的残余风险见 §9。
+
 `policy.rs` 根据命令文本把 `cat/rg/grep/sed/sort/git grep` 等直接判为 `ReadOnly` 并自动放行（`src-tauri/crates/phi-plugins/src/policy.rs:274-276`、`352-367`）。但 `shell_exec` 实际运行在用户权限下，路径不受 `FsSandboxPlugin` 限制；只有 `fs_*` 工具走 `resolve_path`。
 
 可直接读取工作区外内容：
@@ -53,6 +57,8 @@
 建议：把 `shell_exec` 视为独立风险层。只自动放行经过结构化校验的 argv 模板，并显式排除会执行子进程的选项；否则默认走审批。真正的工作区隔离需要 OS 级沙箱或能力令牌，而不是命令文本分类器。至少先修正白名单和提示文案。
 
 ### 1.2 Journal torn-tail 修复会导致下一次启动失败
+
+> ✅ 已修复（2026-11-22）：`JsonlJournal::append` 现在从文件末尾分块向前找到最后一个完整换行，`set_len` 截断半行后再追加，而不是给半行补换行。新增了“半行 + 两次重启”和 `EventBus::restore` 的回归测试，见 `fs_journal.rs`。
 
 崩溃后最后一行可能没有换行符。`JsonlJournal::append` 在下一次追加时会先补一个换行（`src-tauri/crates/phi-adapters/src/fs_journal.rs:36-49`），把这条截断记录变成文件中间的一行。`EventBus::restore` 只容忍“最后一行”不可解析，中间行不可解析会直接返回错误拒绝启动（`src-tauri/crates/phi-kernel/src/event_bus.rs:152-163`）。
 
@@ -238,6 +244,8 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 
 ### 3.3 补丁式/占位语义
 
+> ✅ 已修复（2026-11-22）：`image_generate` 的工具 schema 不再声明 `reference_assets`；如果旧模型仍发送该字段，工具仍会明确返回“不支持”，不会静默忽略。
+
 契约里承诺了语义，实现里没有：
 
 - `PolicyEffect::Modify` 被接受，但执行时直接 `deny`（`loop_plugin.rs:1313-1317`）。
@@ -250,6 +258,8 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 这些要么实现，要么从对外 schema 中移除；不要长期保留“有这个字段但没这个能力”的状态。
 
 ### 3.4 配置与持久化语义不一致
+
+> ✅ 已修复（2026-11-22）：`ConfigStore::update` 现在先克隆、在副本上变更、写盘成功后才替换内存值；写失败时内存保持不变，并新增成功/失败两条单元测试。`ProviderStore::load` 现在通过 `LogPort` 报告“主文件损坏、使用备份”和“主文件与备份都不可读、以空配置启动”，不再静默清空。secret 明文存储与 keychain 仍是已知开放项。
 
 - `ConfigStore::update` 先改内存再写文件（`adapters/config.rs:42-55`）：写失败时调用方收到错误，但内存里的新值已经生效，直到重启。`JsonStore::update` 先写文件、成功后才替换内存（`plugins/json_store.rs:44-59`）。两种设置存储的失败语义不同。
 - `ProviderStore::load` 在主文件和备份都损坏时静默回退到空配置（`provider_store.rs:43-46`），没有日志；用户会看到 provider 全没了。
@@ -307,11 +317,15 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 
 ### 4.5 每消息模型选择没有改变上下文预算
 
+> ✅ 已修复（2026-11-22）：run 启动时按 `ctx.resolved_model` 在 `ModelPort::roster()` 中查找 `ModelSpec.context_window`，只有找不到时才回退到 active provider 的 `status().context_window`；`ModelCallIssued.context_window` 也记录同一个值。
+
 `LoopPlugin` 用 `model.status().context_window` 计算历史预算（`loop_plugin.rs:639-640`），但 `ModelGateway::status` 返回的是 active provider 主模型的上下文窗口（`model_gateway.rs:437-470`），不是本次请求解析后的 `resolved_model`。用户切到另一个模型或子代理使用另一个模型时，预算和 `ModelCallIssued.context_window` 仍按主模型算，可能过早裁剪或超出真实窗口。
 
 建议从 roster 按 `resolved_model` 取 `ModelSpec.context_window`，并记录本次调用实际使用的值。
 
 ### 4.6 记忆的 Principal 不一致
+
+> ✅ 已修复（2026-11-22）：`MemoryPlugin::tool_principal` 现在使用 `ctx.agent_id`，与自动检索使用同一个 agent 身份；子代理写入的 agent-scope 记忆可以被它自己检索到。
 
 - 自动注入用 `ctx.agent_id` 和 `ctx.run_id`（`loop_plugin.rs:2013-2022`）。
 - 记忆工具 `tool_principal` 固定 `agent_id: Some("main")`，忽略 `ctx.agent_id`（`memory/mod.rs:309-316`）。
@@ -336,6 +350,8 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 
 ### 4.8 事件版本与兼容
 
+> ✅ 已修复（2026-11-22，部分）：`apply_record` 不再静默 `return`。解析失败会带 `event_id` 通过 `LogPort::warn` 记录并跳过；`schema_version` 仍未参与 upcast，未知事件的保留/迁移策略仍是开放项。
+
 `schema_version` 在 `EventRecord` 里固定为 1，从未被读取（`event_bus.rs:20`、`106`）。`SessionPlugin::apply_record` 解析失败时静默 `return`（`session.rs:744-748`），与 `docs/50-distributed/local-first.md:156-159` 要求的“未知事件保留原文、不得丢弃”相反。将来改一个字段类型，旧 journal 里的相关事件会被静默跳过，会话投影悄悄缺数据。
 
 建议：解析失败要记录日志并计数；引入最小 `upcast`/`fold` 机制或明确不兼容策略。如果项目还处在可清空本地数据的阶段，也应在启动时给出明确提示。
@@ -343,6 +359,8 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 ---
 
 ## 5. 性能与效率
+
+> ✅ 已修复（2026-11-22，缓存部分）：`SessionPlugin.blocks` 改为最多 4096 条的 FIFO 缓存，超出后淘汰最旧 blob；`ImagePlugin.turn_counts` 在每次生成前清理同一 session 的旧 turn，避免进程生命周期内无界增长。journal 全量恢复、整份 session 快照、publish 锁包住 sink、O(sessions) 扫描和每事件 fsync 仍未改。
 
 多数是“可预见的悬崖”，不是当前故障：
 
@@ -367,7 +385,7 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 
 - 没有 `cargo clippy`。
 - 没有检查 `src/generated` 是否与 Rust DTO 同步；`export-types` 是手工命令。
-- 没有 torn-tail + 两次重启的回归测试。
+- ~~没有 torn-tail + 两次重启的回归测试。~~ 已补：`fs_journal.rs` 覆盖半行截断、两次重启和 `EventBus::restore`；`ConfigStore`、图片 turn 计数也有对应测试。
 - `loop_plugin` 只有 6 个单元测试，`tools.rs`、`subagent.rs` 没有单元测试。
 - `phi-i18n` 的翻译完整性测试只检查了 17 条手选消息（`lib.rs:706-729`）；新增消息忘记翻译时会静默回退英文。
 - 协议解析、SSE 分帧、参数恢复都是纯函数，适合加 fuzz/property 测试；目前没有。
@@ -376,6 +394,8 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 ---
 
 ## 7. 建议的收口顺序
+
+> 2026-11-22：第 1 步（shell 白名单与 journal torn-tail）及若干小缺陷已实施，见 §9；其余仍是后续工作。
 
 1. 修 shell 白名单与 journal torn-tail，各补一个回归测试。
 2. 机械拆分四个上帝文件：`loop_plugin`、`model_protocol`、`session`、`headless/main`；只移动代码、不改行为。
@@ -391,4 +411,40 @@ CI 目前没有 clippy，这类问题不会被自动发现。建议加 `cargo cl
 
 - 本文件登记在 `docs/README.md`。
 - 未修改 `docs/10-architecture/module-map.md` 的依赖规则；R3/R5 与现状的落差已记录在 §2.2、§2.6，待后续决策后同步。
-- 本次只做审查，未修改代码。
+- 原始审查未修改代码；本轮修复记录见 §9。
+
+---
+
+## 9. 修复记录（2026-11-22）
+
+本轮在正确性/安全修复之外，完成了可行的契约类型化、死代码清理、组合根收敛和机械拆分；仍保留需要单独设计的大项（AppError、事件本地化、journal 快照、增量读模型）。本地已运行 `cargo fmt`、`cargo check --workspace --exclude phi-agent --all-targets`、`cargo test --workspace --exclude phi-agent`（全部通过）以及前端 `typecheck` / `lint` / `test` / `format:check` / `build`。
+
+| 条目 | 修复内容 | 验证 |
+|---|---|---|
+| §1.1 shell 白名单 | 拒绝带路径的命令名、绝对/盘符/UNC/父目录/`~` 路径、`rg --pre`/`-z`、`sed`、`sort --compress-program`/`-o`、`git --ext-diff`/`--textconv`/`-O`、`tree -o`、`ack/ag --pager`；Windows 反斜杠、单引号和 `/b` 开关按 cmd 语义处理；工作区外路径进入审批 | `policy.rs` 新增路径/选项/Windows 测试 |
+| §1.2 journal torn-tail | `append` 先截断到最后一个完整换行，再写入新记录；不再补换行制造中文件坏行 | `fs_journal.rs` 半行、两次重启、EventBus restore 测试 |
+| §2.1 上帝文件 | `model_protocol`、`phi-headless/main`、`loop_plugin` 已按职责拆成目录模块；`session.rs` 与 `node.rs` 的拆分尚未完成，保留原文件 | 各 crate `cargo check` 通过 |
+| §2.3 组合根 | required slot 检查收敛到 `Services::missing_slots` 的单一 `SERVICE_SLOTS` 映射，`Node::compose` 不再重复查 registry | `phi-contracts` 单测 |
+| §2.5 工具元数据 | `ToolDefinition` 增加 `ToolCapability`；策略、工作区租约、风险等级、子代理工具过滤、`SideEffect` 都消费同一份元数据；`PolicyEffect::Modify` 删除 | policy/loop 编译与现有测试 |
+| §3.1 死代码 | 删除 `NullMemoryStore`、`StreamHub::set_sink`、`ModelSpec` 死方法、`SecretRef::env`、`SqliteMemoryStore.path`、`MemoryMaintenanceFailed`、`ClockPort::monotonic_ms`、`StartRunRequest.role`、`SessionPort::messages` 等无消费者项 | 全 workspace 编译 |
+| §3.2 重复代码 | 统一 `tool()` builder；抽取 ProviderStore active-id 修复、Decision 失败发布、session agent 同步、image 限额计算 | 编译与现有测试 |
+| §3.3 占位语义 | `image_generate` 不再声明 `reference_assets`；`send_message` 删除未实现的 `queue` 模式；`keychain:` 当前未在设置 UI 暴露，后端仍显式失败 | 编译与工具 schema |
+| §3.4 ConfigStore | 副本变更、写盘成功后才提交内存；失败不污染快照；配置损坏时通过 `LogPort` 告警 | `config.rs` 成功/失败测试 |
+| §3.4 ProviderStore | 主文件损坏回退备份、两者都损坏时报警，不再静默清空 | 现有备份回退测试 |
+| §4.1 状态契约 | `RunState`、`ApprovalStatus`、`StreamKind` 类型化并保持原有 wire 字符串；`RunView`/`RunStatus`/`SessionSummary` 复用；`AppError` 仍未做 | 全 workspace 测试 |
+| §4.4 Tauri 命令 | 22 个磁盘/数据库命令改为 `spawn_blocking`；删除 `set_api_key`、`get_model_status`、`get_run_status`、`fetch_models` 等无前端调用命令 | `cargo check -p phi-agent --lib` |
+| §4.5 context window | 按 `resolved_model` 从 roster 取窗口，找不到才回退 active status；`ModelCallIssued` 记录同一值 | 编译 |
+| §4.6 memory principal | 工具写入使用 `ctx.agent_id`，与自动检索一致 | 现有 memory 测试 |
+| §4.8 事件版本 | `schema_version` 真正参与 `restore`：更高版本记录 error 并拒绝启动；投影解析失败带 `event_id` 告警；upcast 仍未实现 | kernel 单测 |
+| §5.3 缓存 | `SessionPlugin.blocks` 改为 4096 条 FIFO；`ImagePlugin.turn_counts` 按 session/turn 清理 | 图片清理与上传测试 |
+| §5.5 扫描 | `Projection` 增加 run/agent 二级索引；跨 session 的 run/agent 查询和 agent 同步不再遍历全部 session | 现有 session 测试 |
+| 新增：图片上传 | 用户可从 Composer 最左侧 `+` 选择本地图片，后端校验格式/大小并存入资产库；消息只存 asset id，三种模型协议在请求时解析为 base64；历史消息通过 `image_asset_data_url` 懒加载渲染 | 后端 104+18 测试、前端 65 测试、typecheck/lint/build |
+
+### 仍然开放
+
+- `shell_exec` 仍是文本分类器，不是 OS 级沙箱；符号链接、项目验证脚本（`bun run build` 等）和 shell 内建命令的残余风险没有消除。
+- journal 全量恢复/无快照、每事件整份 session 快照、publish 锁包住 sink、每事件 fsync；session cursor/增量投影仍未做。
+- `AppError` 统一错误码、两套 Run 读模型合并、事件本地化、`schema_version` upcast。
+- `session.rs`、`node.rs`、`provider_store.rs`、`memory_sqlite.rs`、`auxiliary.rs` 仍未目录化。
+- 适配器边界（R5）、`RuntimeConfig` 环境变量收敛、`keychain:` 与明文 secret 的产品说明。
+- `cargo clippy -- -D warnings` 尚未全绿；CI 已有 clippy 信息性 job，generated-types job 已加。

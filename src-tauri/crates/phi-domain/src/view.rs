@@ -5,6 +5,57 @@ use ts_rs::TS;
 use super::agent::{AgentView, MessageKind};
 use super::message::{ContentBlock, Role};
 
+/// Lifecycle state of a run. The wire representation is the PascalCase name
+/// used by the journal, headless JSON and the desktop shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "PascalCase")]
+pub enum RunState {
+    Scheduled,
+    Running,
+    WaitingApproval,
+    Succeeded,
+    Failed,
+    Aborted,
+    AwaitingReconciliation,
+}
+
+impl RunState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RunState::Scheduled => "Scheduled",
+            RunState::Running => "Running",
+            RunState::WaitingApproval => "WaitingApproval",
+            RunState::Succeeded => "Succeeded",
+            RunState::Failed => "Failed",
+            RunState::Aborted => "Aborted",
+            RunState::AwaitingReconciliation => "AwaitingReconciliation",
+        }
+    }
+
+    pub const fn is_active(self) -> bool {
+        matches!(
+            self,
+            RunState::Scheduled | RunState::Running | RunState::WaitingApproval
+        )
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            RunState::Succeeded
+                | RunState::Failed
+                | RunState::Aborted
+                | RunState::AwaitingReconciliation
+        )
+    }
+}
+
+impl std::fmt::Display for RunState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
@@ -13,7 +64,7 @@ pub struct SessionSummary {
     pub created_at: String,
     pub updated_at: String,
     pub message_count: usize,
-    pub last_run_state: Option<String>,
+    pub last_run_state: Option<RunState>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
@@ -39,7 +90,7 @@ pub struct MessageView {
 pub struct RunView {
     pub id: String,
     pub turn_id: String,
-    pub state: String,
+    pub state: RunState,
     pub steps: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -62,10 +113,7 @@ pub struct RunView {
 
 impl RunView {
     pub fn is_active(&self) -> bool {
-        matches!(
-            self.state.as_str(),
-            "Scheduled" | "Running" | "WaitingApproval"
-        )
+        self.state.is_active()
     }
 }
 

@@ -194,20 +194,6 @@ impl ModelSpec {
             self.context_window = None;
         }
     }
-
-    pub fn display_name(&self) -> &str {
-        if self.name.is_empty() {
-            &self.id
-        } else {
-            &self.name
-        }
-    }
-
-    /// Whether an agent running this model may delegate work to `child`. A
-    /// delegate may never be more capable than the model that spawned it.
-    pub fn may_delegate_to(&self, child: &ModelSpec) -> bool {
-        child.scale <= self.scale
-    }
 }
 
 /// Old provider files stored `models: ["id", ...]`. Accept both that shape and
@@ -278,10 +264,6 @@ where
 pub struct SecretRef(pub String);
 
 impl SecretRef {
-    pub fn env(name: impl Into<String>) -> Self {
-        Self(format!("env:{}", name.into()))
-    }
-
     pub fn literal(value: impl Into<String>) -> Self {
         Self(format!("literal:{}", value.into()))
     }
@@ -782,14 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn model_scale_caps_delegation() {
-        let mut parent = ModelSpec::from_id("claude-opus-5-5");
-        parent.scale = 4;
-        let mut child = ModelSpec::from_id("claude-haiku-5-5");
-        child.scale = 2;
-        assert!(parent.may_delegate_to(&child));
-        assert!(!child.may_delegate_to(&parent));
-
+    fn model_scale_normalizes_out_of_range() {
         let mut invalid = ModelSpec::from_id("custom");
         invalid.scale = 9;
         invalid.normalize();

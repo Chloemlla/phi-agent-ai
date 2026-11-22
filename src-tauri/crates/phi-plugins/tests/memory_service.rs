@@ -40,9 +40,6 @@ impl ClockPort for TestClock {
         let millis = self.tick.fetch_add(1, Ordering::SeqCst);
         format!("2026-01-01T00:00:00.{:03}Z", millis.min(999))
     }
-    fn monotonic_ms(&self) -> u64 {
-        self.tick.load(Ordering::SeqCst)
-    }
 }
 
 struct TestIds {

@@ -21,6 +21,7 @@ use phi_adapters::fs_journal::JsonlJournal;
 use phi_adapters::lock::DataDirLock;
 use phi_adapters::memory_sqlite::SqliteMemoryStore;
 use phi_adapters::system::{StderrLog, SystemClock, UuidIds};
+use phi_contracts::REQUIRED_SLOTS;
 use phi_contracts::auxiliary::{
     AuxiliaryRoleInput, AuxiliaryRoleView, DecisionConfigInput, DecisionQuestion, DecisionRequest,
     DecisionResponse, DecisionStatus, ImageAsset, ImageConfigInput, ImageRequest, ImageResponse,
@@ -34,8 +35,7 @@ use phi_contracts::ports::{ModelStatus, RunStatus, SessionPort, StartRunRequest,
 use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_contracts::services::Services;
 use phi_contracts::stream::{StreamHub, StreamPort};
-use phi_contracts::{REQUIRED_SLOTS, SLOT_PERSISTENCE_JOURNAL};
-use phi_domain::agent::{AgentRole, AgentView, WorkMode};
+use phi_domain::agent::{AgentView, WorkMode};
 use phi_domain::memory::{Episode, MemoryRecord};
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
 use phi_domain::view::{PendingApprovalView, SessionSummary, SessionView};
@@ -166,7 +166,10 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     let clock = Arc::new(SystemClock::new());
     let ids = Arc::new(UuidIds);
     let log = Arc::new(StderrLog);
-    let app_config = Arc::new(ConfigStore::load(config.data_dir.join("config.json")));
+    let app_config = Arc::new(ConfigStore::load(
+        config.data_dir.join("config.json"),
+        log.clone(),
+    ));
 
     let configured_language = app_config.snapshot().language;
     let language = i18n::resolve(config.language.as_deref(), configured_language.as_deref());
@@ -197,7 +200,10 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     let workspace = resolve_workspace(&config, &app_config, &log)?;
     log.info(&format!("workspace: {}", workspace.display()));
 
-    let providers = Arc::new(ProviderStore::load(config.data_dir.join("providers.json")));
+    let providers = Arc::new(ProviderStore::load(
+        config.data_dir.join("providers.json"),
+        log.clone(),
+    ));
     if config.writable {
         if let Err(error) = providers.seed_from_env() {
             log.warn(&i18n::t_args(
@@ -356,10 +362,10 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
 
     if config.writable {
         kernel.activate_all();
-        // Slot metadata and typed service wiring are two views of the same
-        // composition; both must agree before the node reports Normal.
-        let mut missing = services.missing_slots(REQUIRED_SLOTS);
-        missing.extend(registry.missing_slots(&[SLOT_PERSISTENCE_JOURNAL]));
+        // Typed service wiring is the source of truth. Plugin activation still
+        // feeds the registry for startup logs and contribution metadata, but a
+        // second slot check here would only duplicate this one.
+        let missing = services.missing_slots(REQUIRED_SLOTS);
         if missing.is_empty() {
             kernel.set_mode(
                 RunMode::Normal,
@@ -681,7 +687,7 @@ impl Node {
         text: &str,
         provider_id: Option<&str>,
     ) -> Result<String, String> {
-        self.send_message_full(session_id, text, provider_id, None, None)
+        self.send_message_full(session_id, text, provider_id, None, None, &[])
     }
 
     pub fn send_message_full(
@@ -691,6 +697,7 @@ impl Node {
         provider_id: Option<&str>,
         model: Option<&str>,
         thinking: Option<&str>,
+        attachment_ids: &[String],
     ) -> Result<String, String> {
         self.require_writable()?;
         if self.kernel.mode() != RunMode::Normal {
@@ -703,7 +710,12 @@ impl Node {
             ));
         }
         let text = text.trim();
-        if text.is_empty() {
+        let attachment_ids: Vec<&str> = attachment_ids
+            .iter()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if text.is_empty() && attachment_ids.is_empty() {
             return Err(i18n::t("Message is empty"));
         }
         let model = model
@@ -745,12 +757,21 @@ impl Node {
             self.providers.set_active(provider_id)?;
         }
         let turn = session.start_turn(session_id)?;
-        session.append_message(
-            session_id,
-            Some(&turn.turn_id),
-            Role::User,
-            vec![ContentBlock::text(text)],
-        )?;
+        let mut blocks = Vec::new();
+        if !text.is_empty() {
+            blocks.push(ContentBlock::text(text));
+        }
+        if !attachment_ids.is_empty() {
+            let image = self
+                .services
+                .image()
+                .ok_or_else(|| i18n::t("Image attachments are not available"))?;
+            for asset_id in attachment_ids {
+                let asset = image.asset(asset_id)?;
+                blocks.push(ContentBlock::image(asset.asset_id, asset.mime));
+            }
+        }
+        session.append_message(session_id, Some(&turn.turn_id), Role::User, blocks)?;
         runtime.start_run(StartRunRequest {
             session_id: session_id.to_string(),
             turn_id: turn.turn_id,
@@ -763,7 +784,6 @@ impl Node {
             agent_id: None,
             thread_id: None,
             root_agent_id: None,
-            role: AgentRole::Lead,
             report_to: None,
             work_mode: WorkMode::Shared,
             lead_scale: None,
@@ -844,6 +864,25 @@ impl Node {
             .image()
             .ok_or_else(|| i18n::t("Image generation is not available"))?
             .bytes(asset_id)
+    }
+
+    pub fn add_image_attachment(
+        &self,
+        source: &Path,
+        session_id: Option<&str>,
+    ) -> Result<ImageAsset, String> {
+        self.require_writable()?;
+        self.services
+            .image()
+            .ok_or_else(|| i18n::t("Image attachments are not available"))?
+            .store_upload(source, session_id)
+    }
+
+    pub fn image_asset_data_url(&self, asset_id: &str) -> Result<String, String> {
+        self.services
+            .image()
+            .ok_or_else(|| i18n::t("Image attachments are not available"))?
+            .data_url(asset_id)
     }
 
     pub fn delete_image_asset(&self, asset_id: &str) -> Result<bool, String> {

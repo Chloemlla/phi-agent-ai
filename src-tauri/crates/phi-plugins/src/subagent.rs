@@ -14,8 +14,8 @@ use tokio_util::sync::CancellationToken;
 
 use phi_contracts::SLOT_TOOL_PROVIDER;
 use phi_contracts::ports::{
-    SideEffect, StartRunRequest, ThinkingEffort, ToolCall, ToolContext, ToolDefinition, ToolOutput,
-    ToolPort,
+    SideEffect, StartRunRequest, ThinkingEffort, ToolCall, ToolCapability, ToolContext,
+    ToolDefinition, ToolOutput, ToolPort,
 };
 use phi_contracts::services::Services;
 use phi_domain::agent::{AgentRole, AgentStatus, AgentView, MessageKind, WorkMode};
@@ -26,6 +26,8 @@ use phi_kernel::event_bus::EventBus;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::ports::{IdPort, LogPort};
 use phi_kernel::registry::Contribution;
+
+use crate::tools::tool_definition::tool;
 
 const MAX_ACTIVE_SUBAGENTS: usize = 4;
 const DEFAULT_WAIT_SECS: u64 = 180;
@@ -273,7 +275,6 @@ impl SubagentToolsPlugin {
             agent_id: Some(agent_id.clone()),
             thread_id: Some(thread_id.clone()),
             root_agent_id: Some(ctx.root_agent_id.clone()),
-            role: AgentRole::Subagent,
             report_to: Some(ctx.agent_id.clone()),
             work_mode,
             lead_scale: Some(ctx.lead_scale),
@@ -436,19 +437,6 @@ impl SubagentToolsPlugin {
         };
         let to_agent_id = Self::required_str(&call.input, "to_agent_id")?;
         let message = Self::required_str(&call.input, "message")?;
-        let mode = call
-            .input
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("steer")
-            .trim()
-            .to_ascii_lowercase();
-        if mode != "steer" && mode != "queue" {
-            return Self::bad(i18n::t_args(
-                "Unknown message mode {mode}; expected steer or queue",
-                &[("mode", mode)],
-            ));
-        }
         let Some(sender) = session.agent(&ctx.agent_id) else {
             return Self::bad(i18n::t("The sending agent is not known"));
         };
@@ -494,8 +482,7 @@ impl SubagentToolsPlugin {
             return Ok(ToolOutput {
                 content: json!({
                     "agentId": recipient.id,
-                    "status": "running",
-                    "mode": mode
+                    "status": "running"
                 })
                 .to_string(),
                 is_error: false,
@@ -528,7 +515,6 @@ impl SubagentToolsPlugin {
             agent_id: Some(recipient.id.clone()),
             thread_id: Some(recipient.thread_id.clone()),
             root_agent_id: Some(recipient.root_agent_id.clone()),
-            role: AgentRole::Subagent,
             report_to: recipient.report_to.clone(),
             work_mode: recipient.work_mode,
             lead_scale: None,
@@ -538,8 +524,7 @@ impl SubagentToolsPlugin {
                 content: json!({
                     "agentId": recipient.id,
                     "runId": run_id,
-                    "status": "running",
-                    "mode": mode
+                    "status": "running"
                 })
                 .to_string(),
                 is_error: false,
@@ -624,26 +609,6 @@ fn agent_statuses(ids: &[String], views: &[Option<AgentView>]) -> Vec<Value> {
         .collect()
 }
 
-fn tool(
-    id: &str,
-    description: &str,
-    properties: Value,
-    required: Vec<&str>,
-    side_effect: SideEffect,
-) -> ToolDefinition {
-    ToolDefinition {
-        id: id.to_string(),
-        name: id.to_string(),
-        description: description.to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        }),
-        side_effect,
-    }
-}
-
 #[async_trait]
 impl ToolPort for SubagentToolsPlugin {
     fn definitions(&self) -> Vec<ToolDefinition> {
@@ -669,6 +634,7 @@ impl ToolPort for SubagentToolsPlugin {
                 }),
                 vec!["model", "brief"],
                 SideEffect::None,
+                vec![ToolCapability::AgentControl],
             ),
             tool(
                 "wait_for_agents",
@@ -680,17 +646,18 @@ impl ToolPort for SubagentToolsPlugin {
                 }),
                 vec!["agent_ids"],
                 SideEffect::None,
+                vec![ToolCapability::AgentControl],
             ),
             tool(
                 "send_message",
                 "Send a directed message to another agent in this delegation family. There is no broadcast. The recipient sees it in its own thread; if it is idle and the turn is still open, it is woken for a new run.",
                 json!({
                     "to_agent_id": { "type": "string" },
-                    "message": { "type": "string" },
-                    "mode": { "type": "string", "enum": ["steer", "queue"], "description": "steer (default) or queue" }
+                    "message": { "type": "string" }
                 }),
                 vec!["to_agent_id", "message"],
                 SideEffect::None,
+                vec![ToolCapability::AgentMessaging],
             ),
             tool(
                 "cancel_agent",
@@ -701,6 +668,7 @@ impl ToolPort for SubagentToolsPlugin {
                 }),
                 vec!["agent_id"],
                 SideEffect::None,
+                vec![ToolCapability::AgentControl],
             ),
         ]
     }

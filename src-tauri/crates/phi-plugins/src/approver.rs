@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use phi_contracts::SLOT_APPROVAL_DECIDE;
-use phi_contracts::ports::{ApprovalOutcome, ApprovalSpec, ApproverPort};
+use phi_contracts::ports::{ApprovalOutcome, ApprovalSpec, ApprovalStatus, ApproverPort};
 use phi_domain::events::DomainEvent;
 use phi_domain::view::PendingApprovalView;
 use phi_i18n as i18n;
@@ -133,7 +133,7 @@ impl ApproverPort for HumanApprover {
                 }
                 None => {
                     return ApprovalOutcome {
-                        status: "Expired".to_string(),
+                        status: ApprovalStatus::Expired,
                         by: "system".to_string(),
                         note: Some(i18n::t("Approval request does not exist or has expired")),
                     };
@@ -145,7 +145,7 @@ impl ApproverPort for HumanApprover {
             Some(receiver) => receiver,
             None => {
                 return ApprovalOutcome {
-                    status: "Expired".to_string(),
+                    status: ApprovalStatus::Expired,
                     by: "system".to_string(),
                     note: Some(i18n::t("Approval request has no waiting channel")),
                 };
@@ -156,18 +156,18 @@ impl ApproverPort for HumanApprover {
             result = receiver => match result {
                 Ok(outcome) => outcome,
                 Err(_) => ApprovalOutcome {
-                    status: "Expired".to_string(),
+                    status: ApprovalStatus::Expired,
                     by: "system".to_string(),
                     note: Some(i18n::t("Approver exited")),
                 },
             },
             _ = tokio::time::sleep(remaining) => ApprovalOutcome {
-                status: "Expired".to_string(),
+                status: ApprovalStatus::Expired,
                 by: "system".to_string(),
                 note: Some(i18n::t("Approval timed out; treated as rejected")),
             },
             _ = cancel.cancelled() => ApprovalOutcome {
-                status: "Expired".to_string(),
+                status: ApprovalStatus::Expired,
                 by: "system".to_string(),
                 note: Some(i18n::t("Run was cancelled; approval is void")),
             },
@@ -183,7 +183,11 @@ impl ApproverPort for HumanApprover {
     fn resolve(&self, approval_id: &str, approved: bool, note: Option<String>) -> bool {
         let session_id;
         let outcome = ApprovalOutcome {
-            status: if approved { "Approved" } else { "Rejected" }.to_string(),
+            status: if approved {
+                ApprovalStatus::Approved
+            } else {
+                ApprovalStatus::Rejected
+            },
             by: "human".to_string(),
             note,
         };
@@ -206,7 +210,7 @@ impl ApproverPort for HumanApprover {
             "plugin-approver",
             &DomainEvent::ApprovalResolved {
                 approval_id: approval_id.to_string(),
-                status: outcome.status,
+                status: outcome.status.as_str().to_string(),
                 by: outcome.by,
             },
         );
@@ -231,7 +235,7 @@ fn finish_expired(
     outcome: ApprovalOutcome,
     bus: &EventBus,
 ) -> ApprovalOutcome {
-    if outcome.status == "Expired" {
+    if outcome.status == ApprovalStatus::Expired {
         let _ = bus.publish(
             session_id,
             "plugin-approver",

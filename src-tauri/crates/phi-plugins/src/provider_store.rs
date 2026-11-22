@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -21,6 +21,7 @@ use phi_contracts::provider::{
 use crate::model_catalog;
 use phi_i18n as i18n;
 use phi_kernel::fs_atomic::write_atomic;
+use phi_kernel::ports::LogPort;
 
 #[derive(Clone, Debug)]
 pub struct ResolvedProvider {
@@ -34,39 +35,40 @@ pub struct ProviderStore {
 }
 
 impl ProviderStore {
-    pub fn load(path: PathBuf) -> Self {
+    pub fn load(path: PathBuf, log: Arc<dyn LogPort>) -> Self {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         let backup = backup_path(&path);
         // A corrupt primary file must fall back to the last good backup
         // instead of silently resetting the user's providers.
-        let mut file = read_provider_file(&path)
-            .or_else(|| read_provider_file(&backup))
-            .unwrap_or_default();
+        let mut file = match read_provider_file(&path) {
+            Some(file) => file,
+            None => match read_provider_file(&backup) {
+                Some(file) => {
+                    log.warn(&format!(
+                        "providers: primary file {} is unreadable; using backup {}",
+                        path.display(),
+                        backup.display()
+                    ));
+                    file
+                }
+                None => {
+                    if path.exists() || backup.exists() {
+                        log.error(&format!(
+                            "providers: both {} and its backup are unreadable; starting with no providers",
+                            path.display()
+                        ));
+                    }
+                    ProviderFile::default()
+                }
+            },
+        };
         if file.version == 0 {
             file.version = 1;
         }
         // Repair a dangling active id instead of carrying it forward.
-        if let Some(active) = file.active_id.clone() {
-            let valid = file.providers.iter().any(|provider| {
-                provider.id == active && provider.enabled && !provider.model.trim().is_empty()
-            });
-            if !valid {
-                file.active_id = file
-                    .providers
-                    .iter()
-                    .find(|provider| provider.enabled && !provider.model.trim().is_empty())
-                    .map(|provider| provider.id.clone());
-            }
-        }
-        if file.active_id.is_none() {
-            file.active_id = file
-                .providers
-                .iter()
-                .find(|provider| provider.enabled && !provider.model.trim().is_empty())
-                .map(|provider| provider.id.clone());
-        }
+        repair_active_id(&mut file);
         Self {
             path,
             inner: RwLock::new(file),
@@ -195,7 +197,6 @@ impl ProviderStore {
             }
         };
 
-        let is_new = existing_index.is_none();
         let models_provided = input.models.is_some();
         let model_provided = input.model.is_some();
         if let Some(protocol) = input.protocol.as_deref() {
@@ -336,26 +337,12 @@ impl ProviderStore {
             Some(index) => file.providers[index] = profile.clone(),
             None => file.providers.push(profile.clone()),
         }
-        if is_new && file.active_id.is_none() && profile.enabled && !profile.model.is_empty() {
-            file.active_id = Some(profile.id.clone());
-        }
         if file.active_id.is_none() && profile.enabled && !profile.model.is_empty() {
             file.active_id = Some(profile.id.clone());
         }
         // A saved draft (no model) must never keep the active slot when a
         // usable provider exists.
-        let active_valid = file
-            .active_id
-            .as_deref()
-            .and_then(|id| file.providers.iter().find(|provider| provider.id == id))
-            .is_some_and(|provider| provider.enabled && !provider.model.trim().is_empty());
-        if !active_valid {
-            file.active_id = file
-                .providers
-                .iter()
-                .find(|provider| provider.enabled && !provider.model.trim().is_empty())
-                .map(|provider| provider.id.clone());
-        }
+        repair_active_id(&mut file);
         self.save(&file)?;
         let active = file.active_id.as_deref() == Some(profile.id.as_str());
         Ok(view_of(&profile, active))
@@ -368,13 +355,7 @@ impl ProviderStore {
         if file.providers.len() == before {
             return Ok(false);
         }
-        if file.active_id.as_deref() == Some(id) {
-            file.active_id = file
-                .providers
-                .iter()
-                .find(|provider| provider.enabled && !provider.model.trim().is_empty())
-                .map(|provider| provider.id.clone());
-        }
+        repair_active_id(&mut file);
         self.save(&file)?;
         Ok(true)
     }
@@ -594,6 +575,23 @@ impl ProviderStore {
     }
 }
 
+/// Keep the active id pointing at an enabled provider that has a primary
+/// model. An invalid or missing id falls back to the first usable provider.
+fn repair_active_id(file: &mut ProviderFile) {
+    let active_valid = file
+        .active_id
+        .as_deref()
+        .and_then(|id| file.providers.iter().find(|provider| provider.id == id))
+        .is_some_and(|provider| provider.enabled && !provider.model.trim().is_empty());
+    if !active_valid {
+        file.active_id = file
+            .providers
+            .iter()
+            .find(|provider| provider.enabled && !provider.model.trim().is_empty())
+            .map(|provider| provider.id.clone());
+    }
+}
+
 fn view_of(profile: &ProviderProfile, active: bool) -> ProviderView {
     ProviderView {
         id: profile.id.clone(),
@@ -678,10 +676,22 @@ fn read_provider_file(path: &Path) -> Option<ProviderFile> {
 mod tests {
     use super::*;
 
+    struct SilentLog;
+
+    impl LogPort for SilentLog {
+        fn info(&self, _msg: &str) {}
+        fn warn(&self, _msg: &str) {}
+        fn error(&self, _msg: &str) {}
+    }
+
+    fn silent_log() -> Arc<dyn LogPort> {
+        Arc::new(SilentLog)
+    }
+
     fn store(name: &str) -> ProviderStore {
         let dir =
             std::env::temp_dir().join(format!("phi-providers-{name}-{}", uuid::Uuid::new_v4()));
-        ProviderStore::load(dir.join("providers.json"))
+        ProviderStore::load(dir.join("providers.json"), silent_log())
     }
 
     fn input(name: &str) -> ProviderInput {
@@ -704,7 +714,7 @@ mod tests {
         assert_eq!(view.key_hint.as_deref(), Some("env:PHI_TEST_KEY"));
         assert!(!view.key_hint.as_deref().unwrap().contains("sk-"));
 
-        let reloaded = ProviderStore::load(store.path().to_path_buf());
+        let reloaded = ProviderStore::load(store.path().to_path_buf(), silent_log());
         assert_eq!(reloaded.views().len(), 1);
         assert_eq!(reloaded.active_id(), Some(view.id));
     }
@@ -774,7 +784,7 @@ mod tests {
         fs::copy(&path, backup_path(&path)).unwrap();
         fs::write(&path, b"{not json").unwrap();
 
-        let reloaded = ProviderStore::load(path);
+        let reloaded = ProviderStore::load(path, silent_log());
         assert_eq!(reloaded.views().len(), 1);
         assert_eq!(reloaded.active_id(), Some(view.id));
     }
@@ -884,7 +894,7 @@ mod tests {
         let valid = store.upsert(input("Valid")).unwrap();
         assert!(valid.active, "a usable provider must take the active slot");
 
-        let reloaded = ProviderStore::load(store.path().to_path_buf());
+        let reloaded = ProviderStore::load(store.path().to_path_buf(), silent_log());
         assert_eq!(reloaded.active_id(), Some(valid.id));
     }
 }

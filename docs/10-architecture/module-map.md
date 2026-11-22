@@ -1,6 +1,6 @@
 # 模块地图与依赖规则
 
-> 状态：🌿 · 最后更新：2026-11-08
+> 状态：🌿 · 最后更新：2026-11-22
 > 关联：`10-architecture/overview.md`（决策与分层）、`00-overview/principles.md`（P8/P10）
 
 本文回答三个问题：**系统由哪些模块组成？谁依赖谁？删掉一个会怎样？**
@@ -39,7 +39,7 @@
 
 > **注意**：插件层分两类——
 >
-> - **发行基线**（`plugin-loop`、`plugin-session`、`plugin-policy`、`plugin-approver`、`plugin-sandbox`、`plugin-model-gw`、`plugin-store`、`plugin-context`）：官方发行**必装**，但**仍是普通插件**——实现可替换，无特权代码路径。缺失 → 进入 `Maintenance`/`Degraded`（见 §2.1）。
+> - **发行基线**（`plugin-loop`、`plugin-session`、`plugin-policy`、`plugin-approver`、`plugin-sandbox`、`plugin-model-gw`、`plugin-store`、`plugin-context`）：官方发行**必装**，但**仍是普通插件**——实现可替换，无特权代码路径。缺失 → 进入 `Maintenance`（`Degraded` 是运行期目标态，当前尚未产生，见 §2.1）。
 > - **可选插件**（工具、技能、记忆、编排、MCP、同步、UI 扩展…）：随意增删，P10 的「移除后照常」主要对它们断言。
 >
 > 这不是「有的插件高人一等」，而是**承认现实**：删掉模型网关后不可能还照常调用模型。详见 ADR-0009。
@@ -82,6 +82,10 @@
 | `Degraded` | **运行中**丢失安全组件（策略/沙箱/审批） | 禁止发起**新的**副作用动作；只读与既有任务可见 |
 | `Maintenance` | **启动时**必需槽位缺失 | 仅诊断、安装插件、修复配置。**不拒绝进程启动**——否则用户没有修复入口 |
 
+> **实现状态（2026-11-22）**：`RunMode` 枚举里已有 `Normal`/`Degraded`/`Maintenance` 三个值，但当前组合根只会设置 `Normal` 或 `Maintenance`：必需槽位齐备 → `Normal`，缺失 → `Maintenance`。`Degraded` **尚未被产生**，是运行期目标态。
+>
+> `Kernel` 现在提供的是**组合期**的注册表/生命周期元数据与启动日志；`deactivate_plugin`、`active_plugins` 等运行期生命周期接口没有生产调用者，**没有运行期热插拔**。真正的插件装配发生在 `Node::compose` 里，`Registry` 只是同一份组合的另一份元数据。详见 `70-quality/backend-review-2026-11-22.md` §2.4。
+
 ---
 
 ## 3. 插件模块
@@ -92,7 +96,7 @@
 
 | 模块 | 职责 | 依赖端口 | 移除后果 |
 |---|---|---|---|
-| `plugin-loop` 〔基线〕 | 提供可插拔的行动循环策略（ReAct/plan-execute/…）与 **Run/Step/检查点/用量记录**（预算硬上限为可选目标态） | Model, Journal | 无运行时骨架 → `Maintenance`（必需槽位 `runtime.skeleton`） |
+| `plugin-loop` 〔基线〕 | 提供 **Run/Step/检查点/用量记录**（预算硬上限为可选目标态）。当前实现是单一 `LoopPlugin`；`strategy.loop` 可插拔策略是后续扩展点，尚未定义 `LoopStrategy` 端口 | Model, Journal | 无运行时骨架 → `Maintenance`（必需槽位 `runtime.skeleton`） |
 | `plugin-orchestrator` | 多 Agent 协作编排（supervisor/group-chat/pipeline） | Loop, Session | 第一版由 `plugin-loop` 内置 Lead-Sidekick，暂不拆出（ADR-0013） |
 | `plugin-context` 〔基线〕 | 上下文构筑（分层组装、压缩） | Memory, Model | 上下文退化为原始堆叠 |
 | `plugin-session` 〔基线〕 | 会话/轮次/运行的状态管理与事件产出 | Storage, Journal | 无会话模型 → `Maintenance`（必需槽位 `session.store`） |
@@ -104,7 +108,7 @@
 | `plugin-tools` | 工具注册与调用 | Sandbox, Policy | 无工具（只能对话） |
 | `plugin-skills` | 技能的发现、加载、注入 | Storage | 无技能 |
 | `plugin-mcp` | 接入 MCP 工具发现层 | Transport | 无外部 MCP 工具 |
-| `plugin-sandbox` 〔基线〕 | 隔离执行工具/代码（含自带的 CLI 子进程） | Process/Container/Engine | **必需槽位 `sandbox.execute` 缺失 → `Maintenance`；运行中丢失 → `Degraded`，有副作用动作一律拒绝**（不是「无隔离跑」） |
+| `plugin-sandbox` 〔基线〕 | 隔离执行工具/代码（含自带的 CLI 子进程） | Process/Container/Engine | **必需槽位 `sandbox.execute` 缺失 → `Maintenance`；运行中丢失 → `Degraded`（目标态，当前未产生），有副作用动作一律拒绝**（不是「无隔离跑」） |
 | `plugin-model-gw` 〔基线〕 | 模型路由、缓存、用量记录（预算预留为可选目标态） | Model providers | **必需槽位 `model.invoke` 缺失 → `Maintenance`** |
 | `plugin-model-provider-*` | 具体模型方适配（Anthropic/OpenAI/本地） | — | 少一种模型来源 |
 | `plugin-memory` | 记忆存取（add/search + 变更操作） | Storage, Search | 无长期记忆（合法的空态） |
@@ -113,7 +117,7 @@
 
 | 模块 | 职责 | 依赖端口 | 移除后果 |
 |---|---|---|---|
-| `plugin-policy` 〔基线〕 | 动作判定 allow/deny/ask/modify；**层内排序、跨层取交集** | Registry | **必需槽位 `policy.evaluate` 缺失 → `Maintenance`；运行中丢失 → `Degraded`，有副作用动作一律拒绝**（不是「默认允许或默认拒绝」的二选一） |
+| `plugin-policy` 〔基线〕 | 动作判定 allow/deny/ask/modify；**层内排序、跨层取交集** | Registry | **必需槽位 `policy.evaluate` 缺失 → `Maintenance`；运行中丢失 → `Degraded`（目标态，当前未产生），有副作用动作一律拒绝**（不是「默认允许或默认拒绝」的二选一） |
 | `plugin-approver` 〔基线〕 | 审批者：人 / 辅助模型 | Model | **必需槽位 `approval.decide` 缺失 → 有副作用动作一律拒绝**；审批超时即 `Expired`→拒绝 |
 
 ### 3.4 协同线
@@ -147,11 +151,22 @@
   ✅ 允许：   loop-plugin  ──registry.find(Approver)──▶ （拿不到就降级）
 ```
 
-**规则 R3 · 端口必须有 Null 实现**：每个端口至少一个空实现，用于「模块缺席时降级启动」与测试。
+**规则 R3 · 可选端口用显式缺席，Null 实现必须诚实**：**不要求**每个端口都有 Null 实现。可选能力在组合期以「槽位缺席」表示，调用方通过 `Option` 或类型化的「未提供」错误处理；只有语义上确实可空、且不会掩盖写失败的端口才提供 Null 实现，且写端口不得伪装成功。
+
+> **实现状态（2026-11-22）**：当前没有接入任何 Null 实现。仓库里唯一出现过的 `NullMemoryStore` 未被使用，正在删除。可选服务缺席时，`Services` 返回明确的「slot 未提供」错误或类型化的缺席结果，而不是空对象顶替。
 
 **规则 R4 · 无环**：模块依赖图必须是 DAG。CI 用图检查。
 
-**规则 R5 · 领域不依赖平台**：插件里的领域逻辑不得出现文件系统、socket、UI、数据库驱动等平台符号。
+**规则 R5 · 第三方插件不直接依赖平台**：R5 约束 **第三方插件**（未来 TS/native ABI 与外部插件）：其领域逻辑不得直接出现文件系统、socket、UI、数据库驱动等平台符号，必须通过端口或宿主能力接口访问平台。官方内置插件是编译进 `Node` 的受信代码，**当前允许直接使用平台 API**；这是待偿还的适配器边界债务，不是给第三方插件开的先例。
+
+> **当前内置插件例外清单（2026-11-22，待迁移到 `phi-adapters`）**：
+>
+> - `tools.rs`：`std::fs` 读写工作区与 backup。
+> - `provider_store.rs` / `json_store.rs` / `assets.rs`：直接读写 `providers.json`、图片与资产文件。
+> - `sandbox.rs`：直接启动/终止子进程。
+> - `decision.rs` / `image.rs` / `model_gateway.rs`：直接发起 HTTP。
+>
+> 详见 `70-quality/backend-review-2026-11-22.md` §2.2。迁移完成前，**不得**把「插件层没有平台符号」当作已满足的事实。
 
 ---
 
@@ -169,9 +184,9 @@ P10 对**两类模块**有两种断言（ADR-0009）：
 【基线 / 必需槽位】
 [diff 测试]  移除该槽位的实现 →
              ① 系统是否进入 Maintenance（而非静默降级为放行）？
-             ② 运行中移除安全组件 → 是否立即进入 Degraded 并拒绝新的副作用？
+             ② 运行中移除安全组件 → 是否立即进入 Degraded 并拒绝新的副作用？（目标态；当前尚未产生 Degraded）
 
-【Null 实现的诚实性（单测）】
+【Null 实现的诚实性（单测；适用于确实提供 Null 的端口）】
              ① 只读端口 Null → 返回空集（合法）
              ② 写端口 Null → 必须报错/拒绝，**不得返回成功**（否则数据静默丢失）
 ```

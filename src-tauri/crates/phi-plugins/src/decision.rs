@@ -108,6 +108,18 @@ impl DecisionPlugin {
         None
     }
 
+    fn publish_failure(&self, aggregate: &str, call_id: &str, point: &str, error: &str) {
+        let _ = self.bus.publish(
+            aggregate,
+            "plugin-decision",
+            &DomainEvent::DecisionFailed {
+                call_id: call_id.to_string(),
+                point: point.to_string(),
+                error: error.to_string(),
+            },
+        );
+    }
+
     fn status_of(config: &DecisionConfig) -> DecisionStatus {
         let reason = Self::reason(config);
         DecisionStatus {
@@ -386,15 +398,7 @@ impl DecisionPort for DecisionPlugin {
                     "Decision request failed: {error}",
                     &[("error", error.to_string())],
                 );
-                let _ = self.bus.publish(
-                    &aggregate,
-                    "plugin-decision",
-                    &DomainEvent::DecisionFailed {
-                        call_id,
-                        point: request.point.clone(),
-                        error: message.clone(),
-                    },
-                );
+                self.publish_failure(&aggregate, &call_id, &request.point, &message);
                 return Err(message);
             }
         };
@@ -408,15 +412,7 @@ impl DecisionPort for DecisionPlugin {
                     ("body", truncate_chars(&text, 1000)),
                 ],
             );
-            let _ = self.bus.publish(
-                &aggregate,
-                "plugin-decision",
-                &DomainEvent::DecisionFailed {
-                    call_id,
-                    point: request.point.clone(),
-                    error: message.clone(),
-                },
-            );
+            self.publish_failure(&aggregate, &call_id, &request.point, &message);
             return Err(message);
         }
         let value: Value = match serde_json::from_str(&text) {
@@ -426,30 +422,14 @@ impl DecisionPort for DecisionPlugin {
                     "Decision provider returned invalid JSON: {error}",
                     &[("error", error.to_string())],
                 );
-                let _ = self.bus.publish(
-                    &aggregate,
-                    "plugin-decision",
-                    &DomainEvent::DecisionFailed {
-                        call_id,
-                        point: request.point.clone(),
-                        error: message.clone(),
-                    },
-                );
+                self.publish_failure(&aggregate, &call_id, &request.point, &message);
                 return Err(message);
             }
         };
         let parsed = match Self::parse_response(call_id.clone(), &request, &value) {
             Ok(parsed) => parsed,
             Err(error) => {
-                let _ = self.bus.publish(
-                    &aggregate,
-                    "plugin-decision",
-                    &DomainEvent::DecisionFailed {
-                        call_id,
-                        point: request.point.clone(),
-                        error: error.clone(),
-                    },
-                );
+                self.publish_failure(&aggregate, &call_id, &request.point, &error);
                 return Err(error);
             }
         };

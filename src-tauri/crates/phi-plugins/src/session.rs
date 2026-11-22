@@ -1,12 +1,14 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, RwLock};
 
 use phi_contracts::SLOT_SESSION_STORE;
 use phi_contracts::ports::{SessionPort, TurnInfo};
 use phi_domain::agent::{AgentRole, AgentStatus, AgentView, MessageKind, WorkMode};
 use phi_domain::events::DomainEvent;
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
-use phi_domain::view::{ContextUsageView, MessageView, RunView, SessionSummary, SessionView};
+use phi_domain::view::{
+    ContextUsageView, MessageView, RunState, RunView, SessionSummary, SessionView,
+};
 use phi_i18n as i18n;
 use phi_kernel::event_bus::{EventBus, EventRecord, EventSink};
 use phi_kernel::lifecycle::{Plugin, PluginContext};
@@ -27,6 +29,10 @@ struct StoredMessage {
 }
 
 const MAIN_THREAD: &str = "main";
+/// Bound the resolved-block cache. A long-lived process can otherwise retain
+/// every message body it has ever displayed. Oldest entries are evicted first;
+/// an evicted entry is simply re-read from the blob store on demand.
+const BLOCK_CACHE_LIMIT: usize = 4096;
 
 fn thread_of(message: &StoredMessage) -> &str {
     &message.thread_id
@@ -36,7 +42,7 @@ fn thread_of(message: &StoredMessage) -> &str {
 struct RunRecord {
     id: String,
     turn_id: String,
-    state: String,
+    state: RunState,
     steps: u64,
     input_tokens: u64,
     output_tokens: u64,
@@ -87,17 +93,11 @@ struct AgentRecord {
 
 impl RunRecord {
     fn is_active(&self) -> bool {
-        matches!(
-            self.state.as_str(),
-            "Scheduled" | "Running" | "WaitingApproval"
-        )
+        self.state.is_active()
     }
 
     fn is_terminal(&self) -> bool {
-        matches!(
-            self.state.as_str(),
-            "Succeeded" | "Failed" | "Aborted" | "AwaitingReconciliation"
-        )
+        self.state.is_terminal()
     }
 }
 
@@ -119,6 +119,9 @@ struct StoredSession {
 #[derive(Default)]
 struct Projection {
     sessions: HashMap<String, StoredSession>,
+    /// Secondary indexes so run/agent lookups do not scan every session.
+    run_sessions: HashMap<String, String>,
+    agent_sessions: HashMap<String, String>,
 }
 
 /// Session read model, rebuilt by folding the journal.
@@ -135,6 +138,8 @@ pub struct SessionPlugin {
     /// session snapshot on every event; without this cache each pull would
     /// re-read every message file from disk.
     blocks: RwLock<HashMap<String, Vec<ContentBlock>>>,
+    /// Insertion order for bounded eviction of `blocks`.
+    block_order: Mutex<VecDeque<String>>,
 }
 
 impl SessionPlugin {
@@ -151,20 +156,26 @@ impl SessionPlugin {
             node_id,
             state: RwLock::new(Projection::default()),
             blocks: RwLock::new(HashMap::new()),
+            block_order: Mutex::new(VecDeque::new()),
         }
     }
 
     pub fn load(&self, records: &[EventRecord]) {
         let mut projection = self.state.write().unwrap();
         for record in records {
-            apply_record(&mut projection, record);
+            if let Err(error) = apply_record(&mut projection, record) {
+                self.bus.log().warn(&format!(
+                    "skipping unprojectable event {}: {error}",
+                    record.event_id
+                ));
+            }
         }
     }
 
     /// On startup, a run without a terminal event means we crashed mid-flight.
     /// Never auto-retry: mark it for human reconciliation (I-5-4 / I-3-8).
     pub fn recover_interrupted(&self) -> usize {
-        let mut pending: Vec<(String, String, String)> = Vec::new();
+        let mut pending: Vec<(String, String, RunState)> = Vec::new();
         {
             let projection = self.state.read().unwrap();
             for session in projection.sessions.values() {
@@ -179,7 +190,7 @@ impl SessionPlugin {
         }
 
         for (session_id, run_id, state) in &pending {
-            let note = if state == "WaitingApproval" {
+            let note = if *state == RunState::WaitingApproval {
                 i18n::t(
                     "The process restarted while an approval was pending; the action was not executed. Review it and send the request again.",
                 )
@@ -576,10 +587,7 @@ impl SessionPort for SessionPlugin {
         }
         let raw = serde_json::to_vec(&blocks).map_err(|e| e.to_string())?;
         let content_ref = self.blob.put(&raw)?;
-        self.blocks
-            .write()
-            .unwrap()
-            .insert(content_ref.clone(), blocks);
+        self.cache_blocks(content_ref.clone(), blocks);
         let message_id = self.ids.new_id("msg");
         self.bus.publish(
             session_id,
@@ -597,10 +605,6 @@ impl SessionPort for SessionPlugin {
             },
         )?;
         Ok(message_id)
-    }
-
-    fn messages(&self, session_id: &str) -> Vec<ChatMessage> {
-        self.messages_for_thread(session_id, MAIN_THREAD)
     }
 
     fn messages_for_thread(&self, session_id: &str, thread_id: &str) -> Vec<ChatMessage> {
@@ -645,17 +649,14 @@ impl SessionPort for SessionPlugin {
 
     fn active_run_for_agent(&self, agent_id: &str) -> Option<String> {
         let projection = self.state.read().unwrap();
-        for session in projection.sessions.values() {
-            if let Some(run) = session
-                .run_order
-                .iter()
-                .filter_map(|id| session.runs.get(id))
-                .find(|run| run.agent_id.as_deref() == Some(agent_id) && run.is_active())
-            {
-                return Some(run.id.clone());
-            }
-        }
-        None
+        let session_id = projection.agent_sessions.get(agent_id)?;
+        let session = projection.sessions.get(session_id)?;
+        session
+            .run_order
+            .iter()
+            .filter_map(|id| session.runs.get(id))
+            .find(|run| run.agent_id.as_deref() == Some(agent_id) && run.is_active())
+            .map(|run| run.id.clone())
     }
 
     fn agents(&self, session_id: &str) -> Vec<AgentView> {
@@ -669,10 +670,12 @@ impl SessionPort for SessionPlugin {
 
     fn agent(&self, agent_id: &str) -> Option<AgentView> {
         let projection = self.state.read().unwrap();
+        let session_id = projection.agent_sessions.get(agent_id)?;
         projection
             .sessions
-            .values()
-            .find_map(|session| session.agents.get(agent_id))
+            .get(session_id)?
+            .agents
+            .get(agent_id)
             .map(agent_view)
     }
 
@@ -692,16 +695,28 @@ impl SessionPort for SessionPlugin {
 
     fn find_run(&self, run_id: &str) -> Option<(String, RunView)> {
         let projection = self.state.read().unwrap();
-        for session in projection.sessions.values() {
-            if let Some(run) = session.runs.get(run_id) {
-                return Some((session.id.clone(), run_view(run)));
-            }
-        }
-        None
+        let session_id = projection.run_sessions.get(run_id)?;
+        let session = projection.sessions.get(session_id)?;
+        let run = session.runs.get(run_id)?;
+        Some((session.id.clone(), run_view(run)))
     }
 }
 
 impl SessionPlugin {
+    fn cache_blocks(&self, content_ref: String, blocks: Vec<ContentBlock>) {
+        let mut cache = self.blocks.write().unwrap();
+        let mut order = self.block_order.lock().unwrap();
+        if cache.insert(content_ref.clone(), blocks).is_none() {
+            order.push_back(content_ref);
+        }
+        while cache.len() > BLOCK_CACHE_LIMIT {
+            let Some(oldest) = order.pop_front() else {
+                break;
+            };
+            cache.remove(&oldest);
+        }
+    }
+
     fn resolve_blocks(&self, content_ref: &str) -> Vec<ContentBlock> {
         if let Some(cached) = self.blocks.read().unwrap().get(content_ref).cloned() {
             return cached;
@@ -712,10 +727,7 @@ impl SessionPlugin {
             }),
             Err(_) => vec![ContentBlock::text(i18n::t("(content is not readable)"))],
         };
-        self.blocks
-            .write()
-            .unwrap()
-            .insert(content_ref.to_string(), resolved.clone());
+        self.cache_blocks(content_ref.to_string(), resolved.clone());
         resolved
     }
 }
@@ -723,7 +735,12 @@ impl SessionPlugin {
 impl EventSink for SessionPlugin {
     fn on_event(&self, record: &EventRecord) {
         let mut projection = self.state.write().unwrap();
-        apply_record(&mut projection, record);
+        if let Err(error) = apply_record(&mut projection, record) {
+            self.bus.log().warn(&format!(
+                "skipping unprojectable event {}: {error}",
+                record.event_id
+            ));
+        }
     }
 }
 
@@ -741,11 +758,9 @@ impl Plugin for SessionPlugin {
     }
 }
 
-fn apply_record(projection: &mut Projection, record: &EventRecord) {
-    let event: DomainEvent = match serde_json::from_value(record.payload.clone()) {
-        Ok(event) => event,
-        Err(_) => return,
-    };
+fn apply_record(projection: &mut Projection, record: &EventRecord) -> Result<(), String> {
+    let event: DomainEvent = serde_json::from_value(record.payload.clone())
+        .map_err(|error| format!("event {}: {error}", record.event_id))?;
 
     match event {
         DomainEvent::SessionStarted {
@@ -783,6 +798,12 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         }
         DomainEvent::SessionArchived { session_id } => {
             projection.sessions.remove(&session_id);
+            projection
+                .run_sessions
+                .retain(|_, owner| owner != &session_id);
+            projection
+                .agent_sessions
+                .retain(|_, owner| owner != &session_id);
         }
         DomainEvent::TurnStarted {
             session_id, index, ..
@@ -832,6 +853,9 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             report_to,
             spawned_by_run_id,
         } => {
+            projection
+                .agent_sessions
+                .insert(agent_id.clone(), session_id.clone());
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 session.agents.insert(
                     agent_id.clone(),
@@ -898,6 +922,9 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             thread_id,
             parent_run_id,
         } => {
+            projection
+                .run_sessions
+                .insert(run_id.clone(), session_id.clone());
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 if !session.runs.contains_key(&run_id) {
                     session.run_order.push(run_id.clone());
@@ -907,7 +934,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     RunRecord {
                         id: run_id,
                         turn_id,
-                        state: "Scheduled".to_string(),
+                        state: RunState::Scheduled,
                         steps: 0,
                         input_tokens: 0,
                         output_tokens: 0,
@@ -935,14 +962,14 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         }
         DomainEvent::RunStarted { run_id } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "Running".to_string();
+                run.state = RunState::Running;
                 run.started_at = Some(record.ts.clone());
             });
             sync_agent_status(projection, &run_id, AgentStatus::Running, &record.ts);
         }
         DomainEvent::RunResumed { run_id, .. } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "Running".to_string();
+                run.state = RunState::Running;
                 run.pending_approval_id = None;
             });
             sync_agent_status(projection, &run_id, AgentStatus::Running, &record.ts);
@@ -953,8 +980,8 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         DomainEvent::StepStarted { run_id, index, .. } => {
             update_run(projection, record, &run_id, |run| {
                 run.steps = index;
-                if run.state == "Scheduled" {
-                    run.state = "Running".to_string();
+                if run.state == RunState::Scheduled {
+                    run.state = RunState::Running;
                 }
             });
             sync_agent_progress(projection, &run_id, &record.ts);
@@ -965,7 +992,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             approval_id,
         } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "WaitingApproval".to_string();
+                run.state = RunState::WaitingApproval;
                 run.pending_approval_id = Some(approval_id);
             });
             sync_agent_status(
@@ -1015,14 +1042,14 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         }
         DomainEvent::RunSucceeded { run_id } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "Succeeded".to_string();
+                run.state = RunState::Succeeded;
                 run.pending_approval_id = None;
             });
             sync_agent_status(projection, &run_id, AgentStatus::Succeeded, &record.ts);
         }
         DomainEvent::RunFailed { run_id, error } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "Failed".to_string();
+                run.state = RunState::Failed;
                 run.error = Some(error);
                 run.pending_approval_id = None;
             });
@@ -1034,7 +1061,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             stop_confirmation,
         } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "Aborted".to_string();
+                run.state = RunState::Aborted;
                 run.error = Some(reason);
                 run.stop_confirmation = Some(stop_confirmation);
                 run.pending_approval_id = None;
@@ -1043,7 +1070,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         }
         DomainEvent::RunAwaitingReconciliation { run_id, note } => {
             update_run(projection, record, &run_id, |run| {
-                run.state = "AwaitingReconciliation".to_string();
+                run.state = RunState::AwaitingReconciliation;
                 run.error = Some(note);
                 run.pending_approval_id = None;
             });
@@ -1056,7 +1083,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
         } => {
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 if let Some(run) = session.runs.get_mut(&run_id) {
-                    run.state = "AwaitingReconciliation".to_string();
+                    run.state = RunState::AwaitingReconciliation;
                     run.error = Some(note);
                     run.pending_approval_id = None;
                     run.updated_at = record.ts.clone();
@@ -1072,6 +1099,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             }
         }
     }
+    Ok(())
 }
 
 fn update_run(
@@ -1089,37 +1117,40 @@ fn update_run(
     }
 }
 
-fn sync_agent_status(projection: &mut Projection, run_id: &str, status: AgentStatus, ts: &str) {
-    for session in projection.sessions.values_mut() {
-        let Some(run) = session.runs.get(run_id) else {
-            continue;
-        };
-        let Some(agent_id) = run.agent_id.clone() else {
-            return;
-        };
-        if let Some(agent) = session.agents.get_mut(&agent_id) {
-            agent.status = status;
-            agent.updated_at = ts.to_string();
-        }
+fn update_agent_for_run(
+    projection: &mut Projection,
+    run_id: &str,
+    ts: &str,
+    mutate: impl FnOnce(&mut AgentRecord, &RunRecord),
+) {
+    let Some(session_id) = projection.run_sessions.get(run_id).cloned() else {
         return;
+    };
+    let Some(session) = projection.sessions.get_mut(&session_id) else {
+        return;
+    };
+    let Some(run) = session.runs.get(run_id) else {
+        return;
+    };
+    let Some(agent_id) = run.agent_id.clone() else {
+        return;
+    };
+    if let Some(agent) = session.agents.get_mut(&agent_id) {
+        mutate(agent, run);
+        agent.updated_at = ts.to_string();
     }
 }
 
+fn sync_agent_status(projection: &mut Projection, run_id: &str, status: AgentStatus, ts: &str) {
+    update_agent_for_run(projection, run_id, ts, |agent, _| {
+        agent.status = status;
+    });
+}
+
 fn sync_agent_progress(projection: &mut Projection, run_id: &str, ts: &str) {
-    for session in projection.sessions.values_mut() {
-        let Some(run) = session.runs.get(run_id) else {
-            continue;
-        };
-        let Some(agent_id) = run.agent_id.clone() else {
-            return;
-        };
-        let steps = run.steps;
-        if let Some(agent) = session.agents.get_mut(&agent_id) {
-            agent.steps = agent.steps.max(steps);
-            agent.updated_at = ts.to_string();
-        }
-        return;
-    }
+    update_agent_for_run(projection, run_id, ts, |agent, run| {
+        agent.steps = agent.steps.max(run.steps);
+    });
 }
 
 fn add_agent_tokens(
@@ -1129,20 +1160,10 @@ fn add_agent_tokens(
     output_tokens: u64,
     ts: &str,
 ) {
-    for session in projection.sessions.values_mut() {
-        let Some(run) = session.runs.get(run_id) else {
-            continue;
-        };
-        let Some(agent_id) = run.agent_id.clone() else {
-            return;
-        };
-        if let Some(agent) = session.agents.get_mut(&agent_id) {
-            agent.input_tokens += input_tokens;
-            agent.output_tokens += output_tokens;
-            agent.updated_at = ts.to_string();
-        }
-        return;
-    }
+    update_agent_for_run(projection, run_id, ts, |agent, _| {
+        agent.input_tokens += input_tokens;
+        agent.output_tokens += output_tokens;
+    });
 }
 
 fn agent_view(agent: &AgentRecord) -> AgentView {
@@ -1251,7 +1272,7 @@ mod tests {
         let view = plugin.get_session(&session.id).unwrap();
         assert_eq!(view.messages.len(), 1);
         assert_eq!(view.messages[0].blocks.len(), 1);
-        assert_eq!(view.runs[0].state, "Succeeded");
+        assert_eq!(view.runs[0].state, RunState::Succeeded);
     }
 
     #[test]

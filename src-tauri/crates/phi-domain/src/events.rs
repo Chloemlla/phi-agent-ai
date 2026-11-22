@@ -166,9 +166,6 @@ pub enum DomainEvent {
         pending: u64,
         reason: String,
     },
-    MemoryMaintenanceFailed {
-        error: String,
-    },
 
     // ── run / step ────────────────────────────────────────────────────
     RunScheduled {

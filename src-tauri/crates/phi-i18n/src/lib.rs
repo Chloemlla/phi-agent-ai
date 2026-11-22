@@ -587,6 +587,11 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Image data is not valid base64: {error}" => "图片数据不是有效的 base64：{error}",
         "The image provider returned no images" => "生图供应商没有返回图片",
         "Unsupported image provider: {provider}" => "不支持的生图供应商：{provider}",
+        "Failed to read the selected image: {error}" => "读取所选图片失败：{error}",
+        "Unsupported image format; use PNG, JPEG, WebP or GIF" => {
+            "不支持的图片格式；请使用 PNG、JPEG、WebP 或 GIF"
+        }
+        "Image attachments are not available" => "图片附件能力不可用",
         "Image is too large ({bytes} bytes; max {max})" => "图片过大（{bytes} 字节；上限 {max}）",
         "The image provider returned an unsupported file format" => {
             "生图供应商返回了不支持的文件格式"

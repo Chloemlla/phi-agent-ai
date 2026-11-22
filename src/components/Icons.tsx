@@ -18,6 +18,8 @@ export {
   EyeOff as IconEyeOff,
   FolderOpen as IconFolderOpen,
   Hash as IconHash,
+  Image as IconImage,
+  ImageOff as IconImageOff,
   Info as IconInfo,
   Loader2 as IconSpinner,
   Menu as IconMenu,

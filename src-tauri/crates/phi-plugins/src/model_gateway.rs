@@ -20,7 +20,7 @@ use crate::provider_store::{ProviderStore, ResolvedProvider};
 use phi_contracts::SLOT_MODEL_INVOKE;
 use phi_contracts::ports::{ModelError, ModelPort, ModelRequest, ModelResponse, ModelStatus};
 use phi_contracts::provider::{AuthMode, ModelSpec, ProviderProfile};
-use phi_contracts::stream::{ModelStreamEvent, StreamHub};
+use phi_contracts::stream::{ModelStreamEvent, StreamHub, StreamKind};
 use phi_domain::message::ContentBlock;
 use phi_i18n as i18n;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
@@ -230,6 +230,7 @@ impl ModelGateway {
                     ContentBlock::RedactedThinking { data } => data.chars().count(),
                     ContentBlock::ToolUse { input, .. } => input.to_string().chars().count(),
                     ContentBlock::ToolResult { content, .. } => content.chars().count(),
+                    ContentBlock::Image { .. } => 0,
                 })
                 .sum();
             ((chars / 4) as u64).clamp(1, u64::from(req.max_output_tokens))
@@ -255,7 +256,7 @@ impl ModelGateway {
                 run_id: req.run_id.clone(),
                 call_id: req.call_id.clone(),
                 index,
-                kind: "text".to_string(),
+                kind: StreamKind::Text,
                 text,
                 tool_use_id: None,
                 tool_name: None,
@@ -264,7 +265,7 @@ impl ModelGateway {
                 run_id: req.run_id.clone(),
                 call_id: req.call_id.clone(),
                 index,
-                kind: "tool_use_start".to_string(),
+                kind: StreamKind::ToolUseStart,
                 text: String::new(),
                 tool_use_id: Some(id),
                 tool_name: Some(name),
@@ -273,7 +274,7 @@ impl ModelGateway {
                 run_id: req.run_id.clone(),
                 call_id: req.call_id.clone(),
                 index,
-                kind: "tool_use_delta".to_string(),
+                kind: StreamKind::ToolUseDelta,
                 text: delta,
                 tool_use_id: None,
                 tool_name: None,
@@ -282,7 +283,7 @@ impl ModelGateway {
                 run_id: req.run_id.clone(),
                 call_id: req.call_id.clone(),
                 index,
-                kind: "tool_use_end".to_string(),
+                kind: StreamKind::ToolUseEnd,
                 text: String::new(),
                 tool_use_id: None,
                 tool_name: None,
@@ -291,7 +292,7 @@ impl ModelGateway {
                 run_id: req.run_id.clone(),
                 call_id: req.call_id.clone(),
                 index: 0,
-                kind: "done".to_string(),
+                kind: StreamKind::Done,
                 text: String::new(),
                 tool_use_id: None,
                 tool_name: None,
@@ -649,6 +650,7 @@ fn parse_frame(frame: &[u8]) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phi_adapters::system::StderrLog;
     use phi_contracts::provider::{ModelSpec, ProviderInput};
 
     #[test]
@@ -678,7 +680,11 @@ mod tests {
     #[tokio::test]
     async fn missing_provider_is_an_honest_error() {
         let dir = std::env::temp_dir().join(format!("phi-gateway-{}", uuid::Uuid::new_v4()));
-        let providers = Arc::new(ProviderStore::load(dir.join("providers.json")));
+        let providers = Arc::new(ProviderStore::load(
+            dir.join("providers.json"),
+            Arc::new(StderrLog),
+        ));
+
         let gateway = ModelGateway::new(providers, Arc::new(StreamHub::default()));
         let req = ModelRequest {
             model: "default".into(),
@@ -690,6 +696,7 @@ mod tests {
             call_id: "call".into(),
             run_id: "run".into(),
             stream: false,
+            images: Arc::new(Default::default()),
         };
         let error = gateway
             .invoke(req, CancellationToken::new())
@@ -705,7 +712,11 @@ mod tests {
     #[tokio::test]
     async fn disabled_models_are_rejected_before_any_request() {
         let dir = std::env::temp_dir().join(format!("phi-gateway-{}", uuid::Uuid::new_v4()));
-        let providers = Arc::new(ProviderStore::load(dir.join("providers.json")));
+        let providers = Arc::new(ProviderStore::load(
+            dir.join("providers.json"),
+            Arc::new(StderrLog),
+        ));
+
         let mut disabled = ModelSpec::from_id("disabled-model");
         disabled.enabled = false;
         let view = providers
@@ -732,6 +743,7 @@ mod tests {
             call_id: "call".into(),
             run_id: "run".into(),
             stream: false,
+            images: Arc::new(Default::default()),
         };
         let error = gateway
             .invoke(req, CancellationToken::new())

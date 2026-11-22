@@ -6,8 +6,6 @@
 pub trait ClockPort: Send + Sync {
     /// Civil time used for display and audit.
     fn now_rfc3339(&self) -> String;
-    /// Monotonic milliseconds used for durations and timeouts.
-    fn monotonic_ms(&self) -> u64;
 }
 
 pub trait IdPort: Send + Sync {

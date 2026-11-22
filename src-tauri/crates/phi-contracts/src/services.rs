@@ -119,6 +119,10 @@ impl Services {
             .flat_map(|t| t.definitions())
             .collect()
     }
+    pub fn tool_definition(&self, tool_id: &str) -> Option<super::ports::ToolDefinition> {
+        self.find_tool(tool_id)
+            .and_then(|tool| tool.definitions().into_iter().find(|d| d.id == tool_id))
+    }
     pub fn find_tool(&self, tool_id: &str) -> Option<Arc<dyn ToolPort>> {
         self.tools
             .read()
@@ -133,26 +137,49 @@ impl Services {
     /// because the journal is a mechanism port, so it always counts as present
     /// here.
     pub fn missing_slots(&self, required: &[&str]) -> Vec<String> {
-        let mut missing = Vec::new();
-        for slot in required {
-            let present = match *slot {
-                crate::SLOT_RUNTIME_SKELETON => self.runtime().is_some(),
-                crate::SLOT_SESSION_STORE => self.session().is_some(),
-                crate::SLOT_POLICY_EVALUATE => self.policy().is_some(),
-                crate::SLOT_SANDBOX_EXECUTE => self.sandbox().is_some(),
-                crate::SLOT_APPROVAL_DECIDE => self.approver().is_some(),
-                crate::SLOT_MODEL_INVOKE => self.model().is_some(),
-                crate::SLOT_MEMORY_STORE => self.memory().is_some(),
-                crate::SLOT_PERSISTENCE_JOURNAL => true,
-                _ => false,
-            };
-            if !present {
-                missing.push((*slot).to_string());
-            }
-        }
-        missing
+        required
+            .iter()
+            .filter(|slot| {
+                if **slot == crate::SLOT_PERSISTENCE_JOURNAL {
+                    return false;
+                }
+                SERVICE_SLOTS
+                    .iter()
+                    .find(|entry| entry.0 == **slot)
+                    .map(|(_, present)| !present(self))
+                    .unwrap_or(true)
+            })
+            .map(|slot| (*slot).to_string())
+            .collect()
     }
 }
+
+/// Single mapping from a slot name to the typed handle that satisfies it.
+/// Adding a required service means adding one row here instead of editing
+/// `Services` and `Node` separately.
+const SERVICE_SLOTS: &[(&str, fn(&Services) -> bool)] = &[
+    (crate::SLOT_RUNTIME_SKELETON, |services| {
+        services.runtime().is_some()
+    }),
+    (crate::SLOT_SESSION_STORE, |services| {
+        services.session().is_some()
+    }),
+    (crate::SLOT_POLICY_EVALUATE, |services| {
+        services.policy().is_some()
+    }),
+    (crate::SLOT_SANDBOX_EXECUTE, |services| {
+        services.sandbox().is_some()
+    }),
+    (crate::SLOT_APPROVAL_DECIDE, |services| {
+        services.approver().is_some()
+    }),
+    (crate::SLOT_MODEL_INVOKE, |services| {
+        services.model().is_some()
+    }),
+    (crate::SLOT_MEMORY_STORE, |services| {
+        services.memory().is_some()
+    }),
+];
 
 #[cfg(test)]
 mod tests {

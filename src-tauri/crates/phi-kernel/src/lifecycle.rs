@@ -194,9 +194,6 @@ mod tests {
         fn now_rfc3339(&self) -> String {
             "2026-01-01T00:00:00Z".to_string()
         }
-        fn monotonic_ms(&self) -> u64 {
-            0
-        }
     }
 
     struct StubIds;

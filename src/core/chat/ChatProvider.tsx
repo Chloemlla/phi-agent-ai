@@ -14,6 +14,7 @@ import {
   type Setter,
 } from "solid-js";
 import {
+  addImageAttachment,
   approve as approveCommand,
   cancelRun as cancelRunCommand,
   createSession as createSessionCommand,
@@ -26,9 +27,17 @@ import {
 import { errorText } from "../../errors";
 import { setLang, t } from "../../i18n";
 import { setPlatform } from "../../layout/environment";
+import { platform } from "../../platform";
 import { notify } from "../../ui/notifications";
 import { isActiveState } from "../../status";
-import type { Bootstrap, ModelSelection, ProviderView, Run, SessionDetail } from "../../types";
+import type {
+  Bootstrap,
+  ImageAsset,
+  ModelSelection,
+  ProviderView,
+  Run,
+  SessionDetail,
+} from "../../types";
 import { activeProviderOf, useModelSelection } from "./modelSelection";
 import { prunePendingCalls, reuseMessages } from "./sessionStream";
 import { usePhiStream } from "./usePhiStream";
@@ -40,6 +49,10 @@ export interface ChatStore {
   now: Accessor<number>;
   input: Accessor<string>;
   setInput: Setter<string>;
+  attachments: Accessor<ImageAsset[]>;
+  attaching: Accessor<boolean>;
+  attachImages: () => Promise<void>;
+  removeAttachment: (assetId: string) => void;
   creatingSession: Accessor<boolean>;
   deletingSession: Accessor<string | null>;
   selection: Accessor<ModelSelection | null>;
@@ -72,10 +85,13 @@ export function ChatProvider(props: { children: JSX.Element }) {
   const [detail, setDetail] = createSignal<SessionDetail | null>(null);
   const [currentId, setCurrentId] = createSignal<string | null>(null);
   const [input, setInput] = createSignal("");
+  const [attachments, setAttachments] = createSignal<ImageAsset[]>([]);
+  const [attaching, setAttaching] = createSignal(false);
   const [creatingSession, setCreatingSession] = createSignal(false);
   const [deletingSession, setDeletingSession] = createSignal<string | null>(null);
   const [now, setNow] = createSignal(Date.now());
   let inlineSendBusy = false;
+  let composerSendBusy = false;
 
   const notifyError = (error: unknown) => {
     notify(errorText(error), { tone: "danger" });
@@ -126,9 +142,56 @@ export function ChatProvider(props: { children: JSX.Element }) {
     return t("Choose a model first.");
   };
 
+  async function attachImages() {
+    if (attaching()) return;
+    const id = currentId();
+    if (!id) {
+      notify(t("Open or create a session before attaching images."), { tone: "warning" });
+      return;
+    }
+
+    let paths: string[];
+    try {
+      paths = await platform.openImages(t("Images"));
+    } catch (error) {
+      notifyError(error);
+      return;
+    }
+    if (paths.length === 0) return;
+
+    setAttaching(true);
+    const added: ImageAsset[] = [];
+    try {
+      for (const path of paths) {
+        // Stop uploading when the user switches away; the attachment list
+        // belongs to the session that is open now.
+        if (currentId() !== id) break;
+        try {
+          added.push(await addImageAttachment(id, path));
+        } catch (error) {
+          notifyError(error);
+        }
+      }
+      if (added.length > 0 && currentId() === id) {
+        setAttachments((prev) => {
+          const seen = new Set(prev.map((asset) => asset.assetId));
+          return [...prev, ...added.filter((asset) => !seen.has(asset.assetId))];
+        });
+      }
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  function removeAttachment(assetId: string) {
+    setAttachments((prev) => prev.filter((asset) => asset.assetId !== assetId));
+  }
+
   async function sendText(text: string, fromComposer: boolean) {
     const id = currentId();
-    if (!text || !id) return;
+    const outgoing = fromComposer ? attachments() : [];
+    const attachmentIds = outgoing.map((asset) => asset.assetId);
+    if (!id || (!text && attachmentIds.length === 0)) return;
     if (fromComposer) setInput("");
     stream.resetStream(id);
     const pick = selection();
@@ -137,18 +200,25 @@ export function ChatProvider(props: { children: JSX.Element }) {
         sessionId: id,
         text,
         ...(pick ? { model: pick.modelId, thinking: pick.thinking } : {}),
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
       });
       stream.setStreamRunId(result.runId);
+      if (fromComposer) setAttachments([]);
     } catch (error) {
       notifyError(error);
-      if (fromComposer) setInput(text);
+      if (fromComposer && currentId() === id) setInput(text);
     }
     stream.scheduleRefresh();
   }
 
   function send() {
+    if (composerSendBusy || attaching()) return;
     const text = input().trim();
-    if (text) void sendText(text, true);
+    if (!text && attachments().length === 0) return;
+    composerSendBusy = true;
+    void sendText(text, true).finally(() => {
+      composerSendBusy = false;
+    });
   }
 
   /** A button or form inside an inline interface block. The run guard mirrors
@@ -190,6 +260,7 @@ export function ChatProvider(props: { children: JSX.Element }) {
   async function newSession() {
     if (creatingSession()) return;
     setCreatingSession(true);
+    setAttachments([]);
     stream.resetStream(null);
     try {
       const summary = await createSessionCommand(null);
@@ -213,6 +284,7 @@ export function ChatProvider(props: { children: JSX.Element }) {
         stream.resetStream(null);
         setCurrentId(null);
         setDetail(null);
+        setAttachments([]);
       }
       // Bootstrap re-projects the session list and picks the next session (or
       // creates a fresh one when the last session was removed).
@@ -249,6 +321,7 @@ export function ChatProvider(props: { children: JSX.Element }) {
   async function selectSession(id: string) {
     stream.resetStream(null);
     setCurrentId(id);
+    setAttachments([]);
     try {
       const next = await getSession(id);
       if (currentId() !== id) return;
@@ -276,6 +349,10 @@ export function ChatProvider(props: { children: JSX.Element }) {
     now,
     input,
     setInput,
+    attachments,
+    attaching,
+    attachImages,
+    removeAttachment,
     creatingSession,
     deletingSession,
     selection,

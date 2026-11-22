@@ -187,6 +187,7 @@ impl AuxiliaryPlugin {
             call_id: call_id.clone(),
             run_id: String::new(),
             stream: false,
+            images: Arc::new(Default::default()),
         };
         let call = model.invoke_on(config.provider_id.as_deref(), request, cancel.clone());
         let result = match tokio::time::timeout(Duration::from_secs(45), call).await {

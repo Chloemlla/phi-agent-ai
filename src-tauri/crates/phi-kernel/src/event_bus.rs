@@ -7,6 +7,10 @@ use serde_json::Value;
 
 use super::ports::{ClockPort, IdPort, JournalPort, LogPort};
 
+/// Current on-disk event envelope version. Readers reject newer versions
+/// instead of silently dropping fields they do not understand.
+pub const EVENT_SCHEMA_VERSION: u32 = 1;
+
 /// A subscriber of the event stream. Invoked synchronously after the event has
 /// been durably appended to the journal (persist first, notify second).
 pub trait EventSink: Send + Sync {
@@ -72,6 +76,11 @@ impl EventBus {
         self.sinks.lock().unwrap().push(sink);
     }
 
+    /// Shared logger for projections that need to report skipped records.
+    pub fn log(&self) -> &Arc<dyn LogPort> {
+        &self.log
+    }
+
     /// Append a domain event. The payload is serialized as-is so the kernel
     /// never needs to know the concrete event type.
     pub fn publish<T: Serialize>(
@@ -103,7 +112,7 @@ impl EventBus {
 
         let record = EventRecord {
             event_id: self.ids.new_id("evt"),
-            schema_version: 1,
+            schema_version: EVENT_SCHEMA_VERSION,
             seq,
             aggregate_id: aggregate_id.to_string(),
             aggregate_version,
@@ -145,6 +154,17 @@ impl EventBus {
         for (index, line) in lines.into_iter().enumerate() {
             match serde_json::from_str::<EventRecord>(&line) {
                 Ok(record) => {
+                    if record.schema_version > EVENT_SCHEMA_VERSION {
+                        self.log.error(&format!(
+                            "journal event {} uses schema version {}; this build supports up to {}",
+                            record.event_id, record.schema_version, EVENT_SCHEMA_VERSION
+                        ));
+                        return Err(format!(
+                            "journal line {} was written by a newer schema (version {})",
+                            index + 1,
+                            record.schema_version
+                        ));
+                    }
                     max_seq = max_seq.max(record.seq);
                     versions.insert(record.aggregate_id.clone(), record.aggregate_version);
                     records.push(record);
@@ -199,9 +219,6 @@ mod tests {
     impl ClockPort for StubClock {
         fn now_rfc3339(&self) -> String {
             "2026-01-01T00:00:00Z".to_string()
-        }
-        fn monotonic_ms(&self) -> u64 {
-            0
         }
     }
 
@@ -283,5 +300,18 @@ mod tests {
         });
         let bus = bus(journal);
         assert!(bus.restore().is_err());
+    }
+
+    #[test]
+    fn restore_rejects_newer_schema_versions() {
+        let mut record: EventRecord = serde_json::from_str(&record_line(1, 1)).unwrap();
+        record.schema_version = EVENT_SCHEMA_VERSION + 1;
+        let journal = Arc::new(MemJournal {
+            lines: Mutex::new(vec![serde_json::to_string(&record).unwrap()]),
+            fail_next: AtomicBool::new(false),
+        });
+        let bus = bus(journal);
+        let error = bus.restore().unwrap_err();
+        assert!(error.contains("newer schema"), "{error}");
     }
 }

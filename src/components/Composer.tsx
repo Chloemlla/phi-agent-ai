@@ -1,12 +1,13 @@
 // Composer: the primary surface. The run bar above it shows live usage; the
 // composer itself stays focused on the task input and the model choice.
 
-import { Show, createEffect, onMount } from "solid-js";
+import { For, Show, createEffect, onMount } from "solid-js";
 import { t } from "../i18n";
 import { coarsePointer } from "../layout/environment";
-import type { ContextUsageView, ModelSelection, ProviderView } from "../types";
+import type { ContextUsageView, ImageAsset, ModelSelection, ProviderView } from "../types";
 import { ContextMeter } from "./ContextMeter";
-import { IconArrowUp, IconStop } from "./Icons";
+import { IconArrowUp, IconClose, IconPlus, IconStop } from "./Icons";
+import { MessageImage } from "./MessageImage";
 import { ModelPicker } from "./ModelPicker";
 
 const MAX_COMPOSER_HEIGHT = 180;
@@ -20,6 +21,10 @@ export function Composer(props: {
   fallbackModel: string;
   selection: ModelSelection | null;
   usage: ContextUsageView | null;
+  attachments: ImageAsset[];
+  attaching: boolean;
+  onAttach: () => void;
+  onRemoveAttachment: (assetId: string) => void;
   onModelChange: (selection: ModelSelection) => void;
   onInput: (value: string) => void;
   onSend: () => void;
@@ -39,7 +44,7 @@ export function Composer(props: {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey && !coarsePointer()) {
       event.preventDefault();
-      props.onSend();
+      if (!props.attaching) props.onSend();
     }
   }
 
@@ -72,18 +77,57 @@ export function Composer(props: {
         rows={2}
         aria-label={t("Message")}
       />
+      <Show when={props.attachments.length > 0}>
+        <div class="composer-attachments" role="list" aria-label={t("Attached images")}>
+          <For each={props.attachments}>
+            {(asset) => (
+              <div class="composer-attachment" role="listitem">
+                <MessageImage
+                  assetId={asset.assetId}
+                  alt={asset.promptPreview || t("Attached image")}
+                  variant="thumbnail"
+                />
+                <button
+                  type="button"
+                  class="composer-attachment-remove"
+                  aria-label={t("Remove image")}
+                  title={t("Remove image")}
+                  onClick={() => props.onRemoveAttachment(asset.assetId)}
+                >
+                  <IconClose size={11} />
+                </button>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
       <Show when={props.disabled && !props.running && props.disabledHint}>
         <p class="composer-hint">{props.disabledHint}</p>
       </Show>
       <div class="composer-actions">
-        <ModelPicker
-          provider={props.provider}
-          fallbackModel={props.fallbackModel}
-          value={props.selection}
-          disabled={props.disabled}
-          disabledHint={props.disabledHint}
-          onChange={props.onModelChange}
-        />
+        <div class="composer-actions-left">
+          <button
+            type="button"
+            class="composer-attach"
+            aria-label={props.attaching ? t("Uploading image…") : t("Attach images")}
+            title={props.attaching ? t("Uploading image…") : t("Attach images")}
+            aria-busy={props.attaching}
+            onClick={() => props.onAttach()}
+            disabled={props.disabled || props.attaching}
+          >
+            <Show when={props.attaching} fallback={<IconPlus size={16} />}>
+              <span class="ring" aria-hidden="true" />
+            </Show>
+          </button>
+          <ModelPicker
+            provider={props.provider}
+            fallbackModel={props.fallbackModel}
+            value={props.selection}
+            disabled={props.disabled}
+            disabledHint={props.disabledHint}
+            onChange={props.onModelChange}
+          />
+        </div>
         <div class="composer-actions-right">
           <ContextMeter usage={props.usage} />
           <Show
@@ -93,7 +137,11 @@ export function Composer(props: {
                 type="button"
                 class="btn primary send"
                 onClick={props.onSend}
-                disabled={props.disabled || !props.value.trim()}
+                disabled={
+                  props.disabled ||
+                  props.attaching ||
+                  (!props.value.trim() && props.attachments.length === 0)
+                }
               >
                 {t("Send")}
                 <IconArrowUp size={15} />

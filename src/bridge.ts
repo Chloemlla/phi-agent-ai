@@ -9,6 +9,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Bootstrap,
   ForgetReport,
+  ImageAsset,
   MemoryAddOutcome,
   MemoryHit,
   MemoryRecord,
@@ -58,10 +59,21 @@ export type SendMessageInput = {
   text: string;
   model?: string;
   thinking?: ThinkingLevel;
+  attachmentIds?: string[];
 };
 
 export function sendMessage(input: SendMessageInput): Promise<SendResult> {
   return invoke<SendResult>("send_message", input);
+}
+
+/** Upload a local image and bind it to a session (or to no session yet). */
+export function addImageAttachment(sessionId: string | null, path: string): Promise<ImageAsset> {
+  return invoke<ImageAsset>("add_image_attachment", { sessionId, path });
+}
+
+/** A `data:<mime>;base64,...` URL for rendering a stored image asset. */
+export function imageAssetDataUrl(assetId: string): Promise<string> {
+  return invoke<string>("image_asset_data_url", { assetId });
 }
 
 export function approve(

@@ -39,6 +39,10 @@ export function ChatPage() {
             fallbackModel={chat.boot()?.model.model ?? chat.provider()?.model ?? ""}
             selection={chat.selection()}
             usage={chat.detail()?.session.contextUsage ?? null}
+            attachments={chat.attachments()}
+            attaching={chat.attaching()}
+            onAttach={() => void chat.attachImages()}
+            onRemoveAttachment={chat.removeAttachment}
             onModelChange={chat.updateSelection}
             onInput={chat.setInput}
             onSend={chat.send}

@@ -9,12 +9,17 @@ use tokio_util::sync::CancellationToken;
 
 use phi_contracts::SLOT_TOOL_PROVIDER;
 use phi_contracts::ports::{
-    SandboxPort, SideEffect, ToolCall, ToolContext, ToolDefinition, ToolOutput, ToolPort,
+    SandboxPort, SideEffect, ToolCall, ToolCapability, ToolContext, ToolDefinition, ToolOutput,
+    ToolPort,
 };
 use phi_contracts::util::truncate_chars;
 use phi_i18n as i18n;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::registry::Contribution;
+
+pub(crate) mod tool_definition;
+
+use tool_definition::tool;
 
 pub struct BuiltinToolsPlugin {
     sandbox: Arc<dyn SandboxPort>,
@@ -45,41 +50,19 @@ impl Plugin for BuiltinToolsPlugin {
     }
 }
 
-fn tool(
-    id: &str,
-    name: &str,
-    description: &str,
-    properties: Value,
-    required: Vec<&str>,
-    side_effect: SideEffect,
-) -> ToolDefinition {
-    ToolDefinition {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: description.to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        }),
-        side_effect,
-    }
-}
-
 #[async_trait]
 impl ToolPort for BuiltinToolsPlugin {
     fn definitions(&self) -> Vec<ToolDefinition> {
         vec![
             tool(
                 "fs_list",
-                "fs_list",
                 "List files and directories inside the workspace. Path is relative to the workspace root.",
                 json!({ "path": { "type": "string", "description": "Directory to list, default \".\"" } }),
                 vec![],
                 SideEffect::None,
+                vec![ToolCapability::WorkspaceRead],
             ),
             tool(
-                "fs_read",
                 "fs_read",
                 "Read a UTF-8 text file inside the workspace. Returns numbered lines.",
                 json!({
@@ -89,9 +72,9 @@ impl ToolPort for BuiltinToolsPlugin {
                 }),
                 vec!["path"],
                 SideEffect::None,
+                vec![ToolCapability::WorkspaceRead],
             ),
             tool(
-                "fs_write",
                 "fs_write",
                 "Create or overwrite a text file inside the workspace. Workspace writes run without approval in normal mode; the previous content is backed up.",
                 json!({
@@ -101,9 +84,9 @@ impl ToolPort for BuiltinToolsPlugin {
                 }),
                 vec!["path", "content"],
                 SideEffect::Reversible,
+                vec![ToolCapability::WorkspaceWrite],
             ),
             tool(
-                "shell_exec",
                 "shell_exec",
                 "Run a shell command with the workspace as cwd. Read-only and project verification commands run without approval; other commands require human approval. Returns stdout/stderr and exit code.",
                 json!({
@@ -112,6 +95,7 @@ impl ToolPort for BuiltinToolsPlugin {
                 }),
                 vec!["command"],
                 SideEffect::Irreversible,
+                vec![ToolCapability::Shell],
             ),
         ]
     }

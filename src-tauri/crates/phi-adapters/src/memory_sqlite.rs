@@ -9,7 +9,7 @@
 //! instead of silently writing into an unknown layout.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -48,8 +48,6 @@ const RECORD_COLUMNS: &str = "m.id, m.fact, m.scope, m.user_id, m.project_id, m.
 
 pub struct SqliteMemoryStore {
     conn: Mutex<Connection>,
-    #[allow(dead_code)]
-    path: Option<PathBuf>,
 }
 
 impl SqliteMemoryStore {
@@ -96,7 +94,6 @@ impl SqliteMemoryStore {
         }
         Ok(Self {
             conn: Mutex::new(conn),
-            path: Some(path),
         })
     }
 
@@ -110,7 +107,6 @@ impl SqliteMemoryStore {
         init_schema(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
-            path: None,
         })
     }
 }

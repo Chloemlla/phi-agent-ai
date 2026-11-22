@@ -8,6 +8,16 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 use ts_rs::TS;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamKind {
+    Text,
+    ToolUseStart,
+    ToolUseDelta,
+    ToolUseEnd,
+    Done,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStreamEvent {
@@ -15,8 +25,7 @@ pub struct ModelStreamEvent {
     pub call_id: String,
     /// Monotonic index within the response (content block / output index).
     pub index: u32,
-    /// `text`, `tool_use_start`, `tool_use_delta`, `tool_use_end`, `done`.
-    pub kind: String,
+    pub kind: StreamKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,10 +51,6 @@ impl StreamHub {
         Self {
             sink: RwLock::new(sink),
         }
-    }
-
-    pub fn set_sink(&self, sink: Arc<dyn StreamPort>) {
-        *self.sink.write().unwrap() = Some(sink);
     }
 
     pub fn is_enabled(&self) -> bool {

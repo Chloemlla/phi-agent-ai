@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use phi_contracts::SLOT_POLICY_EVALUATE;
-use phi_contracts::ports::{PolicyDecision, PolicyEffect, PolicyInput, PolicyPort, SandboxPort};
+use phi_contracts::ports::{
+    PolicyDecision, PolicyEffect, PolicyInput, PolicyPort, SandboxPort, ToolCapability,
+};
 use phi_i18n as i18n;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::registry::Contribution;
@@ -85,6 +87,88 @@ const VERIFY_SCRIPTS: &[&str] = &[
     "format",
 ];
 
+/// Shell arguments are resolved by the shell, not by the workspace sandbox.
+/// Reject anything that can escape the workspace before classifying a command
+/// as safe: absolute/drive/UNC paths, home expansion, explicit parent
+/// traversal, and attached short-option paths such as `-o/tmp/out`.
+fn argument_escapes_workspace(word: &str) -> bool {
+    if word.starts_with('-') && (word.contains('/') || word.contains('\\')) {
+        return true;
+    }
+    if path_escapes_workspace(word) {
+        return true;
+    }
+    word.split_once('=')
+        .is_some_and(|(_, value)| path_escapes_workspace(value))
+}
+
+/// Catch Windows separators and drive prefixes in the raw command. The token
+/// parser follows Unix quoting rules on Unix hosts, which would otherwise
+/// consume `\` as an escape and hide `..\secret` from the token check.
+fn raw_command_escapes_workspace(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("../") || lower.contains("..\\") || lower.contains("\\\\") {
+        return true;
+    }
+    let bytes = lower.as_bytes();
+    bytes
+        .windows(2)
+        .any(|pair| pair[0] == b':' && matches!(pair[1], b'/' | b'\\'))
+}
+
+fn path_escapes_workspace(value: &str) -> bool {
+    if value.starts_with('~')
+        || value.starts_with("\\\\")
+        || (cfg!(windows) && value.starts_with('\\'))
+    {
+        return true;
+    }
+    if value.starts_with('/') && !(cfg!(windows) && is_windows_switch(value)) {
+        return true;
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return true;
+    }
+    // `git show HEAD:/etc/passwd` and `HEAD:../../secret` are outside the
+    // workspace even though they do not start with a slash.
+    if value.contains(":/") || value.contains(":..") {
+        return true;
+    }
+    value
+        .split(|character| character == '/' || character == '\\')
+        .any(|part| part == "..")
+}
+
+/// Windows commands accept `/b`, `/s` and `/a:d` as switches. Treat those as
+/// options rather than Unix-style absolute paths.
+fn is_windows_switch(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix('/') else {
+        return false;
+    };
+    let mut characters = rest.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    let tail = characters.as_str();
+    tail.is_empty()
+        || (tail.starts_with(':')
+            && tail[1..]
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric()))
+}
+
+fn is_quote(character: char) -> bool {
+    character == '"' || (!cfg!(windows) && character == '\'')
+}
+
+fn is_escape(character: char, quote: Option<char>) -> bool {
+    character == '\\' && !cfg!(windows) && quote != Some('\'')
+}
+
 fn classify_shell(command: &str) -> ShellClass {
     let normalized = strip_safe_redirections(command);
     if normalized.trim().is_empty()
@@ -95,6 +179,7 @@ fn classify_shell(command: &str) -> ShellClass {
             .chars()
             .any(|character| matches!(character, '<' | '>' | '^' | '%' | '!'))
         || has_single_ampersand(&normalized)
+        || raw_command_escapes_workspace(&normalized)
     {
         return ShellClass::Other;
     }
@@ -113,6 +198,9 @@ fn classify_shell(command: &str) -> ShellClass {
         let Some((command, args)) = words.split_first() else {
             continue;
         };
+        if args.iter().any(|arg| argument_escapes_workspace(arg)) {
+            return ShellClass::Other;
+        }
         match classify_segment(command, args) {
             Some(ShellClass::ReadOnly) => {
                 meaningful = true;
@@ -171,7 +259,7 @@ fn split_segments(command: &str) -> Vec<String> {
             escaped = false;
             continue;
         }
-        if character == '\\' && quote != Some('\'') {
+        if is_escape(character, quote) {
             current.push(character);
             escaped = true;
             continue;
@@ -183,7 +271,7 @@ fn split_segments(command: &str) -> Vec<String> {
             }
             continue;
         }
-        if character == '\'' || character == '"' {
+        if is_quote(character) {
             quote = Some(character);
             current.push(character);
             continue;
@@ -224,7 +312,7 @@ fn shell_words(segment: &str) -> Option<Vec<String>> {
             escaped = false;
             continue;
         }
-        if character == '\\' && quote != Some('\'') {
+        if is_escape(character, quote) {
             escaped = true;
             continue;
         }
@@ -236,7 +324,7 @@ fn shell_words(segment: &str) -> Option<Vec<String>> {
             }
             continue;
         }
-        if character == '\'' || character == '"' {
+        if is_quote(character) {
             quote = Some(character);
             continue;
         }
@@ -258,11 +346,12 @@ fn shell_words(segment: &str) -> Option<Vec<String>> {
 }
 
 fn classify_segment(raw: &str, args: &[String]) -> Option<ShellClass> {
-    let base = raw
-        .rsplit(|character| character == '/' || character == '\\')
-        .next()
-        .unwrap_or(raw)
-        .to_ascii_lowercase();
+    // Only bare command names are safe: `/tmp/cat` or `.\cat` would execute a
+    // binary chosen by the model while still matching the allowlist name.
+    if raw.contains('/') || raw.contains('\\') {
+        return None;
+    }
+    let base = raw.to_ascii_lowercase();
     let command = base.strip_suffix(".exe").unwrap_or(&base);
     if command.is_empty() {
         return None;
@@ -271,24 +360,63 @@ fn classify_segment(raw: &str, args: &[String]) -> Option<ShellClass> {
         return Some(ShellClass::ReadOnly);
     }
     match command {
-        "cat" | "head" | "tail" | "wc" | "stat" | "file" | "tree" | "ls" | "dir" | "pwd"
-        | "where" | "which" | "type" | "grep" | "rg" | "ack" | "ag" | "findstr" => {
-            Some(ShellClass::ReadOnly)
-        }
-        "sed" => {
-            if args.iter().any(|arg| {
-                arg == "--in-place"
-                    || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('i'))
-            }) {
+        "cat" | "head" | "tail" | "wc" | "stat" | "file" | "ls" | "dir" | "pwd" | "where"
+        | "which" | "type" | "grep" | "findstr" => Some(ShellClass::ReadOnly),
+        "tree" => {
+            if has_option(args, &["-o", "--output"])
+                || args
+                    .iter()
+                    .any(|arg| arg.starts_with("-o") && arg.len() > 2)
+            {
                 None
             } else {
                 Some(ShellClass::ReadOnly)
             }
         }
-        "sort" => {
-            if args
+        "rg" => {
+            if has_option(
+                args,
+                &[
+                    "--pre",
+                    "--pre-glob",
+                    "--search-zip",
+                    "--hostname-bin",
+                    "--pager",
+                ],
+            ) || args
                 .iter()
-                .any(|arg| arg == "-o" || arg == "--output" || arg.starts_with("--output="))
+                .any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.contains('z'))
+            {
+                None
+            } else {
+                Some(ShellClass::ReadOnly)
+            }
+        }
+        "ack" | "ag" => {
+            if has_option(args, &["--pager", "--pager-program"]) {
+                None
+            } else {
+                Some(ShellClass::ReadOnly)
+            }
+        }
+        // sed scripts can execute commands through the `e` command; there is
+        // no reliable way to validate a script, so it always asks.
+        "sed" => None,
+        "sort" => {
+            if has_option(
+                args,
+                &[
+                    "-o",
+                    "--output",
+                    "--compress-program",
+                    "--random-source",
+                    "--files0-from",
+                    "-T",
+                    "--temporary-directory",
+                ],
+            ) || args
+                .iter()
+                .any(|arg| arg.starts_with("-o") && arg.len() > 2)
             {
                 None
             } else {
@@ -299,7 +427,15 @@ fn classify_segment(raw: &str, args: &[String]) -> Option<ShellClass> {
             if args.iter().any(|arg| {
                 matches!(
                     arg.as_str(),
-                    "-exec" | "-execdir" | "-delete" | "-ok" | "-fprint" | "-fprintf" | "-fls"
+                    "-exec"
+                        | "-execdir"
+                        | "-ok"
+                        | "-okdir"
+                        | "-delete"
+                        | "-fprint"
+                        | "-fprintf"
+                        | "-fls"
+                        | "-fprint0"
                 )
             }) {
                 None
@@ -351,22 +487,32 @@ fn classify_segment(raw: &str, args: &[String]) -> Option<ShellClass> {
 
 fn classify_git(args: &[String]) -> Option<ShellClass> {
     let subcommand = args.first()?.to_ascii_lowercase();
+    let rest = &args[1..];
+    // Git can delegate to external diff/textconv drivers and pagers. Any of
+    // these turns an otherwise read-only subcommand into code execution.
+    if rest.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--ext-diff" | "--textconv" | "--open-files-in-pager"
+        ) || arg.starts_with("--open-files-in-pager=")
+            || arg == "-O"
+            || (arg.starts_with("-O") && arg.len() > 2)
+    }) {
+        return None;
+    }
     match subcommand.as_str() {
         "status" | "log" | "show" | "rev-parse" | "describe" | "ls-files" | "grep" => {
             Some(ShellClass::ReadOnly)
         }
         "diff" => {
-            if args
-                .iter()
-                .any(|arg| arg == "--output" || arg.starts_with("--output="))
-            {
+            if has_option(rest, &["--output"]) {
                 None
             } else {
                 Some(ShellClass::ReadOnly)
             }
         }
         "branch" => {
-            if args.iter().any(|arg| {
+            if rest.iter().any(|arg| {
                 matches!(
                     arg.as_str(),
                     "-d" | "-D"
@@ -375,12 +521,18 @@ fn classify_git(args: &[String]) -> Option<ShellClass> {
                         | "-f"
                         | "-c"
                         | "-C"
+                        | "-u"
                         | "--delete"
                         | "--move"
                         | "--copy"
                         | "--force"
-                )
-            }) {
+                        | "--edit-description"
+                        | "--unset-upstream"
+                        | "--track"
+                        | "--no-track"
+                ) || (arg.starts_with("-u") && arg.len() > 2)
+            }) || has_option(rest, &["--set-upstream-to"])
+            {
                 None
             } else {
                 Some(ShellClass::ReadOnly)
@@ -388,6 +540,17 @@ fn classify_git(args: &[String]) -> Option<ShellClass> {
         }
         _ => None,
     }
+}
+
+fn has_option(args: &[String], options: &[&str]) -> bool {
+    args.iter().any(|arg| {
+        options.iter().any(|option| {
+            arg == option
+                || arg
+                    .strip_prefix(option)
+                    .is_some_and(|rest| rest.starts_with('=') || rest.starts_with(':'))
+        })
+    })
 }
 
 fn is_verify_script(script: &str) -> bool {
@@ -461,104 +624,108 @@ fn classify_npx(args: &[String]) -> Option<ShellClass> {
     }
 }
 
-impl PolicyPort for DefaultPolicyPlugin {
-    fn evaluate(&self, input: &PolicyInput) -> PolicyDecision {
-        match input.tool_id.as_str() {
-            "fs_list" | "fs_read" => match self.inside(input) {
-                Ok(()) => PolicyDecision {
-                    effect: PolicyEffect::Allow,
-                    rationale: i18n::t("Read-only access inside the workspace"),
-                },
-                Err(reason) => PolicyDecision {
-                    effect: PolicyEffect::Deny,
-                    rationale: reason,
-                },
-            },
-            "fs_write" => match self.inside(input) {
-                Ok(()) => PolicyDecision {
-                    effect: PolicyEffect::Allow,
-                    rationale: i18n::t(
-                        "Workspace writes are reversible and backed up; no approval required",
-                    ),
-                },
-                Err(reason) => PolicyDecision {
-                    effect: PolicyEffect::Deny,
-                    rationale: reason,
-                },
-            },
-            "shell_exec" => {
-                let command = input
-                    .args
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if command.trim().is_empty() {
-                    return PolicyDecision {
-                        effect: PolicyEffect::Deny,
-                        rationale: i18n::t("Empty command"),
-                    };
-                }
-                let lowered = command.to_lowercase();
-                if DANGEROUS_PATTERNS
-                    .iter()
-                    .any(|pattern| lowered.contains(pattern))
-                {
-                    return PolicyDecision {
-                        effect: PolicyEffect::Deny,
-                        rationale: i18n::t(
-                            "Command matches a dangerous pattern; denied by default",
-                        ),
-                    };
-                }
-                match classify_shell(command) {
-                    ShellClass::ReadOnly => PolicyDecision {
-                        effect: PolicyEffect::Allow,
-                        rationale: i18n::t(
-                            "Read-only command inside the workspace; no approval required",
-                        ),
-                    },
-                    ShellClass::Verify => PolicyDecision {
-                        effect: PolicyEffect::Allow,
-                        rationale: i18n::t("Project verification command; no approval required"),
-                    },
-                    ShellClass::Other => PolicyDecision {
-                        effect: PolicyEffect::Ask,
-                        rationale: i18n::t(
-                            "Command is not on the safe whitelist; human approval is required",
-                        ),
-                    },
-                }
-            }
-            "memory_search" => PolicyDecision {
-                effect: PolicyEffect::Allow,
-                rationale: i18n::t("Reading long-term memory does not touch the workspace"),
-            },
-            "memory_write" => PolicyDecision {
-                effect: PolicyEffect::Allow,
+impl DefaultPolicyPlugin {
+    fn evaluate_shell(&self, input: &PolicyInput) -> PolicyDecision {
+        let command = input
+            .args
+            .get("command")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if command.trim().is_empty() {
+            return deny(i18n::t("Empty command"));
+        }
+        let lowered = command.to_lowercase();
+        if DANGEROUS_PATTERNS
+            .iter()
+            .any(|pattern| lowered.contains(pattern))
+        {
+            return deny(i18n::t(
+                "Command matches a dangerous pattern; denied by default",
+            ));
+        }
+        match classify_shell(command) {
+            ShellClass::ReadOnly => allow(i18n::t(
+                "Read-only command inside the workspace; no approval required",
+            )),
+            ShellClass::Verify => allow(i18n::t(
+                "Project verification command; no approval required",
+            )),
+            ShellClass::Other => PolicyDecision {
+                effect: PolicyEffect::Ask,
                 rationale: i18n::t(
-                    "Memory writes pass the admission barrier and can be forgotten later",
-                ),
-            },
-            "delegate" | "wait_for_agents" | "send_message" | "cancel_agent" => PolicyDecision {
-                effect: PolicyEffect::Allow,
-                rationale: i18n::t(
-                    "Agent coordination does not touch the workspace; each subagent action is still policy-checked",
-                ),
-            },
-            "image_generate" => PolicyDecision {
-                effect: PolicyEffect::Allow,
-                rationale: i18n::t(
-                    "Image generation is an external service call; the image configuration and egress grant gate it",
-                ),
-            },
-            other => PolicyDecision {
-                effect: PolicyEffect::Deny,
-                rationale: i18n::t_args(
-                    "No policy matches {tool}; denied by default",
-                    &[("tool", other.to_string())],
+                    "Command is not on the safe whitelist; human approval is required",
                 ),
             },
         }
+    }
+}
+
+fn allow(rationale: String) -> PolicyDecision {
+    PolicyDecision {
+        effect: PolicyEffect::Allow,
+        rationale,
+    }
+}
+
+fn deny(rationale: String) -> PolicyDecision {
+    PolicyDecision {
+        effect: PolicyEffect::Deny,
+        rationale,
+    }
+}
+
+impl PolicyPort for DefaultPolicyPlugin {
+    fn evaluate(&self, input: &PolicyInput) -> PolicyDecision {
+        let has = |capability| input.capabilities.contains(&capability);
+
+        // Order matters: the most dangerous capability wins when a tool
+        // declares more than one.
+        if has(ToolCapability::Shell) {
+            return self.evaluate_shell(input);
+        }
+        if has(ToolCapability::WorkspaceWrite) {
+            return match self.inside(input) {
+                Ok(()) => allow(i18n::t(
+                    "Workspace writes are reversible and backed up; no approval required",
+                )),
+                Err(reason) => deny(reason),
+            };
+        }
+        if has(ToolCapability::WorkspaceRead) {
+            return match self.inside(input) {
+                Ok(()) => allow(i18n::t("Read-only access inside the workspace")),
+                Err(reason) => deny(reason),
+            };
+        }
+        if has(ToolCapability::MemoryWrite) {
+            return allow(i18n::t(
+                "Memory writes pass the admission barrier and can be forgotten later",
+            ));
+        }
+        if has(ToolCapability::MemoryRead) {
+            return allow(i18n::t(
+                "Reading long-term memory does not touch the workspace",
+            ));
+        }
+        if has(ToolCapability::ImageGeneration) {
+            return allow(i18n::t(
+                "Image generation is an external service call; the image configuration and egress grant gate it",
+            ));
+        }
+        if has(ToolCapability::AgentControl) || has(ToolCapability::AgentMessaging) {
+            return allow(i18n::t(
+                "Agent coordination does not touch the workspace; each subagent action is still policy-checked",
+            ));
+        }
+        if has(ToolCapability::ExternalEgress) {
+            return allow(i18n::t(
+                "External service call; the endpoint configuration and egress grant gate it",
+            ));
+        }
+        deny(i18n::t_args(
+            "No policy matches {tool}; denied by default",
+            &[("tool", input.tool_id.clone())],
+        ))
     }
 }
 
@@ -566,6 +733,7 @@ impl PolicyPort for DefaultPolicyPlugin {
 mod tests {
     use super::*;
     use crate::sandbox::FsSandboxPlugin;
+    use phi_contracts::ports::SideEffect;
     use serde_json::Value;
     use serde_json::json;
     use std::path::PathBuf;
@@ -581,10 +749,27 @@ mod tests {
     }
 
     fn input(tool: &str, args: Value) -> PolicyInput {
+        let capabilities = match tool {
+            "fs_list" | "fs_read" => vec![ToolCapability::WorkspaceRead],
+            "fs_write" => vec![ToolCapability::WorkspaceWrite],
+            "shell_exec" => vec![ToolCapability::Shell],
+            "memory_search" => vec![ToolCapability::MemoryRead],
+            "memory_write" => vec![ToolCapability::MemoryWrite],
+            "delegate" | "wait_for_agents" | "send_message" | "cancel_agent" => {
+                vec![ToolCapability::AgentControl]
+            }
+            "image_generate" => vec![
+                ToolCapability::ExternalEgress,
+                ToolCapability::ImageGeneration,
+            ],
+            _ => Vec::new(),
+        };
         PolicyInput {
             tool_id: tool.to_string(),
             args,
             workspace: ws(),
+            capabilities,
+            side_effect: SideEffect::None,
         }
     }
 
@@ -641,6 +826,80 @@ mod tests {
         for command in ["cat a.txt > b.txt", "echo $(rm x)", "ls `pwd`"] {
             let d = policy().evaluate(&input("shell_exec", json!({"command": command})));
             assert_eq!(d.effect, PolicyEffect::Ask, "command: {command}");
+        }
+    }
+
+    #[test]
+    fn shell_paths_outside_the_workspace_ask() {
+        for command in [
+            "cat /etc/passwd",
+            "cat ~/.ssh/id_rsa",
+            "rg API_KEY ~",
+            "cat ..\\secret.txt",
+            "cat C:\\Windows\\win.ini",
+            "cat src/../../secret",
+            "git show HEAD:/etc/passwd",
+            "git show HEAD:../../secret",
+            "sort --output=/tmp/out file",
+            "sort -o/tmp/out file",
+            "cat --file=/etc/passwd",
+        ] {
+            let d = policy().evaluate(&input("shell_exec", json!({"command": command})));
+            assert_eq!(d.effect, PolicyEffect::Ask, "command: {command}");
+        }
+    }
+
+    #[test]
+    fn exec_capable_read_only_commands_ask() {
+        for command in [
+            "rg --pre 'sh -c id' pattern .",
+            "rg -z pattern .",
+            "sed -n '1e id' file",
+            "sort --compress-program=sh file",
+            "git grep -O id pattern",
+            "git grep --open-files-in-pager=less pattern",
+            "git diff --ext-diff",
+            "git log --textconv",
+            "tree -o /tmp/out .",
+            "ack --pager rg pattern",
+            "/tmp/cat a.txt",
+            "./cat a.txt",
+        ] {
+            let d = policy().evaluate(&input("shell_exec", json!({"command": command})));
+            assert_eq!(d.effect, PolicyEffect::Ask, "command: {command}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_root_relative_paths_ask() {
+        let d = policy().evaluate(&input("shell_exec", json!({"command": "cat \\secret.txt"})));
+        assert_eq!(d.effect, PolicyEffect::Ask);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_switches_are_not_mistaken_for_paths() {
+        let d = policy().evaluate(&input("shell_exec", json!({"command": "dir /b"})));
+        assert_eq!(d.effect, PolicyEffect::Allow);
+    }
+
+    #[test]
+    fn structured_read_only_commands_still_allow() {
+        for command in [
+            "cat a.txt",
+            "rg TODO src",
+            "git status",
+            "git log --oneline -5",
+            "git diff --stat",
+            "git grep TODO",
+            "find . -name '*.rs'",
+            "sort file.txt",
+            "tree src",
+            "bash -c \"cargo test\"",
+        ] {
+            let d = policy().evaluate(&input("shell_exec", json!({"command": command})));
+            assert_eq!(d.effect, PolicyEffect::Allow, "command: {command}");
         }
     }
 

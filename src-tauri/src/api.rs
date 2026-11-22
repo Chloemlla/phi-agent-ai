@@ -1,63 +1,104 @@
-use tauri::State;
+use std::path::Path;
+use std::sync::Arc;
+
+use tauri::{AppHandle, Manager, State};
 
 use crate::app::AppStateHandle;
+use phi_contracts::auxiliary::ImageAsset;
 use phi_contracts::memory::{
     ForgetReport, ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryHit, MemoryListFilter,
     MemoryQuery, MemoryStats,
 };
-use phi_contracts::ports::{ModelStatus, RunStatus};
 use phi_contracts::provider::{ModelSpec, ProviderInput, ProviderTestView, ProviderView};
 use phi_domain::memory::{MemoryRecord, MemoryScope, SourceTrust};
 use phi_domain::view::SessionSummary;
 use phi_i18n as i18n;
-use phi_node::{Bootstrap, SendResult, SessionDetail};
+use phi_node::{Bootstrap, Node, SendResult, SessionDetail};
 
-#[tauri::command]
-pub fn get_bootstrap(state: State<'_, AppStateHandle>) -> Result<Bootstrap, String> {
-    state.0.bootstrap()
+/// Run disk- or database-heavy node work on the blocking pool. Tauri executes
+/// synchronous commands on the native event loop, so commands that touch the
+/// journal, SQLite, file I/O or whole-session serialization go through here.
+async fn blocking<T, F>(state: &AppStateHandle, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&Node) -> Result<T, String> + Send + 'static,
+{
+    let node = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || work(&node))
+        .await
+        .map_err(|error| {
+            i18n::t_args(
+                "Background task failed: {error}",
+                &[("error", error.to_string())],
+            )
+        })?
+}
+
+/// `blocking` for commands whose return type is a plain value. Those commands
+/// cannot borrow `State` across the await point (Tauri requires their future to
+/// be `'static`), so they inject an `AppHandle` and hand over an owned node.
+async fn blocking_value<T, F>(node: Arc<Node>, work: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce(&Node) -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || work(&node))
+        .await
+        .expect("blocking command task failed")
 }
 
 #[tauri::command]
-pub fn set_language(state: State<'_, AppStateHandle>, language: String) -> Result<String, String> {
-    state.0.set_language(&language)
+pub async fn get_bootstrap(state: State<'_, AppStateHandle>) -> Result<Bootstrap, String> {
+    blocking(&state, |node| node.bootstrap()).await
 }
 
 #[tauri::command]
-pub fn set_workspace(state: State<'_, AppStateHandle>, path: String) -> Result<String, String> {
-    state.0.set_workspace(&path)
+pub async fn set_language(
+    state: State<'_, AppStateHandle>,
+    language: String,
+) -> Result<String, String> {
+    blocking(&state, move |node| node.set_language(&language)).await
 }
 
 #[tauri::command]
-pub fn create_session(
+pub async fn set_workspace(
+    state: State<'_, AppStateHandle>,
+    path: String,
+) -> Result<String, String> {
+    blocking(&state, move |node| node.set_workspace(&path)).await
+}
+
+#[tauri::command]
+pub async fn create_session(
     state: State<'_, AppStateHandle>,
     title: Option<String>,
 ) -> Result<SessionSummary, String> {
-    state.0.create_session(title.as_deref())
+    blocking(&state, move |node| node.create_session(title.as_deref())).await
 }
 
 #[tauri::command]
-pub fn delete_session(
+pub async fn delete_session(
     state: State<'_, AppStateHandle>,
     session_id: String,
 ) -> Result<bool, String> {
-    state.0.delete_session(&session_id)
+    blocking(&state, move |node| node.delete_session(&session_id)).await
 }
 
 #[tauri::command]
-pub fn rename_session(
+pub async fn rename_session(
     state: State<'_, AppStateHandle>,
     session_id: String,
     title: String,
 ) -> Result<(), String> {
-    state.0.rename_session(&session_id, &title)
+    blocking(&state, move |node| node.rename_session(&session_id, &title)).await
 }
 
 #[tauri::command]
-pub fn get_session(
+pub async fn get_session(
     state: State<'_, AppStateHandle>,
     session_id: String,
 ) -> Result<SessionDetail, String> {
-    state.0.get_session(&session_id)
+    blocking(&state, move |node| node.get_session(&session_id)).await
 }
 
 #[tauri::command]
@@ -68,76 +109,90 @@ pub async fn send_message(
     provider_id: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
+    attachment_ids: Option<Vec<String>>,
 ) -> Result<SendResult, String> {
-    let run_id = state.0.send_message_full(
-        &session_id,
-        &text,
-        provider_id.as_deref(),
-        model.as_deref(),
-        thinking.as_deref(),
-    )?;
+    let run_id = blocking(&state, move |node| {
+        node.send_message_full(
+            &session_id,
+            &text,
+            provider_id.as_deref(),
+            model.as_deref(),
+            thinking.as_deref(),
+            attachment_ids.as_deref().unwrap_or(&[]),
+        )
+    })
+    .await?;
     Ok(SendResult { run_id })
 }
 
 #[tauri::command]
-pub fn approve(
+pub async fn add_image_attachment(
+    state: State<'_, AppStateHandle>,
+    session_id: Option<String>,
+    path: String,
+) -> Result<ImageAsset, String> {
+    blocking(&state, move |node| {
+        node.add_image_attachment(Path::new(&path), session_id.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn image_asset_data_url(
+    state: State<'_, AppStateHandle>,
+    asset_id: String,
+) -> Result<String, String> {
+    blocking(&state, move |node| node.image_asset_data_url(&asset_id)).await
+}
+
+#[tauri::command]
+pub async fn approve(
     state: State<'_, AppStateHandle>,
     approval_id: String,
     approved: bool,
     note: Option<String>,
 ) -> Result<(), String> {
-    state.0.approve(&approval_id, approved, note)
+    blocking(&state, move |node| {
+        node.approve(&approval_id, approved, note)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn cancel_run(state: State<'_, AppStateHandle>, run_id: String) -> Result<bool, String> {
-    Ok(state.0.cancel_run(&run_id))
-}
-
-#[tauri::command]
-pub fn set_api_key(state: State<'_, AppStateHandle>, key: String) -> Result<ModelStatus, String> {
-    state.0.set_api_key(&key)
-}
-
-#[tauri::command]
-pub fn get_model_status(state: State<'_, AppStateHandle>) -> Result<ModelStatus, String> {
-    Ok(state.0.model_status())
-}
-
-#[tauri::command]
-pub fn get_run_status(state: State<'_, AppStateHandle>, run_id: String) -> Option<RunStatus> {
-    state.0.run_status(&run_id)
+pub async fn cancel_run(state: State<'_, AppStateHandle>, run_id: String) -> Result<bool, String> {
+    blocking(&state, move |node| Ok(node.cancel_run(&run_id))).await
 }
 
 // ─────────────────────────── providers (settings surface) ───────────────────
 
 #[tauri::command]
-pub fn list_providers(state: State<'_, AppStateHandle>) -> Vec<ProviderView> {
-    state.0.provider_views()
+pub async fn list_providers(app: AppHandle) -> Vec<ProviderView> {
+    let node = app.state::<AppStateHandle>().0.clone();
+    blocking_value(node, |node| node.provider_views()).await
 }
 
 #[tauri::command]
-pub fn save_provider(
+pub async fn save_provider(
     state: State<'_, AppStateHandle>,
     input: ProviderInput,
 ) -> Result<ProviderView, String> {
-    state.0.save_provider(input)
+    blocking(&state, move |node| node.save_provider(input)).await
 }
 
 #[tauri::command]
-pub fn remove_provider(
+pub async fn remove_provider(
     state: State<'_, AppStateHandle>,
     provider_id: String,
 ) -> Result<bool, String> {
-    state.0.remove_provider(&provider_id)
+    blocking(&state, move |node| node.remove_provider(&provider_id)).await
 }
 
 #[tauri::command]
-pub fn set_active_provider(
+pub async fn set_active_provider(
     state: State<'_, AppStateHandle>,
     provider_id: String,
 ) -> Result<(), String> {
-    state.0.set_active_provider(&provider_id)
+    blocking(&state, move |node| node.set_active_provider(&provider_id)).await
 }
 
 #[tauri::command]
@@ -146,14 +201,6 @@ pub async fn test_provider(
     provider_id: Option<String>,
 ) -> Result<ProviderTestView, String> {
     Ok(state.0.test_provider(provider_id.as_deref()).await)
-}
-
-#[tauri::command]
-pub async fn fetch_models(
-    state: State<'_, AppStateHandle>,
-    provider_id: Option<String>,
-) -> Result<Vec<String>, String> {
-    state.0.fetch_models(provider_id.as_deref()).await
 }
 
 /// Preview a provider's live model list without persisting it. The settings
@@ -169,44 +216,47 @@ pub async fn preview_models(
 /// Catalogue suggestions for the settings page. Pure metadata; saving the
 /// provider is what persists them.
 #[tauri::command]
-pub fn describe_models(state: State<'_, AppStateHandle>, model_ids: Vec<String>) -> Vec<ModelSpec> {
-    state.0.describe_models(&model_ids)
+pub async fn describe_models(app: AppHandle, model_ids: Vec<String>) -> Vec<ModelSpec> {
+    let node = app.state::<AppStateHandle>().0.clone();
+    blocking_value(node, move |node| node.describe_models(&model_ids)).await
 }
 
 // ─────────────────────────── memory (settings surface) ──────────────────────
 
 #[tauri::command]
-pub fn list_memories(
+pub async fn list_memories(
     state: State<'_, AppStateHandle>,
     text: Option<String>,
 ) -> Result<Vec<MemoryRecord>, String> {
-    state.0.memory_list(MemoryListFilter {
+    let filter = MemoryListFilter {
         text: text.filter(|value| !value.trim().is_empty()),
         limit: 200,
         ..Default::default()
-    })
+    };
+    blocking(&state, move |node| node.memory_list(filter)).await
 }
 
 #[tauri::command]
-pub fn search_memories(
+pub async fn search_memories(
     state: State<'_, AppStateHandle>,
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<MemoryHit>, String> {
-    state.0.memory_search(MemoryQuery {
+    let query = MemoryQuery {
         text: query,
         limit: limit.unwrap_or(10).clamp(1, 50),
         ..Default::default()
-    })
+    };
+    blocking(&state, move |node| node.memory_search(query)).await
 }
 
 #[tauri::command]
-pub fn get_memory_stats(state: State<'_, AppStateHandle>) -> Result<MemoryStats, String> {
-    state.0.memory_stats()
+pub async fn get_memory_stats(state: State<'_, AppStateHandle>) -> Result<MemoryStats, String> {
+    blocking(&state, |node| node.memory_stats()).await
 }
 
 #[tauri::command]
-pub fn add_memory(
+pub async fn add_memory(
     state: State<'_, AppStateHandle>,
     fact: String,
     scope: String,
@@ -221,20 +271,22 @@ pub fn add_memory(
             ));
         }
     };
-    state
-        .0
-        .memory_add(MemoryAddRequest::new(fact, scope, SourceTrust::User))
+    blocking(&state, move |node| {
+        node.memory_add(MemoryAddRequest::new(fact, scope, SourceTrust::User))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn forget_memories(
+pub async fn forget_memories(
     state: State<'_, AppStateHandle>,
     ids: Vec<String>,
 ) -> Result<ForgetReport, String> {
     if ids.is_empty() {
         return Err(i18n::t("No memory ids were provided"));
     }
-    state
-        .0
-        .memory_forget(ForgetSelector::ids(ids), &i18n::t("Deleted from settings"))
+    blocking(&state, move |node| {
+        node.memory_forget(ForgetSelector::ids(ids), &i18n::t("Deleted from settings"))
+    })
+    .await
 }

@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,7 +11,7 @@ use ts_rs::TS;
 
 use phi_domain::agent::{AgentRole, AgentView, MessageKind, WorkMode};
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
-use phi_domain::view::{PendingApprovalView, RunView, SessionSummary, SessionView};
+use phi_domain::view::{PendingApprovalView, RunState, RunView, SessionSummary, SessionView};
 
 use super::provider::ModelSpec;
 
@@ -23,6 +25,23 @@ pub enum SideEffect {
     Irreversible,
 }
 
+/// What a tool can do, independent of its concrete id. Policy, workspace
+/// leases, risk display and tool filtering consume this metadata so adding a
+/// tool does not require editing every subsystem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCapability {
+    WorkspaceRead,
+    WorkspaceWrite,
+    Shell,
+    MemoryRead,
+    MemoryWrite,
+    AgentControl,
+    AgentMessaging,
+    ExternalEgress,
+    ImageGeneration,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {
@@ -31,6 +50,8 @@ pub struct ToolDefinition {
     pub description: String,
     pub input_schema: Value,
     pub side_effect: SideEffect,
+    #[serde(default)]
+    pub capabilities: Vec<ToolCapability>,
 }
 
 #[derive(Clone, Debug)]
@@ -180,6 +201,9 @@ pub struct ModelRequest {
     /// Whether the shell can consume incremental output. The gateway only
     /// streams when a sink is registered.
     pub stream: bool,
+    /// Resolved bytes for `ContentBlock::Image` blocks, keyed by asset id.
+    /// Session snapshots keep only the asset id; this map is built per run.
+    pub images: Arc<HashMap<String, Vec<u8>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -263,6 +287,8 @@ pub struct PolicyInput {
     pub tool_id: String,
     pub args: Value,
     pub workspace: PathBuf,
+    pub capabilities: Vec<ToolCapability>,
+    pub side_effect: SideEffect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,7 +297,6 @@ pub enum PolicyEffect {
     Allow,
     Deny,
     Ask,
-    Modify,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -302,10 +327,28 @@ pub struct ApprovalSpec {
     pub expires_in_secs: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ApprovalStatus {
+    Approved,
+    Rejected,
+    Expired,
+}
+
+impl ApprovalStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ApprovalStatus::Approved => "Approved",
+            ApprovalStatus::Rejected => "Rejected",
+            ApprovalStatus::Expired => "Expired",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalOutcome {
-    pub status: String,
+    pub status: ApprovalStatus,
     pub by: String,
     pub note: Option<String>,
 }
@@ -378,7 +421,7 @@ pub trait SessionPort: Send + Sync {
         role: Role,
         blocks: Vec<ContentBlock>,
     ) -> Result<String, String>;
-    fn messages(&self, session_id: &str) -> Vec<ChatMessage>;
+    fn messages_for_thread(&self, session_id: &str, thread_id: &str) -> Vec<ChatMessage>;
     fn active_run(&self, session_id: &str) -> Option<String>;
     /// Find a run by id across all sessions. Shells use this after the run has
     /// left the in-memory runtime map (or when they are a different process).
@@ -395,9 +438,6 @@ pub trait SessionPort: Send + Sync {
         self.agents(session_id)
             .into_iter()
             .find(|agent| agent.role == AgentRole::Lead)
-    }
-    fn messages_for_thread(&self, session_id: &str, _thread_id: &str) -> Vec<ChatMessage> {
-        self.messages(session_id)
     }
     fn append_message_in_thread(
         &self,
@@ -458,7 +498,6 @@ pub struct StartRunRequest {
     pub agent_id: Option<String>,
     pub thread_id: Option<String>,
     pub root_agent_id: Option<String>,
-    pub role: AgentRole,
     pub report_to: Option<String>,
     pub work_mode: WorkMode,
     /// The lead model's capability scale, used to enforce the delegation cap.
@@ -470,7 +509,7 @@ pub struct StartRunRequest {
 pub struct RunStatus {
     pub run_id: String,
     pub session_id: String,
-    pub state: String,
+    pub state: RunState,
     pub steps: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,

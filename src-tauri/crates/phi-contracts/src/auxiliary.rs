@@ -6,10 +6,12 @@
 //! instance. They are optional ports; a node without them degrades honestly.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
+use ts_rs::TS;
 
 // ─────────────────────────── image generation ───────────────────────────
 
@@ -60,7 +62,7 @@ pub struct ImageRequest {
     pub reference_assets: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageAsset {
     pub asset_id: String,
@@ -105,6 +107,13 @@ pub trait ImagePort: Send + Sync {
     fn list(&self, session_id: Option<&str>) -> Vec<ImageAsset>;
     fn delete(&self, asset_id: &str) -> Result<bool, String>;
     fn bytes(&self, asset_id: &str) -> Result<Vec<u8>, String>;
+    /// Metadata for an existing asset.
+    fn asset(&self, asset_id: &str) -> Result<ImageAsset, String>;
+    /// Copy a user-selected image into the asset store. The image plugin owns
+    /// format sniffing and size limits so every shell uses the same rules.
+    fn store_upload(&self, source: &Path, session_id: Option<&str>) -> Result<ImageAsset, String>;
+    /// A `data:` URL suitable for an `<img>` preview. Bytes stay local.
+    fn data_url(&self, asset_id: &str) -> Result<String, String>;
 }
 
 // ─────────────────────────── typed decisions ───────────────────────────

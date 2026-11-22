@@ -32,6 +32,63 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  generated-types:
+    name: Generated types (freshness)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native TLS headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: generated-types
+
+      # export-types rewrites src/generated from the Rust DTOs. The checked-in
+      # files are the source of truth for the frontend, so this job only
+      # regenerates them to compare; it never commits or uploads the output.
+      - name: Regenerate TypeScript DTOs
+        run: cargo run --manifest-path src-tauri/Cargo.toml -p phi-node --bin export-types
+
+      - name: Fail if src/generated is stale
+        run: git diff --exit-code -- src/generated
+
+  clippy:
+    name: Rust (clippy)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install native TLS headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: clippy
+
+      # TODO: Clippy currently reports 61 warnings (dominated by
+      # clippy::collapsible_if). Fix the existing warnings, then append
+      # `-- -D warnings` to make this job blocking. Until then it is
+      # informative only.
+      - name: Run clippy (warnings are not blocking yet)
+        run: cargo clippy --workspace --exclude phi-agent --all-targets
+
   frontend:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-24.04

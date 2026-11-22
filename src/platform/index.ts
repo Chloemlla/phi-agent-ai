@@ -78,6 +78,21 @@ export const platform = {
     }
   },
 
+  /** Native image picker. Returns the selected paths, or an empty list. */
+  async openImages(label = "Images"): Promise<string[]> {
+    try {
+      const picked = await open({
+        multiple: true,
+        directory: false,
+        filters: [{ name: label, extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+      });
+      if (!picked) return [];
+      return Array.isArray(picked) ? picked : [picked];
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  },
+
   async openExternal(url: string): Promise<void> {
     await openUrl(url);
   },

@@ -5,6 +5,8 @@
 //! asset references, never as base64 in the model context.
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,7 +22,7 @@ use phi_contracts::auxiliary::{
     ImageAsset, ImageConfigInput, ImagePort, ImageRequest, ImageResponse, ImageStatus, ImageUsage,
 };
 use phi_contracts::ports::{
-    SideEffect, ToolCall, ToolContext, ToolDefinition, ToolOutput, ToolPort,
+    SideEffect, ToolCall, ToolCapability, ToolContext, ToolDefinition, ToolOutput, ToolPort,
 };
 use phi_contracts::provider::SecretRef;
 use phi_contracts::util::truncate_chars;
@@ -34,10 +36,23 @@ use phi_kernel::ports::{ClockPort, LogPort};
 use phi_kernel::registry::Contribution;
 
 use crate::memory::redact_secrets;
+use crate::tools::tool_definition::tool;
 
 const MAX_BYTES_LIMIT: u64 = 50 * 1024 * 1024;
 const DEFAULT_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const DEFAULT_MAX_PER_TURN: u32 = 4;
+
+/// Drops per-turn counters left over from earlier turns of one session.
+/// Counters are keyed by `"{session_id}:{turn_id}"`, so only the current turn
+/// is still relevant. Counters of other sessions are left untouched.
+fn prune_session_turn_counts(
+    counts: &mut HashMap<String, u32>,
+    session_id: &str,
+    current_turn_key: &str,
+) {
+    let session_prefix = format!("{session_id}:");
+    counts.retain(|key, _| key == current_turn_key || !key.starts_with(&session_prefix));
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -192,21 +207,16 @@ impl ImagePlugin {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
             format,
-            max_per_turn: input
-                .max_per_turn
-                .clamp(1, 8)
-                .max(if input.max_per_turn == 0 {
-                    DEFAULT_MAX_PER_TURN
-                } else {
-                    1
-                }),
-            max_bytes: input.max_bytes.clamp(1024 * 1024, MAX_BYTES_LIMIT).max(
-                if input.max_bytes == 0 {
-                    DEFAULT_MAX_BYTES
-                } else {
-                    1
-                },
-            ),
+            max_per_turn: if input.max_per_turn == 0 {
+                DEFAULT_MAX_PER_TURN
+            } else {
+                input.max_per_turn.clamp(1, 8)
+            },
+            max_bytes: if input.max_bytes == 0 {
+                DEFAULT_MAX_BYTES
+            } else {
+                input.max_bytes.clamp(1024 * 1024, MAX_BYTES_LIMIT)
+            },
             egress_granted: input.egress_granted,
         })
     }
@@ -542,27 +552,82 @@ impl ImagePort for ImagePlugin {
     fn bytes(&self, asset_id: &str) -> Result<Vec<u8>, String> {
         self.assets.read(asset_id)
     }
+
+    fn asset(&self, asset_id: &str) -> Result<ImageAsset, String> {
+        self.assets.meta(asset_id)
+    }
+
+    fn store_upload(&self, source: &Path, session_id: Option<&str>) -> Result<ImageAsset, String> {
+        let bytes = fs::read(source).map_err(|error| {
+            i18n::t_args(
+                "Failed to read the selected image: {error}",
+                &[("error", error.to_string())],
+            )
+        })?;
+        let max_bytes = self.config.snapshot().max_bytes;
+        if bytes.len() as u64 > max_bytes {
+            return Err(i18n::t_args(
+                "Image is too large ({bytes} bytes; max {max})",
+                &[
+                    ("bytes", bytes.len().to_string()),
+                    ("max", max_bytes.to_string()),
+                ],
+            ));
+        }
+        let mime = Self::sniff_mime(&bytes)
+            .filter(|mime| *mime != "image/svg+xml")
+            .ok_or_else(|| i18n::t("Unsupported image format; use PNG, JPEG, WebP or GIF"))?;
+        let name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("image");
+        let asset = self.assets.put(
+            &bytes,
+            ImageAsset {
+                asset_id: String::new(),
+                mime: mime.to_string(),
+                width: None,
+                height: None,
+                model: "upload".to_string(),
+                prompt_preview: name.chars().take(120).collect(),
+                session_id: session_id.map(str::to_string),
+                created_at: self.clock.now_rfc3339(),
+            },
+        )?;
+        self.log
+            .info(&format!("stored uploaded image asset {}", asset.asset_id));
+        Ok(asset)
+    }
+
+    fn data_url(&self, asset_id: &str) -> Result<String, String> {
+        let asset = self.assets.meta(asset_id)?;
+        let bytes = self.assets.read(asset_id)?;
+        Ok(format!(
+            "data:{};base64,{}",
+            asset.mime,
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    }
 }
 
 #[async_trait]
 impl ToolPort for ImagePlugin {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        vec![ToolDefinition {
-            id: "image_generate".to_string(),
-            name: "image_generate".to_string(),
-            description: "Generate one or more images with the user-configured image model. The model is fixed by the user; you choose only the prompt and, optionally, a supported size. Returns local asset ids that the host can render.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "prompt": { "type": "string", "description": "What to draw" },
-                    "size": { "type": "string", "description": "Optional provider-supported size" },
-                    "count": { "type": "integer", "minimum": 1, "maximum": 4 },
-                    "reference_assets": { "type": "array", "items": { "type": "string" } }
-                },
-                "required": ["prompt"]
+        vec![tool(
+            "image_generate",
+            "Generate one or more images with the user-configured image model. The model is fixed by the user; you choose only the prompt and, optionally, a supported size. Returns local asset ids that the host can render.",
+            json!({
+                "prompt": { "type": "string", "description": "What to draw" },
+                "size": { "type": "string", "description": "Optional provider-supported size" },
+                "count": { "type": "integer", "minimum": 1, "maximum": 4 }
             }),
-            side_effect: SideEffect::None,
-        }]
+            vec!["prompt"],
+            SideEffect::None,
+            vec![
+                ToolCapability::ExternalEgress,
+                ToolCapability::ImageGeneration,
+            ],
+        )]
     }
 
     async fn invoke(
@@ -607,7 +672,8 @@ impl ToolPort for ImagePlugin {
             .clamp(1, 4) as u32;
         let turn_key = format!("{}:{}", ctx.session_id, ctx.turn_id);
         {
-            let counts = self.turn_counts.lock().unwrap();
+            let mut counts = self.turn_counts.lock().unwrap();
+            prune_session_turn_counts(&mut counts, &ctx.session_id, &turn_key);
             let used = counts.get(&turn_key).copied().unwrap_or(0);
             if used + requested > config.max_per_turn {
                 return Ok(ToolOutput {
@@ -698,5 +764,70 @@ impl Plugin for ImagePlugin {
                 id: "image".to_string(),
             },
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use phi_adapters::fs_journal::JsonlJournal;
+    use phi_adapters::system::{StderrLog, SystemClock, UuidIds};
+    use std::collections::HashMap;
+
+    #[test]
+    fn uploaded_image_round_trips_as_a_data_url() {
+        let dir = std::env::temp_dir().join(format!("phi-image-upload-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("pixel.png");
+        fs::write(&source, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
+        let bus = Arc::new(EventBus::new(
+            Arc::new(JsonlJournal::new(dir.join("events.jsonl"))),
+            Arc::new(SystemClock::new()),
+            Arc::new(UuidIds),
+            Arc::new(StderrLog),
+        ));
+        let plugin = ImagePlugin::new(
+            dir.join("image.json"),
+            dir.join("assets"),
+            bus,
+            Arc::new(SystemClock::new()),
+            Arc::new(StderrLog),
+        );
+
+        let asset = plugin.store_upload(&source, Some("sess")).unwrap();
+        assert_eq!(asset.mime, "image/png");
+        let url = plugin.data_url(&asset.asset_id).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pruning_keeps_only_the_current_turn_of_the_session() {
+        let mut counts = HashMap::from([
+            ("session-a:turn-1".to_string(), 2u32),
+            ("session-a:turn-2".to_string(), 1u32),
+            ("session-b:turn-1".to_string(), 3u32),
+        ]);
+
+        prune_session_turn_counts(&mut counts, "session-a", "session-a:turn-2");
+
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts.get("session-a:turn-2"), Some(&1));
+        assert_eq!(counts.get("session-b:turn-1"), Some(&3));
+        assert!(!counts.contains_key("session-a:turn-1"));
+    }
+
+    #[test]
+    fn pruning_does_not_match_sessions_with_a_shared_prefix() {
+        let mut counts = HashMap::from([
+            ("session:turn-1".to_string(), 1u32),
+            ("session-extra:turn-1".to_string(), 2u32),
+        ]);
+
+        prune_session_turn_counts(&mut counts, "session", "session:turn-1");
+
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts.get("session-extra:turn-1"), Some(&2));
     }
 }

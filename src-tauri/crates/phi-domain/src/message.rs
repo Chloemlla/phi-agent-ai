@@ -36,6 +36,13 @@ pub enum ContentBlock {
         content: String,
         is_error: bool,
     },
+    /// A locally stored image attached to a user message. Bytes are resolved
+    /// from the asset store when the model request is built, so session
+    /// snapshots and blobs stay small.
+    Image {
+        asset_id: String,
+        mime: String,
+    },
 }
 
 impl ContentBlock {
@@ -52,6 +59,13 @@ impl ContentBlock {
             tool_use_id: tool_use_id.into(),
             content: content.into(),
             is_error,
+        }
+    }
+
+    pub fn image(asset_id: impl Into<String>, mime: impl Into<String>) -> Self {
+        ContentBlock::Image {
+            asset_id: asset_id.into(),
+            mime: mime.into(),
         }
     }
 

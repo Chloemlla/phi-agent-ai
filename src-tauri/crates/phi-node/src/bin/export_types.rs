@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::{Config, TS};
 
+use phi_contracts::auxiliary::ImageAsset;
 use phi_contracts::memory::{ForgetReport, MemoryAddOutcome, MemoryHit, MemoryStats};
 use phi_contracts::ports::{ModelStatus, ThinkingEffort};
 use phi_contracts::provider::{ModelSpec, Protocol, ProviderInput, ProviderTestView, ProviderView};
@@ -50,6 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     SendResult::export_all(&config)?;
     ModelStatus::export_all(&config)?;
     ModelStreamEvent::export_all(&config)?;
+    ImageAsset::export_all(&config)?;
     ThinkingEffort::export_all(&config)?;
     ModelSpec::export_all(&config)?;
     ProviderView::export_all(&config)?;

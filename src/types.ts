@@ -17,6 +17,7 @@ export type {
   Bootstrap,
   ContextUsageView,
   ForgetReport,
+  ImageAsset,
   MemoryAddOutcome,
   MemoryHit,
   MemoryRecord,

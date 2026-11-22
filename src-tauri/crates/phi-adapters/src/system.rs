@@ -1,26 +1,16 @@
-use std::time::Instant;
-
 use phi_kernel::ports::{ClockPort, IdPort, LogPort};
 
-pub struct SystemClock {
-    started: Instant,
-}
+pub struct SystemClock;
 
 impl SystemClock {
     pub fn new() -> Self {
-        Self {
-            started: Instant::now(),
-        }
+        Self
     }
 }
 
 impl ClockPort for SystemClock {
     fn now_rfc3339(&self) -> String {
         chrono::Utc::now().to_rfc3339()
-    }
-
-    fn monotonic_ms(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64
     }
 }
 

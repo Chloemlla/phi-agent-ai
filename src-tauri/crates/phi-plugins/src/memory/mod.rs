@@ -29,7 +29,7 @@ use phi_contracts::memory::{
     Principal,
 };
 use phi_contracts::ports::{
-    SideEffect, ToolCall, ToolContext, ToolDefinition, ToolOutput, ToolPort,
+    SideEffect, ToolCall, ToolCapability, ToolContext, ToolDefinition, ToolOutput, ToolPort,
 };
 use phi_domain::events::DomainEvent;
 use phi_domain::memory::{
@@ -41,6 +41,8 @@ use phi_kernel::event_bus::EventBus;
 use phi_kernel::lifecycle::{Plugin, PluginContext};
 use phi_kernel::ports::{ClockPort, IdPort, LogPort};
 use phi_kernel::registry::Contribution;
+
+use crate::tools::tool_definition::tool;
 
 const DEFAULT_LIST_LIMIT: usize = 100;
 const MAX_LIST_LIMIT: usize = 200;
@@ -310,7 +312,7 @@ impl MemoryPlugin {
         Principal {
             user_id: self.node_id.clone(),
             project_id: Some(ctx.workspace.to_string_lossy().to_string()),
-            agent_id: Some("main".to_string()),
+            agent_id: Some(ctx.agent_id.clone()),
             run_id: Some(ctx.run_id.clone()),
         }
     }
@@ -643,26 +645,6 @@ impl Plugin for MemoryPlugin {
     }
 }
 
-fn tool(
-    id: &str,
-    description: &str,
-    properties: Value,
-    required: Vec<&str>,
-    side_effect: SideEffect,
-) -> ToolDefinition {
-    ToolDefinition {
-        id: id.to_string(),
-        name: id.to_string(),
-        description: description.to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        }),
-        side_effect,
-    }
-}
-
 #[async_trait]
 impl ToolPort for MemoryPlugin {
     fn definitions(&self) -> Vec<ToolDefinition> {
@@ -676,6 +658,7 @@ impl ToolPort for MemoryPlugin {
                 }),
                 vec!["query"],
                 SideEffect::None,
+                vec![ToolCapability::MemoryRead],
             ),
             tool(
                 "memory_write",
@@ -691,6 +674,7 @@ impl ToolPort for MemoryPlugin {
                 }),
                 vec!["fact", "scope"],
                 SideEffect::Reversible,
+                vec![ToolCapability::MemoryWrite],
             ),
         ]
     }
