@@ -71,7 +71,11 @@ impl SandboxPort for FsSandboxPlugin {
         let suffix = joined
             .strip_prefix(ancestor)
             .map_err(|_| i18n::t("Failed to resolve path"))?;
-        Ok(canonical_ancestor.join(suffix))
+        if suffix.as_os_str().is_empty() {
+            Ok(canonical_ancestor)
+        } else {
+            Ok(canonical_ancestor.join(suffix))
+        }
     }
 
     async fn exec(
@@ -274,6 +278,16 @@ mod tests {
         let sandbox = FsSandboxPlugin;
         let resolved = sandbox.resolve_path(&ws, "src/main.rs").unwrap();
         assert!(resolved.starts_with(ws.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn existing_file_keeps_its_name_without_a_trailing_separator() {
+        let ws = temp_ws("existing");
+        fs::write(ws.join("large.txt"), "x").unwrap();
+        let sandbox = FsSandboxPlugin;
+        let resolved = sandbox.resolve_path(&ws, "large.txt").unwrap();
+        assert!(resolved.is_file(), "resolved path must point at the file");
+        assert_eq!(resolved.file_name().unwrap(), "large.txt");
     }
 
     #[tokio::test]

@@ -36,6 +36,14 @@ pub fn create_session(
 }
 
 #[tauri::command]
+pub fn delete_session(
+    state: State<'_, AppStateHandle>,
+    session_id: String,
+) -> Result<bool, String> {
+    state.0.delete_session(&session_id)
+}
+
+#[tauri::command]
 pub fn get_session(
     state: State<'_, AppStateHandle>,
     session_id: String,

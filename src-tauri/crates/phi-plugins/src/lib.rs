@@ -1,7 +1,12 @@
 //! Built-in plugin implementations (the official distribution baseline).
 
 pub mod approver;
+pub mod assets;
+pub mod auxiliary;
 pub mod context;
+pub mod decision;
+pub mod image;
+pub mod json_store;
 pub mod loop_plugin;
 pub mod memory;
 pub mod model_catalog;

@@ -172,10 +172,15 @@ const CLOSING_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const RULE = /^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/;
 const LIST_MARKER = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
-// A top-level line that opens a block-level HTML element. Lines that do not
-// use one of these tags stay ordinary text.
-const HTML_BLOCK_START =
-  /^\s{0,3}<(?:html|body|section|div|article|header|footer|main|aside|nav|table|ul|ol|dl|details|figure|blockquote|pre|h[1-6]|p|hr)(?=[\s>/])/i;
+// A top-level line that starts with a complete HTML tag opens a block-level
+// HTML block: any tag, not only the block-level ones. This keeps inline-shaped
+// markup such as `<span class="ui-badge">` from leaking into the prose as
+// source text. A line such as `<https://…>` is not a tag and stays text.
+const HTML_BLOCK_START = /^\s{0,3}<(?:!--|\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>)/;
+
+export function startsHtmlBlock(line: string): boolean {
+  return HTML_BLOCK_START.test(line);
+}
 
 function leadingSpaces(line: string): number {
   const match = line.match(/^ */);

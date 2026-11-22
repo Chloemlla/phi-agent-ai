@@ -19,17 +19,22 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   padding: var(--sp-3);
   min-height: 0;
 }
 
-.new-session {
-  justify-content: center;
+.side-head {
+  display: flex;
+  min-height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-left: var(--sp-2);
 }
 
 .side-label {
-  padding: 0 var(--sp-2);
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -37,80 +42,195 @@
   color: var(--text-muted);
 }
 
-.session-list {
+.side-new {
+  width: 26px;
+  height: 26px;
+  margin-right: -2px;
+}
+
+.side-new:disabled {
+  opacity: 0.5;
+}
+
+/* The custom scrollbar mirrors this host; native chrome is suppressed so the
+   bar never takes layout width. */
+.side-scroll-shell {
+  position: relative;
   flex: 1;
+  min-height: 0;
+}
+
+.session-list {
+  height: 100%;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
+  padding-right: 8px;
+  scrollbar-width: none;
 }
 
-.session-empty {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--text-muted);
+.session-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
-.session {
+.session-row {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 7px 10px;
-  border: 1px solid transparent;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--r-sm);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.session-row:hover {
+  background: var(--bg-subtle);
+}
+
+.session-row.active {
+  background: var(--accent-soft);
+}
+
+.session-row .alt-trigger {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-select {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  padding: 5px 4px 5px 10px;
   border-radius: var(--r-sm);
   text-align: left;
-  transition:
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-
-.session:hover {
-  background: var(--bg-subtle);
-}
-
-.session.active {
-  background: var(--bg-subtle);
-  border-color: var(--border-softer);
-}
-
-.session.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 9px;
-  bottom: 9px;
-  width: 2px;
-  border-radius: 99px;
-  background: var(--accent);
 }
 
 .session-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
+  line-height: 1.4;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.session-meta {
+/* Secondary action: quiet until the row receives attention. */
+.session-delete {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  margin-right: 3px;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.session-row:hover .session-delete,
+.session-row:focus-within .session-delete,
+.session-delete:focus-visible {
+  opacity: 1;
+}
+
+.session-delete:hover:not(:disabled),
+.session-delete.confirm {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+  opacity: 1;
+}
+
+.session-delete:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+@media (pointer: coarse) {
+  .session-delete {
+    opacity: 1;
+  }
+}
+
+/* ---- hover bubble content ---- */
+.alt-session {
   display: flex;
+  min-width: 210px;
+  max-width: 320px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.alt-session-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.alt-session-row {
+  display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
+  font-size: 11.5px;
 }
 
-.session-time {
-  margin-left: auto;
-  font-size: 10.5px;
+.alt-session-row svg {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.alt-session-row code {
   color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.alt-session-exact {
+  margin-left: auto;
+  padding-left: var(--sp-2);
+  color: var(--text-faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.alt-session-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.alt-session-dot[data-tone="live"] {
+  background: var(--accent);
+}
+
+.alt-session-dot[data-tone="ok"] {
+  background: var(--ok);
+}
+
+.alt-session-dot[data-tone="warn"] {
+  background: var(--warn);
+}
+
+/* Failure is squared so the state is not signalled by colour alone. */
+.alt-session-dot[data-tone="danger"] {
+  border-radius: 1.5px;
+  background: var(--danger);
 }
 
 .sidebar-foot {

@@ -30,7 +30,7 @@ Most agents make you choose between convenience and control. phi-agent refuses t
 |---|:---:|:---:|:---:|
 | Your data stays on your device | — | Partial | **Yes, by default** |
 | Works offline | — | Partial | **Yes** (except remote model calls) |
-| Can read, edit, and run commands | Sometimes | Mostly edits | **Yes, with approval** |
+| Can read, edit, and run commands | Sometimes | Mostly edits | **Yes — safe actions run, the rest asks** |
 | Every run is saved and reviewable | Rarely | — | **Yes, by default** |
 | Bring your own model | — | — | **Yes** |
 | Continue a task on another device | — | — | **Planned** |
@@ -41,20 +41,20 @@ Most agents make you choose between convenience and control. phi-agent refuses t
 *“Find out why the build is flaky and fix it.”*
 
 **2. Approve what matters.**
-Reading your workspace is automatic. Writing files and running shell commands ask first — and the approval is tied to the exact command and arguments.
+Reading and editing your workspace are automatic — every write keeps a backup of the previous content. Read-only shell commands and project verification commands (test, build, lint) also run automatically. Anything else asks first, and the approval is tied to the exact command and arguments.
 
 **3. Watch it work.**
 Messages, tool calls, approval requests, and results appear in the conversation as each step completes. The whole run stays in your session, so you can look back at what happened.
 
 **4. Take it back.**
-Cancel at any time. The agent keeps working until the task is done or you stop it; steps and token usage are shown live. If the app closes mid-task, the run is marked for review instead of being silently retried.
+Cancel at any time. The agent keeps working until the task is done or you stop it; context usage, speed and cache hits are one click away. If the app closes mid-task, the run is marked for review instead of being silently retried.
 
 ## Built for people who own their tools
 
 | | |
 |---|---|
 | 🔒 **Local-first**<br>Sessions and API keys stay on your machine. | 🧾 **Recorded**<br>Every run is saved and can be reviewed later. |
-| 🛑 **Human approval**<br>Writes and commands wait for your explicit OK. | 📊 **Visible usage**<br>Steps and token usage are shown live for every run. |
+| 🛑 **Human approval**<br>Commands outside the safe whitelist wait for your explicit OK. | 📊 **Usage on demand**<br>Context composition, speed and cache hits live in the context meter. |
 | 🧠 **Bring your own model**<br>Use your own Anthropic- or OpenAI-compatible model endpoints and keys. | 🔁 **Crash-safe**<br>Interrupted work is marked for review, never auto-retried. |
 | 🖥️ **One workspace, one boundary**<br>File tools stay inside the folder you choose. | 🛰️ **Multi-device**<br>Continue a task from another device — on the roadmap. |
 
@@ -70,9 +70,9 @@ Without a provider, a run fails with a clear message instead of inventing output
 
 When prose is not the best shape for an answer, the agent can put a small, working interface directly in its reply — a checklist you can tick, a plan with progress, a filterable set of metrics, a chart, or a short form that sends your choices back. It renders inside the message flow and styled to match the rest of the app.
 
-The controls are real HTML: sliders, choices, checklists, steppers, collapsible details and tables. Their state stays in the page while you explore; nothing is sent to you or the model until you press a send button or submit the form. Charts are drawn from ordinary tables in the reply.
+The answer can lay out its own page: columns, grids, panels, figures with captioned images and inline diagrams that follow a slider or another control. Controls are real HTML: sliders, choices, checklists, steppers, collapsible details and tables. Their state stays in the page while you explore; nothing is sent to you or the model until you press a send button or submit the form. Charts are drawn from ordinary tables in the reply.
 
-Nothing model-written runs: executable scripts, styles, iframes and event handlers are removed, and every visible element is rebuilt from a fixed allowlist. Links open in your browser; images must use https URLs from the conversation.
+Nothing model-written runs: in the normal answer, executable scripts, styles, iframes and event handlers are removed, and every visible element is rebuilt from a fixed allowlist. A rich visual block may use custom HTML/CSS, but it renders in a script-disabled sandbox with no network except https images. Links open in your browser; images must use https URLs from the conversation.
 
 ## Memory you can inspect
 
@@ -108,9 +108,10 @@ On first launch, phi-agent creates a `phi-workspace` folder in your Documents di
 Giving an agent the ability to edit files and run commands is serious. phi-agent treats it that way:
 
 - **Deny by default.** Unknown tools and paths outside the workspace are refused.
+- **Safe actions have a whitelist.** Workspace writes are backed up and run automatically. Read-only commands and project verification commands (test, build, lint, typecheck) are recognized as safe. Everything else asks.
 - **Approval is bound to the action.** Your OK applies to the exact tool, workspace, and normalized arguments. Change an argument — or the file you approved — and the approval no longer matches.
 - **File tools stay in the workspace.** The folder you choose is the boundary for reading and writing files.
-- **Shell commands use your permissions.** Command execution is not sandboxed like a virtual machine, so the approval prompt is the real safety boundary. Read it before you approve.
+- **Shell commands use your permissions.** Command execution is not sandboxed like a virtual machine. The whitelist is deliberately narrow; for every other command the approval prompt is the real safety boundary. Read it before you approve.
 - **Cancellation is real.** Commands that may have already had an effect are marked “outcome unknown” instead of pretending otherwise.
 - **Usage is visible.** Every model call records its input and output tokens in the session; there is no hidden pricing or meter. Stop any run with Cancel.
 
@@ -138,7 +139,7 @@ The app itself runs offline. Model calls need a provider; point one at a local O
 <details>
 <summary><b>Is it sandboxed like a virtual machine?</b></summary>
 
-Not yet. File tools are confined to the workspace folder, but shell commands run with your own user permissions. Treat the approval prompt and your workspace choice as the real boundary.
+Not yet. File tools are confined to the workspace folder, but shell commands run with your own user permissions. The safe-command whitelist covers read-only and project-verification commands; treat the approval prompt and your workspace choice as the real boundary for everything else.
 </details>
 
 <details>

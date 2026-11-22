@@ -1,0 +1,238 @@
+/* ─────────────────────────── activity rows ─────────────────────────── */
+
+/* One rail joins a run of thinking/tool rows. The line sits at the centre of
+   the 14px status slot; first/last rows stop at the dot centre (10px) so the
+   line never dangles past the cluster. */
+.activity-row {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--r-sm);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.activity-row:hover {
+  background: var(--bg-subtle);
+}
+
+.activity-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 7px;
+  width: 1.5px;
+  background: var(--accent-border);
+}
+
+.activity-row[data-rail="none"]::before,
+.activity-row[data-rail="only"]::before {
+  display: none;
+}
+
+.activity-row[data-rail="start"]::before {
+  top: 10px;
+}
+
+.activity-row[data-rail="end"]::before {
+  bottom: calc(100% - 10px);
+}
+
+.activity-trigger {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 3px 6px 3px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.activity-status {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 3px;
+  place-items: center;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 3px var(--bg-app);
+}
+
+.status-dot[data-tone="ok"] {
+  background: var(--ok);
+}
+
+.status-dot[data-tone="live"],
+.status-dot[data-tone="warn"] {
+  background: var(--accent);
+}
+
+.status-dot[data-tone="warn"] {
+  background: var(--warn);
+}
+
+/* Failure is squared so the state is not signalled by colour alone. */
+.status-dot[data-tone="danger"] {
+  border-radius: 2px;
+  background: var(--danger);
+}
+
+.activity-label {
+  min-width: 0;
+  padding-top: 1px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.activity-badge {
+  flex: none;
+  padding-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.activity-badge[data-tone="danger"] {
+  color: var(--danger-ink);
+}
+
+.activity-chevron {
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  margin-left: auto;
+  padding-top: 3px;
+  color: var(--text-muted);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.activity-chevron.open {
+  transform: rotate(90deg);
+}
+
+.activity-detail-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows var(--dur-med) var(--ease),
+    opacity var(--dur-fast) var(--ease),
+    visibility var(--dur-med) var(--ease);
+}
+
+.activity-detail-wrap.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+
+.activity-detail-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.activity-detail {
+  display: flex;
+  min-width: 0;
+  margin: 2px 0 7px 21px;
+  padding-left: 10px;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border-left: 1px solid var(--border-soft);
+}
+
+.activity-group-detail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tool-detail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.detail-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.detail-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.detail-pre {
+  max-height: 240px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.detail-pre.error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+.detail-note {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* Copy is a secondary action: quiet until the detail is inspected. */
+.detail-copy {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.activity-detail:hover .detail-copy,
+.detail-copy:focus-visible {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .detail-copy {
+    opacity: 1;
+  }
+}

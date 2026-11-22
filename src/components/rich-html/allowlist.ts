@@ -123,6 +123,9 @@ export const DROPPED_TAGS = new Set([
 
 /** Host-styled component vocabulary. Any other class token is discarded. */
 export const ALLOWED_CLASSES = new Set([
+  "ui-col",
+  "ui-row",
+  "ui-box",
   "ui-grid",
   "ui-split",
   "ui-card",
@@ -138,10 +141,103 @@ export const ALLOWED_CLASSES = new Set([
   "ui-kv",
   "ui-chart",
   "ui-chips",
+  "ui-spacer",
+  "ui-divider",
+  "ui-figure",
+  "ui-caption",
+  "ui-carousel",
+  "ui-icon",
   "ui-muted",
   "ui-num",
   "ui-clickable",
 ]);
+
+/** Layout attributes: a token-sized subset of flex/grid control for the model.
+ * They stay on the element only when their value is in the matching set. */
+export const UI_STEPS = new Set(["0", "1", "2", "3", "4", "5", "6"]);
+export const UI_COLUMNS = new Set(["1", "2", "3", "4", "5", "6"]);
+export const UI_ALIGN = new Set(["start", "center", "end", "stretch"]);
+export const UI_JUSTIFY = new Set(["start", "center", "end", "between"]);
+export const UI_TONES = new Set([
+  "ink",
+  "muted",
+  "faint",
+  "accent",
+  "info",
+  "ok",
+  "warn",
+  "danger",
+  "purple",
+  "pink",
+  "chart1",
+  "chart2",
+  "chart3",
+  "chart4",
+  "chart5",
+  "chart6",
+  "chart7",
+  "chart8",
+]);
+export const UI_BACKGROUNDS = new Set([
+  "soft",
+  "surface",
+  "inset",
+  "info",
+  "ok",
+  "warn",
+  "danger",
+  "accent",
+]);
+export const UI_RADII = new Set(["sm", "md", "lg", "xl", "full"]);
+export const UI_SIZES = new Set(["xs", "sm", "md", "lg", "xl", "2xl"]);
+export const UI_WEIGHTS = new Set(["normal", "medium", "semibold"]);
+export const UI_TEXT_ALIGN = new Set(["left", "center", "right"]);
+export const UI_FLEX = new Set(["1", "2", "3", "4"]);
+export const UI_DIRECTIONS = new Set(["row", "col"]);
+
+export const UI_ATTR_VALUES: Record<string, Set<string>> = {
+  "data-gap": UI_STEPS,
+  "data-pad": UI_STEPS,
+  "data-cols": UI_COLUMNS,
+  "data-align": UI_ALIGN,
+  "data-justify": UI_JUSTIFY,
+  "data-tone": UI_TONES,
+  "data-bg": UI_BACKGROUNDS,
+  "data-radius": UI_RADII,
+  "data-size": UI_SIZES,
+  "data-weight": UI_WEIGHTS,
+  "data-text-align": UI_TEXT_ALIGN,
+  "data-width": new Set(["full", "auto"]),
+  "data-flex": UI_FLEX,
+  "data-dir": UI_DIRECTIONS,
+  "data-fit": new Set(["cover", "contain"]),
+  "data-item": new Set(["sm", "md", "lg"]),
+};
+
+/** SVG presentation colors that resolve to host theme tokens. */
+export const SVG_COLOR_TOKENS: Record<string, string> = {
+  ink: "var(--text-primary)",
+  muted: "var(--text-secondary)",
+  faint: "var(--text-muted)",
+  surface: "var(--bg-subtle)",
+  accent: "var(--accent)",
+  info: "var(--accent)",
+  ok: "var(--ok)",
+  success: "var(--ok)",
+  warn: "var(--warn)",
+  warning: "var(--warn)",
+  danger: "var(--danger)",
+  purple: "var(--chart-7)",
+  pink: "var(--chart-5)",
+  chart1: "var(--chart-1)",
+  chart2: "var(--chart-2)",
+  chart3: "var(--chart-3)",
+  chart4: "var(--chart-4)",
+  chart5: "var(--chart-5)",
+  chart6: "var(--chart-6)",
+  chart7: "var(--chart-7)",
+  chart8: "var(--chart-8)",
+};
 
 export const SVG_TAGS = new Set([
   "svg",

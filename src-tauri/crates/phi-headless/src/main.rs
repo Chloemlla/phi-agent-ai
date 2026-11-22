@@ -11,6 +11,9 @@ use std::time::Duration;
 
 use phi_adapters::control;
 use phi_adapters::jsonl_sink::{JsonlEventSink, JsonlStreamSink};
+use phi_contracts::auxiliary::{
+    AuxiliaryRoleInput, DecisionConfigInput, ImageConfigInput, ImageRequest,
+};
 use phi_contracts::memory::{
     ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryEpisodeInput, MemoryListFilter,
     MemoryQuery,
@@ -71,8 +74,37 @@ enum Command {
     Run(RunArgs),
     SessionsList,
     SessionsShow(String),
+    SessionsDelete(String),
     AgentsList(String),
     AgentsShow(String),
+    ImageConfigure(ImageConfigInput),
+    ImageShow,
+    ImageGenerate {
+        prompt: String,
+        session_id: Option<String>,
+        size: Option<String>,
+        count: u32,
+        out: Option<PathBuf>,
+    },
+    ImageList {
+        session_id: Option<String>,
+    },
+    ImageDelete(String),
+    DecisionConfigure(DecisionConfigInput),
+    DecisionShow,
+    DecisionTest {
+        state: String,
+    },
+    RolesList,
+    RolesSet {
+        role: String,
+        input: AuxiliaryRoleInput,
+    },
+    RolesClear(String),
+    MemoryMaintain {
+        project_id: Option<String>,
+        dry_run: bool,
+    },
     Approve {
         id: String,
         approved: bool,
@@ -167,6 +199,16 @@ async fn execute(global: GlobalOptions, command: Command) -> Result<i32, String>
             print_json(&node.get_session(&id)?)?;
             Ok(0)
         }
+        Command::SessionsDelete(id) => {
+            let node = open_node(&global, true)?;
+            let deleted = node.delete_session(&id)?;
+            print_json(&serde_json::json!({
+                "type": "session-deleted",
+                "sessionId": id,
+                "deleted": deleted,
+            }))?;
+            Ok(0)
+        }
         Command::AgentsList(session_id) => {
             let node = open_node(&global, false)?;
             print_json(&serde_json::json!({
@@ -185,6 +227,146 @@ async fn execute(global: GlobalOptions, command: Command) -> Result<i32, String>
                 "agent": agent,
                 "messages": messages,
             }))?;
+            Ok(0)
+        }
+        Command::ImageConfigure(input) => {
+            let node = open_node(&global, true)?;
+            print_json(&node.configure_image(input)?)?;
+            Ok(0)
+        }
+        Command::ImageShow => {
+            let node = open_node(&global, false)?;
+            print_json(&node.image_status())?;
+            Ok(0)
+        }
+        Command::ImageGenerate {
+            prompt,
+            session_id,
+            size,
+            count,
+            out,
+        } => {
+            let node = open_node(&global, true)?;
+            let response = node
+                .generate_images(
+                    session_id.as_deref(),
+                    ImageRequest {
+                        prompt,
+                        size,
+                        count,
+                        reference_assets: Vec::new(),
+                    },
+                )
+                .await?;
+            let mut written = Vec::new();
+            if let Some(out) = out {
+                for (index, asset) in response.assets.iter().enumerate() {
+                    let path = if response.assets.len() == 1 {
+                        out.clone()
+                    } else {
+                        let stem = out
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .unwrap_or("image");
+                        let extension = out
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .unwrap_or_else(|| match asset.mime.as_str() {
+                                "image/jpeg" => "jpg",
+                                "image/webp" => "webp",
+                                "image/gif" => "gif",
+                                "image/svg+xml" => "svg",
+                                _ => "png",
+                            });
+                        out.with_file_name(format!("{stem}-{}{extension}", index + 1))
+                    };
+                    let bytes = node.image_asset_bytes(&asset.asset_id)?;
+                    std::fs::write(&path, bytes).map_err(|error| {
+                        i18n::t_args(
+                            "Failed to write image: {error}",
+                            &[("error", error.to_string())],
+                        )
+                    })?;
+                    written.push(path.to_string_lossy().to_string());
+                }
+            }
+            print_json(&serde_json::json!({
+                "type": "image",
+                "assets": response.assets,
+                "written": written,
+            }))?;
+            Ok(0)
+        }
+        Command::ImageList { session_id } => {
+            let node = open_node(&global, false)?;
+            print_json(&serde_json::json!({
+                "type": "images",
+                "sessionId": session_id,
+                "assets": node.image_assets(session_id.as_deref()),
+            }))?;
+            Ok(0)
+        }
+        Command::ImageDelete(asset_id) => {
+            let node = open_node(&global, true)?;
+            let deleted = node.delete_image_asset(&asset_id)?;
+            print_json(&serde_json::json!({
+                "type": "image_deleted",
+                "assetId": asset_id,
+                "deleted": deleted,
+            }))?;
+            Ok(0)
+        }
+        Command::DecisionConfigure(input) => {
+            let node = open_node(&global, true)?;
+            print_json(&node.configure_decision(input)?)?;
+            Ok(0)
+        }
+        Command::DecisionShow => {
+            let node = open_node(&global, false)?;
+            print_json(&node.decision_status())?;
+            Ok(0)
+        }
+        Command::DecisionTest { state } => {
+            let node = open_node(&global, true)?;
+            print_json(&node.test_decision(&state).await?)?;
+            Ok(0)
+        }
+        Command::RolesList => {
+            let node = open_node(&global, false)?;
+            print_json(&serde_json::json!({
+                "type": "roles",
+                "roles": node.auxiliary_roles(),
+            }))?;
+            Ok(0)
+        }
+        Command::RolesSet { role, input } => {
+            let node = open_node(&global, true)?;
+            print_json(&node.set_auxiliary_role(&role, input)?)?;
+            Ok(0)
+        }
+        Command::RolesClear(role) => {
+            let node = open_node(&global, true)?;
+            let removed = node.clear_auxiliary_role(&role)?;
+            print_json(&serde_json::json!({
+                "type": "role_cleared",
+                "role": role,
+                "removed": removed,
+            }))?;
+            Ok(0)
+        }
+        Command::MemoryMaintain {
+            project_id,
+            dry_run,
+        } => {
+            let node = open_node(&global, true)?;
+            let report = node
+                .maintain_memory(
+                    project_id.as_deref(),
+                    dry_run,
+                    if dry_run { "cli dry-run" } else { "cli" },
+                )
+                .await?;
+            print_json(&report)?;
             Ok(0)
         }
         Command::Approve { id, approved, note } => {
@@ -477,12 +659,14 @@ async fn run(global: GlobalOptions, args: RunArgs) -> Result<i32, String> {
     let result = wait_for_terminal(&node, &session_id, &run_id).await;
     worker.abort();
     let run = result?;
+    let auxiliary = node.settle_auxiliary(&session_id).await;
 
     print_json(&serde_json::json!({
         "type": "result",
         "sessionId": session_id,
         "runId": run_id,
         "run": run,
+        "auxiliary": auxiliary,
     }))?;
     eprintln!(
         "[phi-headless] run {} {} steps={} tokens_in={} tokens_out={}{}",
@@ -676,6 +860,7 @@ fn parse_cli(raw: Vec<String>) -> Result<(GlobalOptions, Command), String> {
         "sessions" => match rest.first().map(String::as_str) {
             Some("list") | Some("ls") | None => Command::SessionsList,
             Some("show") => Command::SessionsShow(parse_id(rest, 1)?),
+            Some("delete") | Some("rm") => Command::SessionsDelete(parse_id(rest, 1)?),
             Some(other) => {
                 return Err(i18n::t_args(
                     "Unknown sessions subcommand: {command}",
@@ -698,6 +883,9 @@ fn parse_cli(raw: Vec<String>) -> Result<(GlobalOptions, Command), String> {
                 ));
             }
         },
+        "image" => parse_image(rest)?,
+        "decision" => parse_decision(rest)?,
+        "roles" => parse_roles(rest)?,
         "approve" => parse_approve(rest)?,
         "cancel" => Command::Cancel(parse_id(rest, 0)?),
         "status" => Command::Status(parse_id(rest, 0)?),
@@ -853,6 +1041,282 @@ fn optional_id(rest: &[String]) -> Result<Option<String>, String> {
 
 // ─────────────────────────── memory parsing ───────────────────────────
 
+fn parse_image(rest: &[String]) -> Result<Command, String> {
+    let Some(sub) = rest.first().map(String::as_str) else {
+        return Err(i18n::t(
+            "image requires a subcommand: configure, show, generate, list or delete",
+        ));
+    };
+    let args = &rest[1..];
+    match sub {
+        "configure" => {
+            let mut input = ImageConfigInput {
+                enabled: true,
+                format: "png".to_string(),
+                ..Default::default()
+            };
+            let mut index = 0;
+            while index < args.len() {
+                if let Some(value) = take_flag(args, &mut index, "--provider")? {
+                    input.provider = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--base-url")? {
+                    input.base_url = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--model")? {
+                    input.model = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--api-key")? {
+                    input.api_key = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--size")? {
+                    input.size = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--quality")? {
+                    input.quality = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--format")? {
+                    input.format = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--max-per-turn")? {
+                    input.max_per_turn = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[("flag", "--max-per-turn".to_string()), ("value", value)],
+                        )
+                    })?;
+                } else if let Some(value) = take_flag(args, &mut index, "--max-bytes")? {
+                    input.max_bytes = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[("flag", "--max-bytes".to_string()), ("value", value)],
+                        )
+                    })?;
+                } else if args[index] == "--grant-egress" {
+                    input.egress_granted = true;
+                    index += 1;
+                } else if args[index] == "--disabled" {
+                    input.enabled = false;
+                    index += 1;
+                } else {
+                    return Err(i18n::t_args(
+                        "Unknown argument: {arg}",
+                        &[("arg", args[index].clone())],
+                    ));
+                }
+            }
+            Ok(Command::ImageConfigure(input))
+        }
+        "show" => Ok(Command::ImageShow),
+        "generate" => {
+            let mut prompt = None;
+            let mut session_id = None;
+            let mut size = None;
+            let mut count = 1;
+            let mut out = None;
+            let mut index = 0;
+            while index < args.len() {
+                if let Some(value) = take_flag(args, &mut index, "--prompt")? {
+                    prompt = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--session")? {
+                    session_id = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--size")? {
+                    size = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--count")? {
+                    count = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[("flag", "--count".to_string()), ("value", value)],
+                        )
+                    })?;
+                } else if let Some(value) = take_flag(args, &mut index, "--out")? {
+                    out = Some(PathBuf::from(value));
+                } else {
+                    return Err(i18n::t_args(
+                        "Unknown argument: {arg}",
+                        &[("arg", args[index].clone())],
+                    ));
+                }
+            }
+            Ok(Command::ImageGenerate {
+                prompt: prompt.ok_or_else(|| i18n::t("--prompt is required"))?,
+                session_id,
+                size,
+                count,
+                out,
+            })
+        }
+        "list" => {
+            let mut session_id = None;
+            let mut index = 0;
+            while index < args.len() {
+                if let Some(value) = take_flag(args, &mut index, "--session")? {
+                    session_id = Some(value);
+                } else {
+                    return Err(i18n::t_args(
+                        "Unknown argument: {arg}",
+                        &[("arg", args[index].clone())],
+                    ));
+                }
+            }
+            Ok(Command::ImageList { session_id })
+        }
+        "delete" => Ok(Command::ImageDelete(parse_id(args, 0)?)),
+        other => Err(i18n::t_args(
+            "Unknown image subcommand: {command}",
+            &[("command", other.to_string())],
+        )),
+    }
+}
+
+fn parse_decision(rest: &[String]) -> Result<Command, String> {
+    let Some(sub) = rest.first().map(String::as_str) else {
+        return Err(i18n::t(
+            "decision requires a subcommand: configure, show or test",
+        ));
+    };
+    let args = &rest[1..];
+    match sub {
+        "configure" => {
+            let mut input = DecisionConfigInput {
+                enabled: true,
+                timeout_ms: 8_000,
+                triage_threshold: 0.92,
+                triage_tools: vec!["fs_write".to_string()],
+                compaction_threshold: 0.8,
+                compaction_min_chars: 8_000,
+                ..Default::default()
+            };
+            let mut custom_tools = false;
+            let mut index = 0;
+            while index < args.len() {
+                if let Some(value) = take_flag(args, &mut index, "--endpoint")? {
+                    input.endpoint = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--model")? {
+                    input.model = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--api-key")? {
+                    input.api_key = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--timeout-ms")? {
+                    input.timeout_ms = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[("flag", "--timeout-ms".to_string()), ("value", value)],
+                        )
+                    })?;
+                } else if let Some(value) = take_flag(args, &mut index, "--triage-threshold")? {
+                    input.triage_threshold = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[("flag", "--triage-threshold".to_string()), ("value", value)],
+                        )
+                    })?;
+                } else if let Some(value) = take_flag(args, &mut index, "--triage-tool")? {
+                    if !custom_tools {
+                        input.triage_tools.clear();
+                        custom_tools = true;
+                    }
+                    input.triage_tools.push(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--compaction-threshold")? {
+                    input.compaction_threshold = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[
+                                ("flag", "--compaction-threshold".to_string()),
+                                ("value", value),
+                            ],
+                        )
+                    })?;
+                } else if let Some(value) = take_flag(args, &mut index, "--compaction-min-chars")? {
+                    input.compaction_min_chars = value.parse().map_err(|_| {
+                        i18n::t_args(
+                            "Invalid number for {flag}: {value}",
+                            &[
+                                ("flag", "--compaction-min-chars".to_string()),
+                                ("value", value),
+                            ],
+                        )
+                    })?;
+                } else if args[index] == "--triage" {
+                    input.triage_enabled = true;
+                    index += 1;
+                } else if args[index] == "--compaction" {
+                    input.compaction_enabled = true;
+                    index += 1;
+                } else if args[index] == "--grant-egress" {
+                    input.egress_granted = true;
+                    index += 1;
+                } else if args[index] == "--disabled" {
+                    input.enabled = false;
+                    index += 1;
+                } else {
+                    return Err(i18n::t_args(
+                        "Unknown argument: {arg}",
+                        &[("arg", args[index].clone())],
+                    ));
+                }
+            }
+            Ok(Command::DecisionConfigure(input))
+        }
+        "show" => Ok(Command::DecisionShow),
+        "test" => {
+            let mut state = None;
+            let mut index = 0;
+            while index < args.len() {
+                if let Some(value) = take_flag(args, &mut index, "--state")? {
+                    state = Some(value);
+                } else {
+                    return Err(i18n::t_args(
+                        "Unknown argument: {arg}",
+                        &[("arg", args[index].clone())],
+                    ));
+                }
+            }
+            Ok(Command::DecisionTest {
+                state: state.ok_or_else(|| i18n::t("--state is required"))?,
+            })
+        }
+        other => Err(i18n::t_args(
+            "Unknown decision subcommand: {command}",
+            &[("command", other.to_string())],
+        )),
+    }
+}
+
+fn parse_roles(rest: &[String]) -> Result<Command, String> {
+    let Some(sub) = rest.first().map(String::as_str) else {
+        return Err(i18n::t("roles requires a subcommand: list, set or clear"));
+    };
+    let args = &rest[1..];
+    match sub {
+        "list" => Ok(Command::RolesList),
+        "set" => {
+            let role = args
+                .first()
+                .filter(|value| !value.starts_with('-'))
+                .cloned()
+                .ok_or_else(|| i18n::t("roles set requires a role name"))?;
+            let mut input = AuxiliaryRoleInput::default();
+            let mut index = usize::from(!args.is_empty());
+            while index < args.len() {
+                if let Some(value) = take_flag(args, &mut index, "--provider")? {
+                    input.provider_id = Some(value);
+                } else if let Some(value) = take_flag(args, &mut index, "--model")? {
+                    input.model = value;
+                } else if let Some(value) = take_flag(args, &mut index, "--thinking")? {
+                    input.thinking = Some(value);
+                } else if args[index] == "--grant-egress" {
+                    input.egress_granted = true;
+                    index += 1;
+                } else {
+                    return Err(i18n::t_args(
+                        "Unknown argument: {arg}",
+                        &[("arg", args[index].clone())],
+                    ));
+                }
+            }
+            Ok(Command::RolesSet { role, input })
+        }
+        "clear" => Ok(Command::RolesClear(parse_id(args, 0)?)),
+        other => Err(i18n::t_args(
+            "Unknown roles subcommand: {command}",
+            &[("command", other.to_string())],
+        )),
+    }
+}
+
 fn parse_memory(rest: &[String]) -> Result<Command, String> {
     let Some(sub) = rest.first().map(String::as_str) else {
         return Ok(Command::MemoryList(MemoryListFilter::default()));
@@ -871,12 +1335,39 @@ fn parse_memory(rest: &[String]) -> Result<Command, String> {
         "correct" | "fix" => parse_memory_correct(args),
         "supersede" | "replace" => parse_memory_supersede(args),
         "forget" | "delete" => parse_memory_forget(args),
+        "maintain" | "maintenance" => parse_memory_maintain(args),
         "stats" => Ok(Command::MemoryStats),
         other => Err(i18n::t_args(
             "Unknown memory subcommand: {command}",
             &[("command", other.to_string())],
         )),
     }
+}
+
+fn parse_memory_maintain(args: &[String]) -> Result<Command, String> {
+    let mut dry_run = true;
+    let mut project_id = None;
+    let mut index = 0;
+    while index < args.len() {
+        if let Some(value) = take_flag(args, &mut index, "--project")? {
+            project_id = Some(value);
+        } else if args[index] == "--apply" {
+            dry_run = false;
+            index += 1;
+        } else if args[index] == "--dry-run" {
+            dry_run = true;
+            index += 1;
+        } else {
+            return Err(i18n::t_args(
+                "Unknown argument: {arg}",
+                &[("arg", args[index].clone())],
+            ));
+        }
+    }
+    Ok(Command::MemoryMaintain {
+        project_id,
+        dry_run,
+    })
 }
 
 fn parse_memory_scope(raw: &str) -> Result<MemoryScope, String> {
@@ -1395,8 +1886,25 @@ Commands:
       [--approval deny|allow|prompt] [--no-stream] [--title TEXT]
   sessions list
   sessions show <id>
+  sessions delete <id>
   agents list <session-id>
   agents show <agent-id>
+  image configure --provider openai_images|gemini_images --base-url URL
+      --model MODEL [--api-key REF] [--size S] [--quality Q] [--format F]
+      [--max-per-turn N] [--max-bytes N] [--grant-egress] [--disabled]
+  image show
+  image generate --prompt TEXT [--session ID] [--size S] [--count N] [--out PATH]
+  image list [--session ID]
+  image delete <asset-id>
+  decision configure --endpoint URL --model MODEL [--api-key REF]
+      [--timeout-ms N] [--triage] [--triage-threshold F] [--triage-tool TOOL]...
+      [--compaction] [--compaction-threshold F] [--compaction-min-chars N]
+      [--grant-egress] [--disabled]
+  decision show
+  decision test --state TEXT
+  roles list
+  roles set <role> --model MODEL [--provider ID] [--thinking LEVEL] [--grant-egress]
+  roles clear <role>
   approve <id> --allow|--deny [--note TEXT]
   cancel <run-id>
   status <run-id>
@@ -1429,6 +1937,7 @@ Commands:
       [--source TRUST] [--confidence N] [--valid-from T] [--valid-to T]
   memory forget <id>... | --id ID | --scope SCOPE | --project ID | --run ID | --all
       [--reason TEXT]
+  memory maintain [--project ID] [--dry-run|--apply]
   memory stats
 
 Global options:

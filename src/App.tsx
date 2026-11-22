@@ -5,6 +5,7 @@ import {
   approve,
   cancelRun as cancelRunCommand,
   createSession,
+  deleteSession,
   getBootstrap,
   getSession,
   sendMessage,
@@ -14,7 +15,6 @@ import { errorText } from "./errors";
 import { pushToast } from "./toast";
 import { Conversation } from "./components/Conversation";
 import { Composer } from "./components/Composer";
-import { Runbar } from "./components/Runbar";
 import { Sidebar } from "./components/Sidebar";
 import { Titlebar } from "./components/Titlebar";
 import { Toasts } from "./components/Toasts";
@@ -40,6 +40,7 @@ function App() {
   const [input, setInput] = createSignal("");
   const [sidebarOpen, setSidebarOpen] = createSignal(false);
   const [creatingSession, setCreatingSession] = createSignal(false);
+  const [deletingSession, setDeletingSession] = createSignal<string | null>(null);
   const [view, setView] = createSignal<"chat" | "settings">("chat");
   const [narrow, setNarrow] = createSignal(
     typeof window !== "undefined" && window.innerWidth <= NARROW_QUERY,
@@ -272,6 +273,31 @@ function App() {
     }
   }
 
+  async function deleteCurrentSession(id: string) {
+    if (deletingSession()) return;
+    setDeletingSession(id);
+    try {
+      await deleteSession(id);
+      if (currentId() === id) {
+        stream.resetStream(null);
+        setCurrentId(null);
+        setDetail(null);
+      }
+      // Bootstrap re-projects the session list and picks the next session (or
+      // creates a fresh one when the last session was removed).
+      await refresh();
+    } catch (error) {
+      notifyError(error);
+    } finally {
+      setDeletingSession(null);
+    }
+  }
+
+  function stopCurrentRun() {
+    const run = currentRun();
+    if (run) void cancelRun(run.id);
+  }
+
   async function selectSession(id: string) {
     stream.resetStream(null);
     setCurrentId(id);
@@ -334,8 +360,11 @@ function App() {
             mode={boot()?.mode ?? ""}
             nodeId={boot()?.nodeId ?? ""}
             now={now()}
+            creating={creatingSession()}
+            deletingId={deletingSession()}
             onNew={handleNewSession}
             onSelect={handleSelectSession}
+            onDelete={(id) => void deleteCurrentSession(id)}
           />
           <main class="main" inert={drawerMode() && sidebarOpen() ? true : undefined}>
             <section class="conversation">
@@ -354,9 +383,6 @@ function App() {
               />
               <div class="dock-wrap">
                 <div class="dock">
-                  <Show when={currentRun()}>
-                    {(run) => <Runbar run={run()} now={now()} onCancel={cancelRun} />}
-                  </Show>
                   <Composer
                     value={input()}
                     disabled={composerDisabled()}
@@ -365,9 +391,11 @@ function App() {
                     provider={provider()}
                     fallbackModel={boot()?.model.model ?? provider()?.model ?? ""}
                     selection={selection()}
+                    usage={detail()?.session.contextUsage ?? null}
                     onModelChange={updateSelection}
                     onInput={setInput}
                     onSend={send}
+                    onStop={stopCurrentRun}
                   />
                 </div>
               </div>

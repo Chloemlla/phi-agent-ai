@@ -7,6 +7,7 @@ export type { AgentStatus } from "./AgentStatus";
 export type { AgentView } from "./AgentView";
 export type { Bootstrap } from "./Bootstrap";
 export type { ContentBlock } from "./ContentBlock";
+export type { ContextUsageView } from "./ContextUsageView";
 export type { ForgetReport } from "./ForgetReport";
 export type { MemoryAddOutcome } from "./MemoryAddOutcome";
 export type { MemoryHit } from "./MemoryHit";

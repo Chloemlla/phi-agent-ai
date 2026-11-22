@@ -327,6 +327,45 @@ fn scripted_response(request: &Value) -> Value {
         );
     }
 
+    // Session-title auxiliary call: the prompt starts with the first
+    // user/assistant exchange.
+    if lower.starts_with("user:") && lower.contains("assistant:") {
+        return message_response(
+            vec![json!({ "type": "text", "text": "Workspace inspection" })],
+            "end_turn",
+        );
+    }
+
+    // Memory-maintenance auxiliary call: merge the first two facts.
+    if lower.contains("active facts:") {
+        let value = maintenance_merge_response(&last_user_text);
+        return message_response(vec![json!({ "type": "text", "text": value })], "end_turn");
+    }
+
+    if lower.contains("draw an image") && last_tool_result.is_none() {
+        return message_response(
+            vec![json!({
+                "type": "tool_use",
+                "id": next_id(),
+                "name": "image_generate",
+                "input": { "prompt": "a red cube on a table", "count": 1 }
+            })],
+            "tool_use",
+        );
+    }
+
+    if lower.contains("read the large file") && last_tool_result.is_none() {
+        return message_response(
+            vec![json!({
+                "type": "tool_use",
+                "id": next_id(),
+                "name": "fs_read",
+                "input": { "path": "LARGE.txt" }
+            })],
+            "tool_use",
+        );
+    }
+
     if let Some(result) = last_tool_result.as_deref() {
         if result.contains("\"timedOut\":false") {
             return message_response(
@@ -480,6 +519,21 @@ fn scripted_response(request: &Value) -> Value {
         );
     }
 
+    if lower.contains("unsafe shell") {
+        // Not on the safe whitelist, so this call must go through approval (or
+        // decision triage when configured).
+        let command = if cfg!(windows) { "ver" } else { "uname -s" };
+        return message_response(
+            vec![json!({
+                "type": "tool_use",
+                "id": next_id(),
+                "name": "shell_exec",
+                "input": { "command": command, "timeout_secs": 30 }
+            })],
+            "tool_use",
+        );
+    }
+
     let (name, input) = if lower.contains("write") {
         (
             "fs_write",
@@ -518,6 +572,38 @@ fn extract_agent_id(result: &str) -> Option<String> {
         .get("agentId")
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn maintenance_merge_response(user: &str) -> String {
+    let Some(start) = user.find('[') else {
+        return json!({ "operations": [] }).to_string();
+    };
+    let Some(end) = user.rfind(']') else {
+        return json!({ "operations": [] }).to_string();
+    };
+    let facts: Vec<Value> = serde_json::from_str(&user[start..=end]).unwrap_or_default();
+    let ids: Vec<&str> = facts
+        .iter()
+        .filter_map(|fact| fact["id"].as_str())
+        .take(2)
+        .collect();
+    if ids.len() < 2 {
+        return json!({ "operations": [] }).to_string();
+    }
+    let fact = format!(
+        "Merged preference: {}; {}",
+        facts[0]["fact"].as_str().unwrap_or_default(),
+        facts[1]["fact"].as_str().unwrap_or_default()
+    );
+    json!({
+        "operations": [{
+            "op": "merge",
+            "ids": ids,
+            "fact": fact,
+            "reason": "the two facts describe the same preference"
+        }]
+    })
+    .to_string()
 }
 
 fn message_response(content: Vec<Value>, stop_reason: &str) -> Value {
@@ -673,25 +759,17 @@ fn inline_html_replies_are_journaled_and_prompted() {
 }
 
 #[test]
-fn write_approval_allow_creates_the_file() {
-    let env = TestEnv::new("allow");
+fn workspace_writes_run_without_approval() {
+    let env = TestEnv::new("write-auto");
     let _provider = env.with_scripted_provider();
-    env.run("write the demo file", &["--approval", "allow"]);
+    // Even --approval deny must not block a workspace write: the default
+    // policy allows it and the previous content is backed up.
+    let result = env.run("write the demo file", &["--approval", "deny"]);
+    assert_eq!(result["run"]["state"], "Succeeded");
     let path = env.workspace.join("PHI_DEMO.md");
-    assert!(path.is_file(), "approved write should create {path:?}");
+    assert!(path.is_file(), "workspace write should create {path:?}");
     let content = std::fs::read_to_string(path).unwrap();
     assert!(content.contains("# phi-agent demo"));
-}
-
-#[test]
-fn write_approval_deny_leaves_the_workspace_untouched() {
-    let env = TestEnv::new("deny");
-    let _provider = env.with_scripted_provider();
-    env.run("write the demo file", &["--approval", "deny"]);
-    assert!(
-        !env.workspace.join("PHI_DEMO.md").exists(),
-        "denied write must not touch the workspace"
-    );
 }
 
 #[test]
@@ -709,6 +787,38 @@ fn sessions_and_journal_survive_a_restart() {
             .as_array()
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn sessions_delete_removes_the_session_from_the_list() {
+    let env = TestEnv::new("session-delete");
+    let _provider = env.with_scripted_provider();
+    let result = env.run("inspect the workspace", &["--approval", "deny"]);
+    let session_id = result["sessionId"].as_str().unwrap().to_string();
+
+    let output = env.command(&["sessions", "delete", &session_id]);
+    assert!(
+        output.status.success(),
+        "sessions delete failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let deleted = last_json(&output.stdout);
+    assert_eq!(deleted["deleted"], json!(true));
+
+    let list = last_json(&env.command(&["sessions", "list"]).stdout);
+    assert!(
+        list["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["id"] != session_id.as_str()),
+        "deleted session still listed: {list}"
+    );
+    let show = env.command(&["sessions", "show", &session_id]);
+    assert!(
+        !show.status.success(),
+        "deleted session should no longer be readable"
     );
 }
 
@@ -1012,7 +1122,7 @@ fn endlessly_malformed_tool_arguments_stop_the_run() {
 fn cancel_while_waiting_for_approval_aborts_the_run() {
     let env = TestEnv::new("cancel");
     let _provider = env.with_scripted_provider();
-    let mut child = env.spawn_run("write the demo file", &["--approval", "prompt"]);
+    let mut child = env.spawn_run("run an unsafe shell command", &["--approval", "prompt"]);
     let run = env.wait_for_run_state("WaitingApproval");
     let run_id = run["id"].as_str().unwrap().to_string();
 
@@ -1040,7 +1150,7 @@ fn cancel_while_waiting_for_approval_aborts_the_run() {
 fn a_killed_run_is_marked_for_reconciliation_on_restart() {
     let env = TestEnv::new("crash");
     let _provider = env.with_scripted_provider();
-    let mut child = env.spawn_run("write the demo file", &["--approval", "prompt"]);
+    let mut child = env.spawn_run("run an unsafe shell command", &["--approval", "prompt"]);
     let run = env.wait_for_run_state("WaitingApproval");
     let run_id = run["id"].as_str().unwrap().to_string();
 
@@ -1087,28 +1197,28 @@ fn a_killed_run_is_marked_for_reconciliation_on_restart() {
 }
 
 #[test]
-fn shell_exec_runs_only_after_approval() {
+fn unsafe_shell_runs_after_approval() {
     let env = TestEnv::new("shell-allow");
     let _provider = env.with_scripted_provider();
-    let result = env.run("run an echo command", &["--approval", "allow"]);
+    let result = env.run("run an unsafe shell command", &["--approval", "allow"]);
     assert_eq!(result["run"]["state"], "Succeeded");
     let session = env.show(result["sessionId"].as_str().unwrap());
     let results = tool_result_text(&session);
     assert!(
-        results.contains("phi-agent-shell-demo"),
+        results.contains("Windows") || results.contains("Linux") || results.contains("Darwin"),
         "approved shell command output missing: {results}"
     );
 }
 
 #[test]
-fn denying_shell_exec_does_not_run_the_command() {
+fn denying_unsafe_shell_does_not_run_the_command() {
     let env = TestEnv::new("shell-deny");
     let _provider = env.with_scripted_provider();
-    let result = env.run("run an echo command", &["--approval", "deny"]);
+    let result = env.run("run an unsafe shell command", &["--approval", "deny"]);
     let session = env.show(result["sessionId"].as_str().unwrap());
     let results = tool_result_text(&session);
     assert!(
-        !results.contains("phi-agent-shell-demo"),
+        !results.contains("Windows") && !results.contains("Linux") && !results.contains("Darwin"),
         "denied shell command must not run: {results}"
     );
     assert!(
@@ -1521,5 +1631,411 @@ fn delegation_rejects_a_model_more_capable_than_the_lead() {
     assert!(
         tool_results.contains("more capable"),
         "the tool error should explain the scale cap: {tool_results}"
+    );
+}
+
+const ONE_PIXEL_PNG_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+struct ScriptedImageProvider {
+    port: u16,
+    requests: Arc<Mutex<Vec<Value>>>,
+}
+
+impl ScriptedImageProvider {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind image provider");
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorder = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let _ = handle_json_request(
+                    stream,
+                    recorder.clone(),
+                    |_body| json!({ "data": [{ "b64_json": ONE_PIXEL_PNG_B64 }] }),
+                );
+            }
+        });
+        Self { port, requests }
+    }
+}
+
+struct ScriptedDecisionProvider {
+    port: u16,
+    requests: Arc<Mutex<Vec<Value>>>,
+}
+
+impl ScriptedDecisionProvider {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind decision provider");
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorder = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let _ = handle_json_request(stream, recorder.clone(), |body| {
+                    if body["questions"]["strategy"].is_object() {
+                        json!({
+                            "answers": {
+                                "strategy": {
+                                    "type": "choice",
+                                    "choice": "head_tail",
+                                    "probabilities": { "head_tail": 0.96, "keep_full": 0.04 },
+                                    "confidence": 0.96
+                                }
+                            },
+                            "usage": { "input_tokens": 8, "output_tokens": 0 }
+                        })
+                    } else {
+                        json!({
+                            "answers": {
+                                "approve": { "type": "noul", "probability": 0.99 }
+                            },
+                            "usage": { "input_tokens": 8, "output_tokens": 0 }
+                        })
+                    }
+                });
+            }
+        });
+        Self { port, requests }
+    }
+}
+
+fn handle_json_request(
+    mut stream: TcpStream,
+    requests: Arc<Mutex<Vec<Value>>>,
+    respond: impl Fn(&Value) -> Value,
+) -> std::io::Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body)?;
+    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    if let Ok(mut log) = requests.lock() {
+        log.push(request.clone());
+    }
+    let payload = serde_json::to_vec(&respond(&request)).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        payload.len()
+    )?;
+    stream.write_all(&payload)?;
+    stream.flush()
+}
+
+#[test]
+fn image_generate_writes_a_local_asset() {
+    let env = TestEnv::new("image");
+    let provider = ScriptedImageProvider::start();
+    let base_url = format!("http://127.0.0.1:{}", provider.port);
+    let output = env.command(&[
+        "image",
+        "configure",
+        "--provider",
+        "openai_images",
+        "--base-url",
+        base_url.as_str(),
+        "--model",
+        "gpt-image-test",
+        "--api-key",
+        "literal:test-image-key",
+        "--grant-egress",
+    ]);
+    assert!(
+        output.status.success(),
+        "image configure failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status = last_json(&output.stdout);
+    assert_eq!(status["ready"], true, "{status}");
+
+    let out_path = env.workspace.join("generated.png");
+    let output = env.command(&[
+        "image",
+        "generate",
+        "--prompt",
+        "a tiny cat",
+        "--out",
+        out_path.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "image generate failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let generated = last_json(&output.stdout);
+    assert_eq!(
+        generated["assets"].as_array().unwrap().len(),
+        1,
+        "{generated}"
+    );
+    let bytes = std::fs::read(&out_path).expect("generated image");
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G']),
+        "output must be a PNG"
+    );
+
+    let output = env.command(&["image", "list"]);
+    assert!(output.status.success());
+    let listed = last_json(&output.stdout);
+    assert_eq!(listed["assets"].as_array().unwrap().len(), 1, "{listed}");
+    assert!(!provider.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn decision_triage_auto_approves_an_explicitly_enabled_shell() {
+    let env = TestEnv::new("decision-triage");
+    let _provider = env.with_scripted_provider();
+    let decision = ScriptedDecisionProvider::start();
+    let endpoint = format!("http://127.0.0.1:{}/decisions", decision.port);
+    let output = env.command(&[
+        "decision",
+        "configure",
+        "--endpoint",
+        endpoint.as_str(),
+        "--model",
+        "typesafe/jev-test",
+        "--api-key",
+        "literal:decision-key",
+        "--grant-egress",
+        "--triage",
+        "--triage-threshold",
+        "0.9",
+        "--triage-tool",
+        "shell_exec",
+    ]);
+    assert!(
+        output.status.success(),
+        "decision configure failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status = last_json(&output.stdout);
+    assert_eq!(status["ready"], true, "{status}");
+
+    let result = env.run("run an unsafe shell command", &["--approval", "deny"]);
+    assert_eq!(
+        result["run"]["state"], "Succeeded",
+        "triage should let the run finish: {result}"
+    );
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let results = tool_result_text(&session);
+    assert!(
+        results.contains("Windows") || results.contains("Linux") || results.contains("Darwin"),
+        "triaged shell command output missing: {results}"
+    );
+    let requests = decision.requests.lock().unwrap();
+    assert!(!requests.is_empty());
+    let state = requests[0]["state"].as_str().unwrap_or_default();
+    assert!(state.contains("shell_exec"), "{state}");
+}
+
+#[test]
+fn decision_compaction_replaces_long_tool_output() {
+    let env = TestEnv::new("compaction");
+    let _provider = env.with_scripted_provider();
+    let decision = ScriptedDecisionProvider::start();
+    let endpoint = format!("http://127.0.0.1:{}/decisions", decision.port);
+    let output = env.command(&[
+        "decision",
+        "configure",
+        "--endpoint",
+        endpoint.as_str(),
+        "--model",
+        "typesafe/jev-test",
+        "--api-key",
+        "literal:decision-key",
+        "--grant-egress",
+        "--compaction",
+        "--compaction-threshold",
+        "0.5",
+        "--compaction-min-chars",
+        "1000",
+    ]);
+    assert!(
+        output.status.success(),
+        "decision configure failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::write(env.workspace.join("LARGE.txt"), "x".repeat(10_000)).unwrap();
+
+    let result = env.run("read the large file", &["--approval", "deny"]);
+    assert_eq!(result["run"]["state"], "Succeeded", "{result}");
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let results = tool_result_text(&session);
+    assert!(
+        results.contains("truncated; full output"),
+        "compaction marker missing: {results}"
+    );
+    assert!(
+        results.chars().count() < 10_000,
+        "compacted output should be shorter than the original"
+    );
+    let journal = std::fs::read_to_string(env.data_dir.join("journal").join("events.jsonl"))
+        .expect("journal");
+    assert!(
+        journal.contains("ToolOutputCompacted"),
+        "compaction must be journaled"
+    );
+}
+
+#[test]
+fn session_title_is_generated_and_applied() {
+    let env = TestEnv::new("title");
+    let _provider = env.with_scripted_provider();
+    let first = env.run("hello", &["--title", "New session"]);
+    let session_id = first["sessionId"].as_str().unwrap().to_string();
+
+    let output = env.command(&[
+        "roles",
+        "set",
+        "session_title",
+        "--model",
+        "test-model",
+        "--grant-egress",
+    ]);
+    assert!(
+        output.status.success(),
+        "roles set failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let second = env.run("inspect the workspace", &["--session", session_id.as_str()]);
+    assert_eq!(second["run"]["state"], "Succeeded", "{second}");
+    let list = env.command(&["sessions", "list"]);
+    assert!(list.status.success());
+    let listed = last_json(&list.stdout);
+    let title = listed["sessions"][0]["title"].as_str().unwrap_or_default();
+    assert_eq!(title, "Workspace inspection", "{listed}");
+}
+
+#[test]
+fn memory_maintenance_merges_duplicates_and_keeps_dry_run_safe() {
+    let env = TestEnv::new("maintenance");
+    let _provider = env.with_scripted_provider();
+    let output = env.command(&[
+        "roles",
+        "set",
+        "memory_maintenance",
+        "--model",
+        "test-model",
+        "--grant-egress",
+    ]);
+    assert!(
+        output.status.success(),
+        "roles set failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env.memory_add("The user prefers pnpm", "project");
+    env.memory_add("The user uses pnpm for JavaScript", "project");
+    let project = env.workspace.to_string_lossy().to_string();
+
+    let dry = env.command(&[
+        "memory",
+        "maintain",
+        "--project",
+        project.as_str(),
+        "--dry-run",
+    ]);
+    assert!(
+        dry.status.success(),
+        "dry run failed: {}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let report = last_json(&dry.stdout);
+    assert_eq!(report["proposals"], 1, "{report}");
+    assert_eq!(report["applied"], 0, "{report}");
+    assert_eq!(report["pending"].as_array().unwrap().len(), 1, "{report}");
+
+    let applied = env.command(&[
+        "memory",
+        "maintain",
+        "--project",
+        project.as_str(),
+        "--apply",
+    ]);
+    assert!(
+        applied.status.success(),
+        "apply failed: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let report = last_json(&applied.stdout);
+    assert_eq!(report["applied"], 1, "{report}");
+
+    let search = env.command(&["memory", "search", "Merged preference"]);
+    assert!(search.status.success());
+    let hits = last_json(&search.stdout);
+    assert!(
+        !hits["hits"].as_array().unwrap_or(&Vec::new()).is_empty(),
+        "the merged fact should be searchable: {hits}"
+    );
+}
+
+#[test]
+fn the_agent_can_invoke_image_generate() {
+    let env = TestEnv::new("image-tool");
+    let provider = env.with_scripted_provider();
+    let image = ScriptedImageProvider::start();
+    let base_url = format!("http://127.0.0.1:{}", image.port);
+    let output = env.command(&[
+        "image",
+        "configure",
+        "--provider",
+        "openai_images",
+        "--base-url",
+        base_url.as_str(),
+        "--model",
+        "gpt-image-test",
+        "--api-key",
+        "literal:test-image-key",
+        "--grant-egress",
+    ]);
+    assert!(
+        output.status.success(),
+        "image configure failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let result = env.run("draw an image", &["--approval", "deny"]);
+    assert_eq!(result["run"]["state"], "Succeeded", "{result}");
+    let session = env.show(result["sessionId"].as_str().unwrap());
+    let results = tool_result_text(&session);
+    assert!(
+        results.contains("assets"),
+        "the image tool result should carry asset ids: {results}"
+    );
+    let journal = std::fs::read_to_string(env.data_dir.join("journal").join("events.jsonl"))
+        .expect("journal");
+    assert!(
+        journal.contains("ImageGenerated"),
+        "the image must be journaled"
+    );
+
+    let image_requests = image.requests.lock().unwrap();
+    assert_eq!(image_requests.len(), 1);
+    assert_eq!(image_requests[0]["prompt"], "a red cube on a table");
+
+    let requests = provider.requests();
+    let lead_tools: Vec<&str> = requests[0]["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        lead_tools.contains(&"image_generate"),
+        "the configured image tool must be exposed: {lead_tools:?}"
     );
 }

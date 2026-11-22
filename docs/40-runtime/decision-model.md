@@ -1,6 +1,6 @@
 # 决策模型：Jev 类型化判断层
 
-> 状态：🌿 评审中 · 最后更新：2026-11-22
+> 状态：🌿 评审中 · 后端已实现（2026-11-22）；桌面 UI 待接 · 最后更新：2026-11-22
 > 上游：ADR-0015、`40-runtime/model-gateway.md` §8、`40-runtime/policy-and-approval.md`
 > 关联：`40-runtime/auxiliary-models.md`、`40-runtime/context-and-memory.md`
 
@@ -37,34 +37,26 @@
 
 ```json
 {
-  "provider": "jev",
-  "baseUrl": "https://openrouter.ai/api/v1",
+  "enabled": true,
+  "endpoint": "https://openrouter.ai/api/v1/decisions",
   "apiKey": "env:OPENROUTER_API_KEY",
   "model": "typesafe/jev-latest",
   "timeoutMs": 8000,
-  "points": {
-    "approval_triage": {
-      "enabled": true,
-      "threshold": 0.92,
-      "tools": ["fs_write", "memory_write"],
-      "commandPatterns": []
-    },
-    "tool_output_compaction": {
-      "enabled": true,
-      "threshold": 0.8,
-      "minChars": 8000
-    },
-    "loop_completion": { "enabled": false },
-    "route": { "enabled": false }
-  },
-  "egressGrant": "decision-state"
+  "triageEnabled": true,
+  "triageThreshold": 0.92,
+  "triageTools": ["fs_write"],
+  "compactionEnabled": true,
+  "compactionThreshold": 0.8,
+  "compactionMinChars": 8000,
+  "egressGranted": true
 }
 ```
 
-- `baseUrl` 由用户填写：OpenRouter（`typesafe/jev-latest`）或 TypeSafe 直连（`jev-latest` / 固定版本）。
+- `endpoint` 是**完整的 Decisions API URL**，由用户填写（OpenRouter 代理或 TypeSafe 直连），客户端不自动拼接路径。
 - 凭据只存引用（`env:` / `keychain:` / `literal:`），读接口只返回脱敏提示。
 - 模型 id 可固定版本以保证可复现，也可用 `jev-latest` 跟踪。
-- 每个决策点单独开关和阈值；未配置的角色 / 决策点保持禁用，不回退到聊天模型。
+- 审批分流与输出压缩各自有开关和阈值；`triageTools` 默认只有 `fs_write`，`shell_exec` 默认不在其中。
+- 第一版只实现 `approval_triage` 与 `tool_output_compaction`；循环终止 / 路由仍是后续项。
 - 设置页提供「测试连接」和一条示例决策，显示概率与延迟，不显示密钥。
 
 ---
@@ -264,7 +256,9 @@ pub trait DecisionPort: Send + Sync {
 ### 8.3 headless
 
 ```bash
-phi-headless decision configure --base-url ... --model typesafe/jev-latest --api-key env:OPENROUTER_API_KEY
+phi-headless decision configure --endpoint https://openrouter.ai/api/v1/decisions --model typesafe/jev-latest --api-key env:OPENROUTER_API_KEY --grant-egress --triage --compaction
+phi-headless decision show
+phi-headless decision test --state "..."
 phi-headless decision test --state "..." --question approve:noul:"是否低风险？"
 phi-headless decision history --limit 20
 phi-headless decision revoke <grant-id>

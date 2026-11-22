@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -7,6 +7,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use phi_contracts::SLOT_RUNTIME_SKELETON;
+use phi_contracts::auxiliary::{DecisionAnswer, DecisionQuestion, DecisionRequest};
 use phi_contracts::memory::{MemoryQuery, Principal};
 use phi_contracts::ports::{
     AssembledContext, InvalidToolCall, ModelRequest, PolicyEffect, PolicyInput, RunStatus,
@@ -617,17 +618,26 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
             tools.retain(|tool| {
                 !matches!(
                     tool.id.as_str(),
-                    "delegate" | "wait_for_agents" | "cancel_agent"
+                    "delegate" | "wait_for_agents" | "cancel_agent" | "image_generate"
                 )
             });
         }
         if ctx.work_mode == WorkMode::ReadOnly {
             tools.retain(|tool| !matches!(tool.id.as_str(), "fs_write" | "shell_exec"));
         }
+        if ctx
+            .services
+            .image()
+            .map(|image| !image.status().ready)
+            .unwrap_or(true)
+        {
+            tools.retain(|tool| tool.id != "image_generate");
+        }
         tools
     };
     let max_output_tokens = env_u64("PHI_MAX_OUTPUT_TOKENS", 8192) as u32;
-    let context_budget = history_char_budget(model.status().context_window, max_output_tokens);
+    let context_window = model.status().context_window;
+    let context_budget = history_char_budget(context_window, max_output_tokens);
     // Capture the role prompt once: agent statuses change during the run, and
     // a mutating system prefix would invalidate the provider's prompt cache.
     let role_system = role_prompt(&session, ctx);
@@ -701,6 +711,16 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
         while attempt < 2 {
             attempt += 1;
             let call_id = ctx.ids.new_id("call");
+            let system_chars = assembled.system.chars().count() as u64;
+            let tools_chars = tools
+                .iter()
+                .map(|tool| {
+                    tool.description.chars().count() + tool.input_schema.to_string().chars().count()
+                })
+                .sum::<usize>() as u64;
+            let history_chars = serde_json::to_string(&assembled.messages)
+                .map(|raw| raw.chars().count() as u64)
+                .unwrap_or(0);
             if let Err(error) = ctx.bus.publish(
                 &ctx.session_id,
                 "plugin-loop",
@@ -710,6 +730,10 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                     step_id: step_id.clone(),
                     model: requested_model.clone(),
                     max_output_tokens,
+                    system_chars,
+                    tools_chars,
+                    history_chars,
+                    context_window: model.status().context_window,
                 },
             ) {
                 return RunOutcome::Failed(i18n::t_args(
@@ -730,7 +754,9 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                 stream: env_bool("PHI_STREAM", true),
             };
 
+            let call_started = Instant::now();
             let result = model.invoke(request, ctx.cancel.clone()).await;
+            let duration_ms = call_started.elapsed().as_millis() as u64;
 
             match result {
                 Ok(resp) => {
@@ -744,6 +770,7 @@ async fn run_inner(ctx: &RunContext) -> RunOutcome {
                             output_tokens: resp.output_tokens,
                             cache_read_tokens: resp.cache_read_tokens,
                             cache_write_tokens: resp.cache_write_tokens,
+                            duration_ms,
                             finish_reason: resp.finish_reason.clone(),
                         },
                     ) {
@@ -1124,6 +1151,88 @@ struct ToolExecOutcome {
     unknown_side_effect: bool,
 }
 
+async fn maybe_auto_approve(
+    ctx: &RunContext,
+    call: &ToolCall,
+    digest: &str,
+    risk_level: &str,
+) -> bool {
+    let Some(decision) = ctx.services.decision() else {
+        return false;
+    };
+    let config = decision.triage();
+    // The configured tool list is the user's pre-authorization. The host risk
+    // level is shown to the judge but does not veto triage; a tool that is not
+    // listed is never sent to the decision model.
+    if !config.enabled || !config.tools.iter().any(|tool| tool == &call.tool_id) {
+        return false;
+    }
+    let args = serde_json::to_string(&journal_args_preview(&call.tool_id, &call.input))
+        .unwrap_or_default();
+    let args = redact_secrets(&args).text;
+    let state = truncate_chars(
+        &format!(
+            "Tool: {}\nHost risk level: {}\nWorkspace: {}\nArguments: {}",
+            call.tool_id,
+            risk_level,
+            ctx.workspace.display(),
+            args
+        ),
+        4_000,
+    );
+    let mut questions = BTreeMap::new();
+    questions.insert(
+        "approve".to_string(),
+        DecisionQuestion::Noul {
+            instructions: "Is this action within the low-risk category the user pre-authorized for automatic approval? Consider scope, reversibility and whether the arguments look normal.".to_string(),
+        },
+    );
+    let response = match decision
+        .evaluate(
+            DecisionRequest {
+                point: "approval_triage".to_string(),
+                state,
+                questions,
+                session_id: Some(ctx.session_id.clone()),
+                run_id: Some(ctx.run_id.clone()),
+            },
+            ctx.cancel.clone(),
+        )
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return false,
+    };
+    let Some(DecisionAnswer::Noul { probability }) = response.answers.get("approve") else {
+        return false;
+    };
+    if *probability < config.threshold {
+        return false;
+    }
+    let rationale = i18n::t_args(
+        "Auto-approved by the decision model (probability {probability}, threshold {threshold})",
+        &[
+            ("probability", format!("{probability:.2}")),
+            ("threshold", format!("{:.2}", config.threshold)),
+        ],
+    );
+    if decide(ctx, call, "allow", &rationale).is_err() {
+        return false;
+    }
+    let _ = ctx.bus.publish(
+        &ctx.session_id,
+        "plugin-loop",
+        &DomainEvent::DecisionAutoApproved {
+            call_id: response.call_id,
+            tool_id: call.tool_id.clone(),
+            action_digest: digest.to_string(),
+            threshold: config.threshold,
+            probability: *probability,
+        },
+    );
+    true
+}
+
 async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolExecOutcome {
     let digest = action_digest_for(ctx, &call);
     // The request record must be durable before anything else happens; if the
@@ -1185,6 +1294,16 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
         return deny_result(&call, &rationale);
     };
     let decision = policy.evaluate(&policy_input);
+    let risk_level = if call.tool_id == "shell_exec" {
+        "high"
+    } else {
+        "medium"
+    };
+    let triaged = if decision.effect == PolicyEffect::Ask {
+        maybe_auto_approve(ctx, &call, &digest, risk_level).await
+    } else {
+        false
+    };
 
     match decision.effect {
         PolicyEffect::Deny => {
@@ -1196,6 +1315,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
             let _ = decide(ctx, &call, "deny", &rationale);
             return deny_result(&call, &rationale);
         }
+        PolicyEffect::Ask if triaged => {}
         PolicyEffect::Ask => {
             if let Err(error) = decide(ctx, &call, "ask", &decision.rationale) {
                 return tool_not_executed(
@@ -1211,13 +1331,10 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 let _ = decide(ctx, &call, "deny", &rationale);
                 return deny_result(&call, &rationale);
             };
-            let (risk_level, risk) = if call.tool_id == "shell_exec" {
-                (
-                    "high",
-                    i18n::t("Irreversible: code execution and permissions"),
-                )
+            let risk = if call.tool_id == "shell_exec" {
+                i18n::t("Irreversible: code execution and permissions")
             } else {
-                ("medium", i18n::t("Reversible: data modification"))
+                i18n::t("Reversible: data modification")
             };
             // Approval has its own timeout, independent of any run budget.
             let expires_in_secs = env_u64("PHI_APPROVAL_TIMEOUT_SECS", 300);
@@ -1420,7 +1537,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 &DomainEvent::ToolInvokeCompleted {
                     invocation_id: call.id.clone(),
                     run_id: ctx.run_id.clone(),
-                    result_ref,
+                    result_ref: result_ref.clone(),
                     is_error: output.is_error,
                     duration_ms,
                 },
@@ -1438,12 +1555,10 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                     unknown_side_effect: call.tool_id == "shell_exec",
                 };
             }
+            let content =
+                compact_tool_output(ctx, &call, output.content, output.is_error, &result_ref).await;
             ToolExecOutcome {
-                block: ContentBlock::tool_result(
-                    call.id.clone(),
-                    truncate_chars(&output.content, 20_000),
-                    output.is_error,
-                ),
+                block: ContentBlock::tool_result(call.id.clone(), content, output.is_error),
                 cancelled: false,
                 unknown_side_effect: false,
             }
@@ -1477,6 +1592,134 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
             }
         }
     }
+}
+
+async fn compact_tool_output(
+    ctx: &RunContext,
+    call: &ToolCall,
+    content: String,
+    is_error: bool,
+    blob_ref: &str,
+) -> String {
+    let Some(decision) = ctx.services.decision() else {
+        return truncate_chars(&content, 20_000);
+    };
+    let config = decision.compaction();
+    let before = content.chars().count();
+    if !config.enabled || before < config.min_chars {
+        return truncate_chars(&content, 20_000);
+    }
+    let preview = redact_secrets(&content.chars().take(2_000).collect::<String>()).text;
+    let state = format!(
+        "Tool: {}\nCharacters: {}\nIs error: {}\nFull output blob: {}\nPreview:\n{}",
+        call.tool_id, before, is_error, blob_ref, preview
+    );
+    let mut criteria = BTreeMap::new();
+    criteria.insert(
+        "keep_full".to_string(),
+        "The full output is necessary for the next step".to_string(),
+    );
+    criteria.insert(
+        "summarize".to_string(),
+        "A summary can replace the full text; details stay in the blob".to_string(),
+    );
+    criteria.insert(
+        "head_tail".to_string(),
+        "Keep only the beginning and end".to_string(),
+    );
+    criteria.insert(
+        "reference_only".to_string(),
+        "Only the fact that the output exists is needed".to_string(),
+    );
+    let mut questions = BTreeMap::new();
+    questions.insert(
+        "strategy".to_string(),
+        DecisionQuestion::Choice {
+            instructions: "How should this tool output enter the model context?".to_string(),
+            criteria,
+        },
+    );
+    let strategy = match decision
+        .evaluate(
+            DecisionRequest {
+                point: "tool_output_compaction".to_string(),
+                state,
+                questions,
+                session_id: Some(ctx.session_id.clone()),
+                run_id: Some(ctx.run_id.clone()),
+            },
+            ctx.cancel.clone(),
+        )
+        .await
+    {
+        Ok(response) => match response.answers.get("strategy") {
+            Some(DecisionAnswer::Choice {
+                choice, confidence, ..
+            }) if *confidence >= config.threshold => choice.clone(),
+            _ => "head_tail".to_string(),
+        },
+        Err(_) => "head_tail".to_string(),
+    };
+    let mut applied_strategy = strategy.clone();
+    let compacted = match strategy.as_str() {
+        "keep_full" => return truncate_chars(&content, 20_000),
+        "summarize" => {
+            let summary = match ctx.services.auxiliary() {
+                Some(auxiliary) if auxiliary.summarizer_ready() => {
+                    match tokio::time::timeout(
+                        Duration::from_secs(20),
+                        auxiliary.summarize(&content, 4_000, ctx.cancel.clone()),
+                    )
+                    .await
+                    {
+                        Ok(Ok(Some(summary))) => Some(summary),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            match summary {
+                Some(summary) => {
+                    format!("{summary}\n\n(full output saved as {blob_ref}; {before} chars)")
+                }
+                None => {
+                    applied_strategy = "head_tail".to_string();
+                    head_tail(&content, blob_ref)
+                }
+            }
+        }
+        "reference_only" => {
+            format!("(full output saved as {blob_ref}; {before} chars)")
+        }
+        _ => {
+            applied_strategy = "head_tail".to_string();
+            head_tail(&content, blob_ref)
+        }
+    };
+    let after = compacted.chars().count();
+    let _ = ctx.bus.publish(
+        &ctx.session_id,
+        "plugin-loop",
+        &DomainEvent::ToolOutputCompacted {
+            invocation_id: call.id.clone(),
+            run_id: ctx.run_id.clone(),
+            strategy: applied_strategy,
+            before_chars: before as u64,
+            after_chars: after as u64,
+            blob_ref: blob_ref.to_string(),
+        },
+    );
+    truncate_chars(&compacted, 20_000)
+}
+
+fn head_tail(content: &str, blob_ref: &str) -> String {
+    let total = content.chars().count();
+    if total <= 6_000 {
+        return content.to_string();
+    }
+    let head: String = content.chars().take(4_000).collect();
+    let tail: String = content.chars().skip(total - 2_000).collect();
+    format!("{head}\n… (truncated; full output: {blob_ref})\n{tail}")
 }
 
 /// Compute the approval-bound action digest, including resolved resource
@@ -1704,7 +1947,7 @@ fn role_prompt(session: &Arc<dyn phi_contracts::ports::SessionPort>, ctx: &RunCo
                  - Work only on this brief; do not address the user directly.\n\
                  - You cannot delegate to another subagent.\n\
                  - Use send_message to ask a sibling agent a directed question. Do not block waiting for a reply; continue with what you can verify.\n\
-                 - Every write or shell command still requires human approval. Never claim a file changed without a tool call.\n\
+                 - Workspace writes, read-only commands and project verification commands run automatically; other shell commands require human approval. Never claim a file changed without a tool call.\n\
                  - When finished, reply with a concise report: what you did, files changed, verification results, and open questions. This final text is delivered to the lead.\n",
                 ctx.report_to.clone().unwrap_or_else(|| "lead".to_string())
             );
@@ -1856,7 +2099,7 @@ fn journal_args_preview(tool_id: &str, input: &Value) -> Value {
 fn fallback_context(history: Vec<ChatMessage>, workspace: &Path) -> AssembledContext {
     AssembledContext {
         system: format!(
-            "You are phi-agent, a coding agent. Workspace: {}. Use tools to inspect and modify files; writes and shell commands require approval.",
+            "You are phi-agent, a coding agent. Workspace: {}. Use tools to inspect and modify files; workspace writes, read-only commands and project verification commands run automatically, other shell commands require approval.",
             workspace.display()
         ),
         messages: history,

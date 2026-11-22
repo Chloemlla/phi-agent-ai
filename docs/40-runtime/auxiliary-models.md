@@ -1,6 +1,6 @@
 # 辅助模型：角色、服务调用与后台任务
 
-> 状态：🌿 评审中 · 最后更新：2026-11-22
+> 状态：🌿 评审中 · 后端已实现（2026-11-22）；桌面 UI 待接 · 最后更新：2026-11-22
 > 上游：ADR-0014、`40-runtime/model-gateway.md` §4.1 / §8
 > 关联：`40-runtime/policy-and-approval.md`、`40-runtime/context-and-memory.md`、`40-runtime/multi-agent.md`
 
@@ -32,9 +32,9 @@
 
 ### 2.1 绑定
 
-- 应用级绑定，保存在 `<data-dir>/auxiliary.json`：`role -> { providerId, modelId, thinking?, enabled }`。生图与决策模型不使用这个文件（分别用 `image.json` / `decision.json`）。
-- 保存时校验：provider 存在、模型存在且启用、模型具备角色要求的能力（文本角色要 `chat`）。
-- 未绑定 / provider 被删除 / 模型被禁用：功能禁用，并在设置页和 headless 状态里说明原因；**不回退**到 Lead 或其他模型。
+- 应用级绑定，保存在 `<data-dir>/auxiliary.json`：`role -> { providerId, model, thinking?, egressGranted }`。生图与决策模型不使用这个文件（分别用 `image.json` / `decision.json`）。
+- 保存时校验：模型非空、thinking 合法；provider 不存在或缺失时调用会如实失败，不回退到 Lead 或其他模型。
+- 未绑定 / 未授予外发 / 模型不可用：功能禁用，并在设置页和 headless 状态里说明原因；**不回退**到 Lead 或其他模型。
 - 第一版不做按会话覆盖；需要时以后再加 `sessionId` 维度的覆盖。
 
 ### 2.2 外发授权
@@ -57,11 +57,10 @@
 
 ```bash
 phi-headless roles list
-phi-headless roles set session_title --provider prov_x --model gpt-6.5-luna
+phi-headless roles set session_title --provider prov_x --model gpt-6.5-luna --grant-egress
 phi-headless roles clear memory_maintenance
-phi-headless roles test session_title --session <id>
 # 生图使用独立配置，不走 roles
-phi-headless image configure --provider openai_images --base-url ... --model gpt-image-2.6
+phi-headless image configure --provider openai_images --base-url ... --model gpt-image-2.6 --grant-egress
 ```
 
 `roles list` 输出绑定、能力校验、外发授权状态和最近一次调用结果（不含敏感内容）。
@@ -182,9 +181,9 @@ phi-headless image configure --provider openai_images --base-url ... --model gpt
 | `baseUrl` | 用户填写；不复用聊天 provider 的端点 |
 | `apiKey` | 凭据引用：`env:` / `keychain:` / `literal:` |
 | `model` | **用户选择的图片模型 id**；运行时固定使用，Agent 不可改 |
-| `defaults` | `size` / `quality` / `format` / `count` |
-| `limits` | 每 Turn 最多张数、单文件上限、参考图上限 |
-| `egressGrant` | 图片提示词外发授权 |
+| `size` / `quality` / `format` | 默认生成参数；`format` 属于 png / jpeg / webp / gif / svg |
+| `maxPerTurn` / `maxBytes` | 每 Turn 最多张数、单文件上限 |
+| `egressGranted` | 图片提示词外发授权（必须显式授予） |
 
 - 不复用 `providers.json` 的聊天供应商配置，允许图片和聊天使用不同厂商、不同 Key、不同端点。
 - 设置页有独立的「生图」区域：选择模型、填写端点和 Key、测试连接、查看能力（4K、蒙版编辑、参考图、GIF / SVG、速度档位）。

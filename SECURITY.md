@@ -22,7 +22,7 @@ We will acknowledge reports within 7 days and coordinate disclosure once a fix i
 phi-agent is an agent that can edit files and run shell commands. Its current boundaries include:
 
 - **Deny by default** — unknown tools and paths outside the workspace are refused.
-- **Human approval** — writes and command execution ask by default; approvals bind an action digest and are re-checked before execution.
+- **Human approval** — commands outside the safe whitelist ask by default. Workspace writes (previous content backed up), read-only commands and project verification commands run automatically. Approvals bind an action digest and are re-checked before execution.
 - **Workspace isolation** — file tools stay inside the configured workspace; cancellation terminates the process tree.
 - **Dangerous command filtering** — common destructive command patterns are denied outright.
 - **Untrusted input** — tool results, search results, and web content do not gain privileges.

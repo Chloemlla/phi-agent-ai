@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 
+use super::auxiliary::{AuxiliaryPort, DecisionPort, ImagePort};
 use super::memory::MemoryPort;
 use super::ports::{
     ApproverPort, ContextPort, ModelPort, PolicyPort, RuntimePort, SandboxPort, SessionPort,
@@ -21,6 +22,9 @@ pub struct Services {
     context: RwLock<Option<Arc<dyn ContextPort>>>,
     runtime: RwLock<Option<Arc<dyn RuntimePort>>>,
     memory: RwLock<Option<Arc<dyn MemoryPort>>>,
+    image: RwLock<Option<Arc<dyn ImagePort>>>,
+    decision: RwLock<Option<Arc<dyn DecisionPort>>>,
+    auxiliary: RwLock<Option<Arc<dyn AuxiliaryPort>>>,
     tools: RwLock<Vec<Arc<dyn ToolPort>>>,
 }
 
@@ -85,6 +89,24 @@ impl Services {
     }
     pub fn set_memory(&self, value: Arc<dyn MemoryPort>) {
         *self.memory.write().unwrap() = Some(value);
+    }
+    pub fn image(&self) -> Option<Arc<dyn ImagePort>> {
+        self.image.read().unwrap().clone()
+    }
+    pub fn set_image(&self, value: Arc<dyn ImagePort>) {
+        *self.image.write().unwrap() = Some(value);
+    }
+    pub fn decision(&self) -> Option<Arc<dyn DecisionPort>> {
+        self.decision.read().unwrap().clone()
+    }
+    pub fn set_decision(&self, value: Arc<dyn DecisionPort>) {
+        *self.decision.write().unwrap() = Some(value);
+    }
+    pub fn auxiliary(&self) -> Option<Arc<dyn AuxiliaryPort>> {
+        self.auxiliary.read().unwrap().clone()
+    }
+    pub fn set_auxiliary(&self, value: Arc<dyn AuxiliaryPort>) {
+        *self.auxiliary.write().unwrap() = Some(value);
     }
     pub fn tool_providers(&self) -> Vec<Arc<dyn ToolPort>> {
         self.tools.read().unwrap().clone()

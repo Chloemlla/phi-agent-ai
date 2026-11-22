@@ -201,8 +201,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 │ Sidebar  │   Conversation (flex, max 720px)    │
 │ 264px    │                                     │
 │ 可收起    │─────────────────────────────────────│
-│          │ Runbar（状态/用量）                  │
-│          │ Composer（输入）                     │
+│          │ Composer（输入 + 上下文圆环 + 停止） │
 └──────────┴─────────────────────────────────────┘
 ```
 
@@ -217,15 +216,19 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 ### 4.2 Sidebar（可收起）
 
 - 宽 `264px`，收起 = `margin-left: -264px` + `--ease` 缓动。
-- 内容：新建会话按钮（primary block）→ 分区标签 → 会话列表 → 底部 node 信息。
-- 会话项：标题 + mono 元信息（状态点 + 状态 + 相对时间）。
-- **激活态**：白底卡片 + 左侧 `3px` 强调色指示条（不是整行变蓝，保持通透）。
+- 内容：分区标签 + 新建按钮（`+`）→ 会话列表 → 底部 node 信息。
+- 会话项：**单行标题** + 悬停/键盘聚焦才出现的删除按钮；状态、消息数、最后活动时间放进悬停的 Alt 气泡。
+- 悬停：透明浅灰底（`--bg-subtle`），**不加边框**。
+- **激活态**：`--accent-soft` 浅蓝底，不再使用左侧 3px 指示条。
+- 删除：两步内联确认（第一次点击变红，第二次执行）；运行中的会话禁止删除。
+- 滚动：自绘 3px 方形 thumb，原生滚动条隐藏，避免挤占布局宽度。
 
 ### 4.3 Conversation
 
 - 内容 `max-width: 720px`，保证长文可读。
-- 消息间 `--sp-5`，角色行（avatar + 名字 + 时间）+ 正文。
-- user / agent 用 avatar 颜色区分，**不用左右气泡对齐**（保持文档式流畅）。
+- 用户消息右对齐浅灰气泡（`--bg-subtle`，右下角小圆角）；Agent 消息为左侧 7px 状态点 + 全宽文档流；不再有头像、名字、时间行。
+- 工具与思考是紧凑活动行：状态点 + 标题 + chevron；连续低噪音调用压缩为一句摘要；整组活动左侧有 1px 竖轨，首尾停在状态点。
+- 消息圆点悬停显示完整时间（Alt 气泡）。
 
 ### 4.4 内联界面块（正文内）
 
@@ -241,6 +244,8 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 ## 5. 安全分级（产品的灵魂，单独成章）
 
 > 核心主张：**危险的视觉重量与风险成正比。** 用户应该"看一眼就知道这件事多重"。
+>
+> 默认策略：工作区写入（旧内容自动备份）、只读命令与项目验证命令自动放行；其余命令进入审批。下面的三级审批卡只描述**进入审批的动作**；自动放行的动作不弹卡，但仍在会话中以活动行留痕。
 
 ### 5.1 审批（Approval）三级
 
@@ -264,12 +269,12 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - **拒绝** = 中性按钮，hover 才转 danger（避免误触，也避免过度恐吓）。
 - 高危需在按钮旁给一句**约束说明**（如"批准仅对这条命令、这套参数生效"）。
 
-### 5.3 用量 / Runbar
+### 5.3 上下文与用量
 
-- 位置：composer 正上方，与 composer 连成一体（圆角相接）。
-- 三个**只读读数**永远可见：步数、token（输入/输出）、耗时；没有上限分母或 meter。
-- 运行中：状态文字 accent + 旋转 ring；可取消（danger 软底按钮）。
-- 运行结束：状态点按 §5.4 着色；读数保留该次运行的最终值。
+- composer 右侧有一个**上下文圆环**，显示最近一次 prompt 占模型窗口的比例；点击/悬停打开 Alt 面板。
+- 面板内容：真实已用/窗口 token、组成（消息 / 系统工具 / 系统提示 / 剩余，按字符比例估算并标注）、轮次/步数、累计 token、平均速度、缓存命中率。
+- 圆环颜色：正常 accent；≥80% warn；≥95% danger。
+- 不再有常驻 Runbar：运行中发送按钮变为「停止」，状态与用量按需查看。
 
 ### 5.4 状态语义色映射（Run / Node）
 
@@ -306,36 +311,46 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - 底部行：上限提示（mono faint）+ 发送按钮。内联界面由 Agent 决定是否使用，
   输入框不提供用户开关。
 
-### 6.3 工具调用 / 结果（tool block）
+### 6.3 工具调用 / 结果（activity row）
 
-- 折叠卡片，白底 + hairline + `xs` 阴影。
-- summary：左侧 glyph（成功 accent-soft / 失败 danger-soft）+ 名称（mono 加粗）+ 右侧 chevron。
-- 展开体：`--bg-inset` 底 + mono 12px。错误内容用 danger 文字。
-- 默认**折叠**，失败的可默认展开。
+- 工具调用与结果合并为一行：状态点（成功圆点 / 失败红色方点 / 运行中 spinner）+ 工具标题 + chevron；不再使用带边框的折叠卡片。
+- 展开体：左缩进 + hairline 左边线；输入与输出各一段 mono 预格式块；复制是次级操作，hover/focus 才出现。
+- 连续 ≥2 个低噪音活动（思考 + read/search/list）压缩成摘要行，例如「Thought for 49s, searched for 3 patterns, read 6 files, and listed 2 directories」。写操作、失败与未知命令不压缩，保持独立行。
+- 摘要按当前语言做单复数与时态（前端 `tPlural` + `Intl.ListFormat`）；数字用等宽字体。
+- 整组活动左侧有 1px 竖轨，首行与末行的线停在状态点中心；失败用方形点，不只靠颜色。
 
 ### 6.4 内联界面块（HTML + 受控组件）
 
-> 模型写 HTML 与少量 `data-ui-*` 属性；宿主解析后按白名单重建为 Solid 元素，表达式由固定语法求值。**前端永不注入原始 HTML，也永不执行模型代码**。
+> 模型写 HTML 与少量 `data-ui-*` 属性；宿主解析后按白名单重建为 Solid 元素，表达式由固定语法求值。**宿主文档永不注入模型 HTML，也永不执行模型代码；富视觉块在禁用脚本的沙盒 iframe 中渲染**。
 
 | 组件 | 视觉 |
 |---|---|
-| 容器 / 卡片 / 网格 | 正文内的白底细边框卡片；`ui-grid` 自适应列，`ui-split` 两栏（窄屏堆叠） |
-| 卡片 / Callout | `ui-card` 为浅底面板；`ui-callout` 按 `ui-info/ok/warn/danger` 使用语义底色 |
+| 容器 / 卡片 / 网格 | 正文内不再套统一卡片壳；`ui-col` / `ui-row` / `ui-box` 组成版式，`ui-grid` 支持 `data-cols`（窄屏堆叠），间距/内边距/对齐由 token 化 `data-*` 控制 |
+| 卡片 / Callout | `ui-card` 为浅底面板；`data-bg` / `data-border` / `data-radius` 可调；`ui-callout` 按 `ui-info/ok/warn/danger` 使用语义底色 |
 | 指标 | `ui-metrics` 自适应网格 + `ui-metric`（大号数值 + 小标签，tabular numbers） |
-| 徽标 / 步骤 | `ui-badge` 胶囊标签；`ui-steps` 编号时间线，`data-state` 区分 done/current/todo |
+| 徽标 / 步骤 | `ui-badge` 胶囊标签；`ui-icon` 宿主图标（固定名称表）；`ui-steps` 编号时间线，`data-state` 区分 done/current/todo |
 | 表格 / 键值 | 行间 hairline，表头 10px 大写 muted；`ui-num` 数字右对齐；`ui-kv` 两列 |
 | 图表 | `table.ui-chart` + `data-type="bar|line|area"`，由表格行绘制；caption 作为说明；带无障碍表格 |
 | 表单 / 控件 | 原生 input/select/textarea/range/checkbox/radio，输入框与全局风格一致；提交按钮 primary |
-| 图片 / SVG | 图片限 https 并圆角裁切；SVG 仅基础形状/文本，用于示意图 |
+| 图片 / SVG | `ui-figure` + 圆角裁切图片 + `ui-caption`；`ui-carousel` 横向滚动图片/卡片；图片限 https；SVG 基础形状/文本支持 `{{ }}` 属性表达式与宿主颜色 token，用于示意图 |
+| 富视觉块 | `<template data-ui-rich>` 内的自定义 HTML/CSS 在禁用脚本的 same-origin iframe 中渲染；注入宿主 token；无表单、外链样式、嵌套帧或脚本 |
 | 状态反馈 | 交互即时更新，不弹“已保存”类提示；复制成功走 toast |
 
-- 样式完全由 `.inline-ui` 与组件类定义；`class` 只允许宿主清单内的 token，`style` / 事件属性在清洗时丢弃。
+- 样式完全由 `.inline-ui` 与组件类定义；`class` 只允许宿主清单内的 token，布局只允许白名单内、取值受校验的 `data-*` token，普通块的 `style` / 事件属性在清洗时丢弃；富视觉块内的样式只存在于沙盒文档。
 - 界面块出现在正文流中，不需要额外的“已更新”提示或版本徽章。
 
 ### 6.5 空状态
 
 - 居中，max-width `380px`。
 - 大图标（`--accent-softer` 底 + `--accent-border` 边）+ 标题 + 提示（可含 mono `code` 片段）。
+- 侧栏等紧凑面板使用 `EmptyState`：小图标 + 一句标题 + 一句说明，不占满整屏。
+
+### 6.6 悬浮气泡与菜单
+
+- **Alt 气泡**：Portal + 固定定位；hover 时跟随指针，贴边自动翻转；半透明表面 + 14px 模糊 + 分层阴影；`prefers-reduced-transparency` 时退化为不透明表面。
+- 使用位置：会话行悬停显示完整标题/状态/消息数/时间/会话 id；消息圆点悬停显示完整时间；上下文圆环点击固定显示面板。
+- **下拉菜单**：4px 内边距、细边框、`--shadow-lg`、80ms 上滑；触发器无边框，hover 纯灰底；选中项加粗 + `--bg-subtle`，不用整行强调色。
+- **可折叠区段**：标题行 + chevron 旋转 + 200ms 高度过渡；上下文面板的「上下文窗口」与工具/思考详情共用这套语言。
 
 ---
 
@@ -358,7 +373,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 
 | 场景 | 动画 | 时长 | 说明 |
 |---|---|---|---|
-| **hover** | 颜色/背景过渡 | fast | 所有可点元素 |
+| **hover** | 纯灰底 / 颜色过渡，不加边框 | fast | 所有可点元素与列表行 |
 | **按钮按下** | `translateY(0.5px)` | fast | 物理反馈 |
 | **审批卡出现** | `rise`：opacity 0→1 + `translateY(6px)→0` | med | 新审批"浮上来" |
 | **流式文本** | 尾部 `▍` 光标 `blink`（1s steps） | — | 表示"正在生成" |
@@ -366,7 +381,8 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 | **运行中 ring** | `spin` 旋转 | 0.9s loop | 仅运行态 |
 | **侧栏收起** | `margin-left` 过渡 | slow + ease | 布局级 |
 | **toggle 开关** | 圆点 `translateX` + 底色过渡 | fast | |
-| **折叠展开** | chevron `rotate(90deg)` + 高度过渡 | fast | |
+| **下拉菜单** | `select-list-in`：opacity + `translateY(2px)→0` | 80ms | 浮层出现 |
+| **折叠展开** | chevron `rotate(90deg)` + 高度过渡 | 200ms | 上下文面板、工具/思考详情 |
 
 ### 7.3 加载与"诚实的等待"
 
@@ -411,19 +427,21 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 
 | 规格 | 代码位置 |
 |---|---|
-| Design tokens | `src/App.css` `:root`（全部 CSS 变量，禁硬编码） |
-| 字体资产 | `src/assets/fonts/`（Figtree / Noto Sans SC / Cascadia Code 的 woff2 + `@font-face`） |
-| 组件 | `src/App.tsx`（消息/审批/runbar/composer）、`src/components/RichHtml.tsx`（内联界面白名单与交互）、`src/components/uiExpression.ts`（表达式） |
+| Design tokens | `src/styles/app/tokens.css`（全部 CSS 变量，禁硬编码） |
+| 字体资产 | `src/index.tsx` 的 `@fontsource` 导入（Figtree / Noto Sans SC / Cascadia Code） |
+| 组件 | `src/components/Conversation.tsx`（正文流/活动行）、`Sidebar.tsx`（会话列表）、`Composer.tsx`（输入与上下文圆环）、`Alt.tsx`（悬浮气泡）、`SideScrollbar.tsx`（自绘滚动条）、`RichHtml.tsx`（内联界面白名单与交互）、`uiExpression.ts`（表达式） |
+| 工具活动分类 | `src/components/toolActivity.ts`（read/search/list 的展示分类，不是安全边界） |
+| 上下文面板 | `src/components/ContextMeter.tsx` + `src/styles/app/context-meter.css` |
 | 图表 | `src/components/InlineChart.tsx`（表格 → SVG，bar/line/area） |
-| 动效 | `src/App.css` keyframes + 工具类 |
+| 动效 | `src/styles/app/motion.css` keyframes + 工具类 |
 | 自绘标题栏 | `src-tauri/tauri.conf.json` frameless + `src/components/Titlebar.tsx`；平台决定 Windows/Linux 右侧 caption 按钮、macOS 左侧红绿灯、Android/iOS 应用栏 |
 | 模型 / 思考选择 | `src/components/ModelPicker.tsx`（悬浮子菜单，触摸内联展开） |
 | 通知 | `src/toast.ts` + `src/components/Toasts.tsx`（去重、限流、自动消失） |
 | Markdown | `src/components/Markdown.tsx`（安全 JSX，不注入 HTML；`html` 围栏交给 `RichHtml`） |
-| 响应式 / 安全区 | `src/App.css` 断点 1100/900/760/520 + `env(safe-area-inset-*)` |
+| 响应式 / 安全区 | `src/styles/app/responsive.css` 断点 1100/900/760/520 + `env(safe-area-inset-*)` |
 | 深色模式 | 未来替换 `:root` token 表为 `[data-theme="dark"]` |
 
-**实现顺序建议**：tokens → 布局骨架（titlebar/sidebar/main）→ 对话与审批分级 → runbar/composer → 内联界面块 → 微动画打磨。
+**实现顺序建议**：tokens → 布局骨架（titlebar/sidebar/main）→ 对话与活动行 → 上下文面板/composer → 内联界面块 → 微动画打磨。
 
 ---
 

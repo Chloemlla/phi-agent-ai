@@ -22,6 +22,12 @@ pub enum DomainEvent {
     SessionArchived {
         session_id: String,
     },
+    SessionRenamed {
+        session_id: String,
+        title: String,
+        /// `user`, `auxiliary` or `import`.
+        source: String,
+    },
     TurnStarted {
         session_id: String,
         turn_id: String,
@@ -77,6 +83,91 @@ pub enum DomainEvent {
         status: AgentStatus,
         report_message_id: String,
         delivered_to: Option<String>,
+    },
+
+    // ── optional model surfaces ───────────────────────────────────────
+    ImageGenerated {
+        asset_id: String,
+        session_id: Option<String>,
+        model: String,
+        mime: String,
+        width: Option<u32>,
+        height: Option<u32>,
+        prompt_preview: String,
+    },
+    ImageDeleted {
+        asset_id: String,
+    },
+    DecisionRequested {
+        call_id: String,
+        point: String,
+        model: String,
+        state_chars: u64,
+        session_id: Option<String>,
+        run_id: Option<String>,
+    },
+    DecisionReturned {
+        call_id: String,
+        point: String,
+        latency_ms: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    DecisionFailed {
+        call_id: String,
+        point: String,
+        error: String,
+    },
+    DecisionAutoApproved {
+        call_id: String,
+        tool_id: String,
+        action_digest: String,
+        threshold: f32,
+        probability: f32,
+    },
+    ToolOutputCompacted {
+        invocation_id: String,
+        run_id: String,
+        strategy: String,
+        before_chars: u64,
+        after_chars: u64,
+        blob_ref: String,
+    },
+    AuxiliaryCallIssued {
+        call_id: String,
+        role: String,
+        provider_id: Option<String>,
+        model: String,
+        purpose: String,
+        session_id: Option<String>,
+    },
+    AuxiliaryCallReturned {
+        call_id: String,
+        role: String,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    AuxiliaryCallFailed {
+        call_id: String,
+        role: String,
+        error: String,
+    },
+    MemoryMaintenanceStarted {
+        trigger: String,
+        batch_size: u64,
+        dry_run: bool,
+    },
+    MemoryMaintenanceProposed {
+        proposal_count: u64,
+        kinds: Vec<String>,
+    },
+    MemoryMaintenanceApplied {
+        applied: u64,
+        pending: u64,
+        reason: String,
+    },
+    MemoryMaintenanceFailed {
+        error: String,
     },
 
     // ── run / step ────────────────────────────────────────────────────
@@ -141,6 +232,16 @@ pub enum DomainEvent {
         step_id: String,
         model: String,
         max_output_tokens: u32,
+        /// Character counts of the assembled prompt segments. Tokens are not
+        /// counted locally; the UI labels the resulting split as estimated.
+        #[serde(default)]
+        system_chars: u64,
+        #[serde(default)]
+        tools_chars: u64,
+        #[serde(default)]
+        history_chars: u64,
+        #[serde(default)]
+        context_window: Option<u64>,
     },
     ModelCallReturned {
         call_id: String,
@@ -151,6 +252,8 @@ pub enum DomainEvent {
         cache_read_tokens: u64,
         #[serde(default)]
         cache_write_tokens: u64,
+        #[serde(default)]
+        duration_ms: u64,
         finish_reason: String,
     },
     ModelCallFailed {

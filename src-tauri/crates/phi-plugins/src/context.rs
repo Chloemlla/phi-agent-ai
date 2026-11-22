@@ -52,7 +52,7 @@ impl ContextPort for DefaultContextPlugin {
         system.push_str(
             "Rules:\n\
              - Use the provided tools to inspect and modify files. Never claim a file changed without a tool call.\n\
-             - Reads inside the workspace are automatic. Writes and shell commands require human approval, so state why you need them.\n\
+             - Reads inside the workspace, workspace writes, read-only commands and project verification commands run automatically. Other shell commands require human approval, so state why you need them.\n\
              - Prefer small, focused changes and preserve existing project conventions.\n\
              - After modifying code, run a relevant verification command (test/build/lint) and report the actual result.\n\
              - Do not attempt to access paths outside the workspace; such calls are denied.\n\

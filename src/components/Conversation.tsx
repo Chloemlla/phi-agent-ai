@@ -1,204 +1,263 @@
-// Conversation transcript: document flow with role rows, collapsible tool
-// blocks and risk-graded approval cards. No left/right bubbles.
+// Conversation transcript: a document flow of user bubbles, agent prose and
+// compact activity rows. Consecutive reasoning/read/search/list calls compress
+// into one summary; writes and failures stay individual. A thin rail connects
+// an activity cluster without boxing each row.
 
-import { For, Index, Show, createEffect, createMemo, createSignal, type Accessor } from "solid-js";
-import { formatClock, lastAssistantText, streamMatchesDurable } from "../format";
+import { Index, Show, createEffect, createMemo, createSignal, type Accessor } from "solid-js";
+import { formatFullTime, lastAssistantText, streamMatchesDurable } from "../format";
 import { t, tArgs } from "../i18n";
 import { isActiveState, runTone, stateLabel } from "../status";
 import type { Block, Message, PendingApproval, Run, SessionDetail } from "../types";
 import { ApprovalCard } from "./ApprovalCard";
+import { Alt } from "./Alt";
 import {
-  IconAlert,
-  IconBrain,
-  IconCheck,
-  IconChevron,
-  IconClose,
-  IconPhi,
-  IconWrench,
-} from "./Icons";
+  GroupRowView,
+  ResultRowView,
+  ThinkingRowView,
+  ToolRowView,
+  isCompressibleActivity,
+  type ActivityItemRow,
+  type GroupRowData,
+  type Rail,
+  type ResultRowData,
+  type ThinkingRowData,
+  type ToolResultInfo,
+  type ToolRowData,
+} from "./activity";
+import { IconAlert, IconPhi } from "./Icons";
 import { CopyButton, Markdown } from "./Markdown";
 import { RichHtml } from "./RichHtml";
 import { createCoalesced, createInlineUiSplitter, type InlineUiSegment } from "./inlineUi";
+import { SideScrollbar } from "./SideScrollbar";
 import { VIRTUALIZE_THRESHOLD, VirtualTranscript } from "./VirtualTranscript";
 
-// Native <details> open state lives in the DOM. Windowed rows are unmounted
-// when they leave the viewport, so remember the user's choice by block (the
-// durable block objects are reused across refreshes). The initial `open`
-// expression is deliberately non-reactive: it restores the choice on mount
-// without fighting the browser's own toggling afterwards.
-const blockOpen = new WeakMap<Block, boolean>();
-const runDetailsOpen = new Map<string, boolean>();
+type TextRowData = { key: string; kind: "text"; text: string; ts: string };
+type RedactedRowData = { key: string; kind: "redacted" };
+type UserRowData = { key: string; kind: "user"; message: Message };
+type StreamRowData = { key: string; kind: "stream" };
+type ApprovalRowData = {
+  key: string;
+  kind: "approval";
+  approval: Accessor<PendingApproval>;
+  update: (approval: PendingApproval) => void;
+};
+type RunRowData = { key: string; kind: "run" };
 
-function rememberBlockOpen(block: Block, element: HTMLDetailsElement) {
-  blockOpen.set(block, element.open);
+type ActivityRow = ActivityItemRow | GroupRowData;
+
+type TranscriptRow =
+  | UserRowData
+  | TextRowData
+  | RedactedRowData
+  | ActivityRow
+  | StreamRowData
+  | ApprovalRowData
+  | RunRowData;
+
+const STREAM_ROW: StreamRowData = { key: "stream", kind: "stream" };
+const RUN_ROW: RunRowData = { key: "run", kind: "run" };
+const userRows = new WeakMap<Message, UserRowData>();
+const blockRows = new WeakMap<
+  Block,
+  TextRowData | ThinkingRowData | ToolRowData | ResultRowData | RedactedRowData
+>();
+const groupCache = new Map<string, GroupRowData>();
+const approvalRows = new Map<string, ApprovalRowData>();
+
+function userRow(message: Message): UserRowData {
+  let row = userRows.get(message);
+  if (!row) {
+    row = { key: `user:${message.id}`, kind: "user", message };
+    userRows.set(message, row);
+  }
+  return row;
 }
 
-function ToolBlock(props: {
-  block: Block;
-  assistant: boolean;
-  toolName?: string;
-  onOpenUrl?: (url: string) => void;
-  onSend?: (text: string) => void;
-}) {
-  switch (props.block.type) {
-    case "text": {
-      const block = props.block;
-      return props.assistant ? (
-        <Markdown text={block.text} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />
-      ) : (
-        <div class="text">{block.text}</div>
-      );
-    }
-    case "thinking": {
-      const block = props.block;
-      return (
-        <details
-          class="thinking-block"
-          open={blockOpen.get(block) ?? false}
-          onToggle={(event) => rememberBlockOpen(block, event.currentTarget)}
-        >
-          <summary>
-            <span class="thinking-glyph">
-              <IconBrain size={13} />
-            </span>
-            <span class="thinking-label">{t("Thinking")}</span>
-            <span class="chevron">
-              <IconChevron size={13} />
-            </span>
-          </summary>
-          <div class="thinking-body">
-            <Markdown text={block.thinking || t("(empty)")} onOpenUrl={props.onOpenUrl} />
-          </div>
-        </details>
-      );
-    }
-    case "redacted_thinking":
-      return (
-        <div class="thinking-block redacted">
-          <span class="thinking-glyph">
-            <IconBrain size={13} />
-          </span>
-          <span class="thinking-label">{t("Reasoning hidden by the provider")}</span>
-        </div>
-      );
-    case "tool_use": {
-      const block = props.block;
-      return (
-        <details
-          class="tool"
-          open={blockOpen.get(block) ?? false}
-          onToggle={(event) => rememberBlockOpen(block, event.currentTarget)}
-        >
-          <summary>
-            <span class="tool-glyph ok">
-              <IconWrench size={13} />
-            </span>
-            <span class="tool-name mono">{tArgs("Call {name}", { name: block.name })}</span>
-            <span class="chevron">
-              <IconChevron size={13} />
-            </span>
-          </summary>
-          <pre class="mono">{JSON.stringify(block.input, null, 2)}</pre>
-        </details>
-      );
-    }
-    case "tool_result": {
-      const block = props.block;
-      const label = () => {
-        if (block.is_error) {
-          return props.toolName
-            ? tArgs("Tool failed: {name}", { name: props.toolName })
-            : t("Tool failed");
-        }
-        return props.toolName
-          ? tArgs("Tool result: {name}", { name: props.toolName })
-          : t("Tool result");
-      };
-      return (
-        <details
-          class="tool"
-          open={blockOpen.get(block) ?? block.is_error}
-          onToggle={(event) => rememberBlockOpen(block, event.currentTarget)}
-        >
-          <summary>
-            <span
-              classList={{
-                "tool-glyph": true,
-                error: block.is_error,
-                ok: !block.is_error,
-              }}
-            >
-              <Show when={block.is_error} fallback={<IconCheck size={13} />}>
-                <IconClose size={12} />
-              </Show>
-            </span>
-            <span class="tool-name mono">{label()}</span>
-            <span class="chevron">
-              <IconChevron size={13} />
-            </span>
-          </summary>
-          <Show when={block.is_error}>
-            <div class="tool-actions">
-              <CopyButton text={block.content} />
-            </div>
-          </Show>
-          <pre classList={{ mono: true, error: block.is_error }}>{block.content}</pre>
-        </details>
-      );
-    }
+function textRow(
+  message: Message,
+  block: Extract<Block, { type: "text" }>,
+  index: number,
+): TextRowData {
+  let row = blockRows.get(block) as TextRowData | undefined;
+  if (!row) {
+    row = {
+      key: `text:${message.id}:${index}`,
+      kind: "text",
+      text: block.text,
+      ts: message.ts,
+    };
+    blockRows.set(block, row);
+  }
+  return row;
+}
+
+function thinkingRow(
+  message: Message,
+  block: Extract<Block, { type: "thinking" }>,
+  index: number,
+  durationMs: number,
+): ThinkingRowData {
+  let row = blockRows.get(block) as ThinkingRowData | undefined;
+  if (!row) {
+    row = {
+      key: `thinking:${message.id}:${index}`,
+      kind: "thinking",
+      text: block.thinking,
+      durationMs,
+    };
+    blockRows.set(block, row);
+  }
+  return row;
+}
+
+function toolRow(block: Extract<Block, { type: "tool_use" }>): ToolRowData {
+  let row = blockRows.get(block) as ToolRowData | undefined;
+  if (!row) {
+    row = {
+      key: `tool:${block.id}`,
+      kind: "tool",
+      toolUseId: block.id,
+      name: block.name,
+      input: block.input,
+    };
+    blockRows.set(block, row);
+  }
+  return row;
+}
+
+function resultRow(
+  message: Message,
+  block: Extract<Block, { type: "tool_result" }>,
+): ResultRowData {
+  let row = blockRows.get(block) as ResultRowData | undefined;
+  if (!row) {
+    row = {
+      key: `result:${message.id}:${block.tool_use_id}`,
+      kind: "result",
+      toolUseId: block.tool_use_id,
+      name: null,
+      content: block.content,
+      isError: block.is_error,
+    };
+    blockRows.set(block, row);
+  }
+  return row;
+}
+
+function redactedRow(
+  message: Message,
+  block: Extract<Block, { type: "redacted_thinking" }>,
+  index: number,
+): RedactedRowData {
+  let row = blockRows.get(block) as RedactedRowData | undefined;
+  if (!row) {
+    row = {
+      key: `redacted:${message.id}:${index}`,
+      kind: "redacted",
+    };
+    blockRows.set(block, row);
+  }
+  return row;
+}
+
+function isActivityItemRow(row: TranscriptRow): row is ActivityItemRow {
+  return row.kind === "thinking" || row.kind === "tool" || row.kind === "result";
+}
+
+function isActivityRow(row: TranscriptRow): row is ActivityRow {
+  return isActivityItemRow(row) || row.kind === "group";
+}
+
+// Approval objects are rebuilt by every projection refresh; keep one row and
+// update its accessor so the card keeps local state (busy buttons, focus).
+function approvalRow(approval: PendingApproval): ApprovalRowData {
+  const existing = approvalRows.get(approval.id);
+  if (existing) {
+    existing.update(approval);
+    return existing;
+  }
+  const [value, setValue] = createSignal(approval);
+  const row: ApprovalRowData = {
+    key: `approval:${approval.id}`,
+    kind: "approval",
+    approval: value,
+    update: (next) => setValue(next),
+  };
+  approvalRows.set(approval.id, row);
+  return row;
+}
+
+function estimateRow(row: TranscriptRow): number {
+  switch (row.kind) {
+    case "user":
+      return 58;
+    case "text":
+      return 96;
+    case "redacted":
+      return 40;
+    case "thinking":
+    case "tool":
+    case "result":
+    case "group":
+      return 34;
+    case "stream":
+      return 72;
+    case "approval":
+      return 180;
+    case "run":
+      return 96;
   }
 }
 
-function MessageRow(props: {
-  message: Message;
-  toolNames: Map<string, string>;
+function userText(message: Message): string {
+  return message.blocks
+    .filter((block) => block.type === "text" && block.text.trim())
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("\n\n");
+}
+
+function MessageDot(props: { ts: string }) {
+  const label = () => formatFullTime(props.ts);
+  return (
+    <Alt content={<span class="alt-time">{label()}</span>} class="alt-bubble--time" delay={150}>
+      <span class="message-dot-hit" tabindex="0" aria-label={label()}>
+        <span class="message-dot" aria-hidden="true" />
+      </span>
+    </Alt>
+  );
+}
+
+function UserMessageRow(props: { row: UserRowData }) {
+  return (
+    <div class="message message--user">
+      <div class="user-bubble" title={formatFullTime(props.row.message.ts)}>
+        {userText(props.row.message)}
+      </div>
+    </div>
+  );
+}
+
+function AssistantTextRow(props: {
+  row: TextRowData;
   onOpenUrl?: (url: string) => void;
   onSend?: (text: string) => void;
 }) {
-  const user = () => props.message.role === "user";
-  // The backend journals tool results as user-role messages. They are tool
-  // output, not something the human typed, so they get no "You" header.
-  const toolOnly = () =>
-    user() &&
-    props.message.blocks.length > 0 &&
-    props.message.blocks.every((block) => block.type === "tool_result");
-
   return (
-    <article
-      classList={{
-        msg: true,
-        user: user() && !toolOnly(),
-        assistant: !user(),
-        "tool-only": toolOnly(),
-      }}
-    >
-      <Show when={!toolOnly()}>
-        <header class="msg-head">
-          <span classList={{ avatar: true, user: user(), agent: !user() }}>
-            <Show when={!user()} fallback={<span>{t("You").slice(0, 1)}</span>}>
-              <IconPhi size={13} />
-            </Show>
-          </span>
-          <span class="msg-name">{user() ? t("You") : t("Agent")}</span>
-          <time class="msg-time mono">{formatClock(props.message.ts)}</time>
-        </header>
-      </Show>
-      <div class="msg-body">
-        <For each={props.message.blocks}>
-          {(block) => (
-            <ToolBlock
-              block={block}
-              assistant={!user()}
-              toolName={
-                block.type === "tool_result" ? props.toolNames.get(block.tool_use_id) : undefined
-              }
-              onOpenUrl={props.onOpenUrl}
-              onSend={props.onSend}
-            />
-          )}
-        </For>
+    <div class="message message--assistant">
+      <MessageDot ts={props.row.ts} />
+      <div class="message-body">
+        <Markdown text={props.row.text} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />
       </div>
-    </article>
+    </div>
+  );
+}
+
+function RedactedRow() {
+  return (
+    <div class="message message--assistant message--notice">
+      <span class="message-dot static" aria-hidden="true" />
+      <div class="message-body notice-text">{t("Reasoning hidden by the provider")}</div>
+    </div>
   );
 }
 
@@ -217,14 +276,9 @@ function StreamingMessage(props: {
   onSend?: (text: string) => void;
 }) {
   return (
-    <article class="msg assistant streaming">
-      <header class="msg-head">
-        <span class="avatar agent">
-          <IconPhi size={13} />
-        </span>
-        <span class="msg-name">{t("Agent")}</span>
-      </header>
-      <div class="msg-body">
+    <article class="message message--assistant message--streaming">
+      <span class="message-dot live" aria-hidden="true" />
+      <div class="message-body">
         {/* Plain text while streaming: reparsing Markdown on every token
             recreates blocks and loses code-copy state. An `html` fence is
             rendered live because its content is self-contained, then the
@@ -290,6 +344,8 @@ function firstLine(text: string | null | undefined): string {
   return line?.trim() ?? "";
 }
 
+const runDetailsOpen = new Map<string, boolean>();
+
 function RunNotice(props: { run: Run }) {
   const danger = () => runTone(props.run.state) === "danger";
   const details = () =>
@@ -338,63 +394,6 @@ function RunNotice(props: { run: Run }) {
 
 const FAILED_STATES = ["AwaitingReconciliation", "Failed", "Aborted"];
 
-type MessageRowData = { key: string; kind: "message"; message: Message };
-type StreamRowData = { key: string; kind: "stream" };
-type ApprovalRowData = {
-  key: string;
-  kind: "approval";
-  approval: Accessor<PendingApproval>;
-  update: (approval: PendingApproval) => void;
-};
-type RunRowData = { key: string; kind: "run" };
-type TranscriptRow = MessageRowData | StreamRowData | ApprovalRowData | RunRowData;
-
-const STREAM_ROW: StreamRowData = { key: "stream", kind: "stream" };
-const RUN_ROW: RunRowData = { key: "run", kind: "run" };
-const messageRows = new WeakMap<Message, MessageRowData>();
-const approvalRows = new Map<string, ApprovalRowData>();
-
-function messageRow(message: Message): MessageRowData {
-  let row = messageRows.get(message);
-  if (!row) {
-    row = { key: `message:${message.id}`, kind: "message", message };
-    messageRows.set(message, row);
-  }
-  return row;
-}
-
-// Approval objects are rebuilt by every projection refresh; keep one row and
-// update its accessor so the card keeps local state (busy buttons, focus).
-function approvalRow(approval: PendingApproval): ApprovalRowData {
-  const existing = approvalRows.get(approval.id);
-  if (existing) {
-    existing.update(approval);
-    return existing;
-  }
-  const [value, setValue] = createSignal(approval);
-  const row: ApprovalRowData = {
-    key: `approval:${approval.id}`,
-    kind: "approval",
-    approval: value,
-    update: (next) => setValue(next),
-  };
-  approvalRows.set(approval.id, row);
-  return row;
-}
-
-function estimateRow(row: TranscriptRow): number {
-  switch (row.kind) {
-    case "message":
-      return 120;
-    case "stream":
-      return 72;
-    case "approval":
-      return 180;
-    case "run":
-      return 96;
-  }
-}
-
 export function Conversation(props: {
   detail: SessionDetail | null;
   run: Run | null;
@@ -414,15 +413,23 @@ export function Conversation(props: {
   const streamSegments = createMemo(() => splitter.update(coalescedText()));
 
   const failedRun = () => (props.run && FAILED_STATES.includes(props.run.state) ? props.run : null);
+  // A tool only counts as running while the model loop is actually executing;
+  // WaitingApproval is represented by its approval card, not a spinner.
+  const runActive = () => props.run?.state === "Scheduled" || props.run?.state === "Running";
 
-  const toolNames = createMemo(() => {
-    const names = new Map<string, string>();
+  const toolResults = createMemo(() => {
+    const map = new Map<string, ToolResultInfo>();
     for (const message of props.detail?.session.messages ?? []) {
       for (const block of message.blocks) {
-        if (block.type === "tool_use") names.set(block.id, block.name);
+        if (block.type === "tool_result") {
+          map.set(block.tool_use_id, {
+            content: block.content,
+            isError: block.is_error,
+          });
+        }
       }
     }
-    return names;
+    return map;
   });
 
   const durableText = createMemo(() => lastAssistantText(props.detail));
@@ -434,21 +441,146 @@ export function Conversation(props: {
   const rows = createMemo<TranscriptRow[]>(() => {
     const detail = props.detail;
     if (!detail) return [];
-    const result: TranscriptRow[] = [];
-    for (const message of detail.session.messages) {
-      result.push(messageRow(message));
+    const messages = detail.session.messages;
+    const results = toolResults();
+
+    const toolUseIds = new Set<string>();
+    for (const message of messages) {
+      for (const block of message.blocks) {
+        if (block.type === "tool_use") toolUseIds.add(block.id);
+      }
     }
-    if (streamVisible()) result.push(STREAM_ROW);
+
+    const raw: TranscriptRow[] = [];
+    let previousTs: number | null = null;
+    for (const message of messages) {
+      const messageTs = Date.parse(message.ts);
+      const delta =
+        previousTs !== null && Number.isFinite(messageTs) ? Math.max(0, messageTs - previousTs) : 0;
+      if (Number.isFinite(messageTs)) previousTs = messageTs;
+
+      if (message.role === "user") {
+        if (userText(message)) raw.push(userRow(message));
+        for (const block of message.blocks) {
+          if (block.type === "tool_result" && !toolUseIds.has(block.tool_use_id)) {
+            raw.push(resultRow(message, block));
+          }
+        }
+        continue;
+      }
+
+      let durationAssigned = false;
+      for (const [index, block] of message.blocks.entries()) {
+        switch (block.type) {
+          case "text":
+            if (block.text.trim()) raw.push(textRow(message, block, index));
+            break;
+          case "thinking": {
+            const durationMs = durationAssigned ? 0 : delta;
+            durationAssigned = true;
+            if (block.thinking.trim()) {
+              raw.push(thinkingRow(message, block, index, durationMs));
+            }
+            break;
+          }
+          case "redacted_thinking":
+            raw.push(redactedRow(message, block, index));
+            break;
+          case "tool_use":
+            raw.push(toolRow(block));
+            break;
+          case "tool_result":
+            if (!toolUseIds.has(block.tool_use_id)) {
+              raw.push(resultRow(message, block));
+            }
+            break;
+        }
+      }
+    }
+
+    // Compress consecutive low-noise activity into one summary row. The cache
+    // keeps a group's identity while its members are unchanged so an open
+    // group keeps its DOM (and scroll position) across projection refreshes.
+    const compressed: TranscriptRow[] = [];
+    const resultFor = (toolUseId: string) => results.get(toolUseId);
+    let index = 0;
+    while (index < raw.length) {
+      const row = raw[index];
+      if (!isActivityItemRow(row) || !isCompressibleActivity(row, resultFor)) {
+        compressed.push(row);
+        index += 1;
+        continue;
+      }
+      let end = index + 1;
+      while (end < raw.length) {
+        const next = raw[end];
+        if (!isActivityItemRow(next) || !isCompressibleActivity(next, resultFor)) break;
+        end += 1;
+      }
+      const items = raw.slice(index, end) as ActivityItemRow[];
+      if (items.length >= 2) {
+        const key = `group:${items.map((item) => item.key).join("|")}`;
+        let group = groupCache.get(key);
+        if (!group) {
+          group = { key, kind: "group", items };
+          groupCache.set(key, group);
+        }
+        compressed.push(group);
+      } else {
+        compressed.push(row);
+      }
+      index = end;
+    }
+
+    const usedGroups = new Set(
+      compressed.filter((row) => row.kind === "group").map((row) => row.key),
+    );
+    for (const key of groupCache.keys()) {
+      if (!usedGroups.has(key)) groupCache.delete(key);
+    }
+
+    if (streamVisible()) compressed.push(STREAM_ROW);
     const liveApprovals = new Set<string>();
     for (const approval of detail.pendingApprovals) {
       liveApprovals.add(approval.id);
-      result.push(approvalRow(approval));
+      compressed.push(approvalRow(approval));
     }
     for (const id of approvalRows.keys()) {
       if (!liveApprovals.has(id)) approvalRows.delete(id);
     }
-    if (failedRun()) result.push(RUN_ROW);
-    return result;
+    if (failedRun()) compressed.push(RUN_ROW);
+    return compressed;
+  });
+
+  // The rail joins consecutive activity rows. A single row draws no line;
+  // the first and last rows stop at the status dot so the line never dangles.
+  const rails = createMemo(() => {
+    const map = new Map<string, Rail>();
+    const list = rows();
+    let index = 0;
+    while (index < list.length) {
+      if (!isActivityRow(list[index])) {
+        index += 1;
+        continue;
+      }
+      let end = index;
+      while (end < list.length && isActivityRow(list[end])) end += 1;
+      const length = end - index;
+      for (let cursor = index; cursor < end; cursor += 1) {
+        const row = list[cursor];
+        const rail: Rail =
+          length === 1
+            ? "only"
+            : cursor === index
+              ? "start"
+              : cursor === end - 1
+                ? "end"
+                : "middle";
+        map.set(row.key, rail);
+      }
+      index = end;
+    }
+    return map;
   });
 
   // Pinning follows the coalesced live text, which is also the DOM cadence.
@@ -456,13 +588,39 @@ export function Conversation(props: {
 
   function renderRow(row: TranscriptRow) {
     switch (row.kind) {
-      case "message":
+      case "user":
+        return <UserMessageRow row={row} />;
+      case "text":
+        return <AssistantTextRow row={row} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />;
+      case "redacted":
+        return <RedactedRow />;
+      case "thinking":
         return (
-          <MessageRow
-            message={row.message}
-            toolNames={toolNames()}
+          <ThinkingRowView
+            row={row}
+            rail={() => rails().get(row.key) ?? "none"}
             onOpenUrl={props.onOpenUrl}
-            onSend={props.onSend}
+          />
+        );
+      case "tool":
+        return (
+          <ToolRowView
+            row={row}
+            rail={() => rails().get(row.key) ?? "none"}
+            result={() => toolResults().get(row.toolUseId)}
+            runActive={runActive}
+          />
+        );
+      case "result":
+        return <ResultRowView row={row} rail={() => rails().get(row.key) ?? "none"} />;
+      case "group":
+        return (
+          <GroupRowView
+            row={row}
+            rail={() => rails().get(row.key) ?? "none"}
+            resultFor={(toolUseId) => toolResults().get(toolUseId)}
+            runActive={runActive}
+            onOpenUrl={props.onOpenUrl}
           />
         );
       case "stream":
@@ -497,51 +655,54 @@ export function Conversation(props: {
   });
 
   return (
-    <div
-      class="transcript"
-      tabindex={rows().length > VIRTUALIZE_THRESHOLD ? 0 : undefined}
-      ref={(element) => setTranscript(element)}
-    >
-      <div class="conversation-inner">
-        <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {approvalNotice()}
-        </div>
-        <Show when={!props.modeOk}>
-          <div class="banner warn" role="status">
-            <IconAlert size={15} />
-            <div>
-              {props.modeReason || t("The node is not in normal mode; sending is disabled")}
-            </div>
+    <div class="scroll-shell">
+      <div
+        class="transcript"
+        tabindex={rows().length > VIRTUALIZE_THRESHOLD ? 0 : undefined}
+        ref={(element) => setTranscript(element)}
+      >
+        <div class="conversation-inner">
+          <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {approvalNotice()}
           </div>
-        </Show>
+          <Show when={!props.modeOk}>
+            <div class="banner warn" role="status">
+              <IconAlert size={15} />
+              <div>
+                {props.modeReason || t("The node is not in normal mode; sending is disabled")}
+              </div>
+            </div>
+          </Show>
 
-        <Show when={props.detail} fallback={<div class="loading">{t("Loading…")}</div>}>
-          {(detail) => (
-            <>
-              <Show
-                when={
-                  detail().session.messages.length === 0 &&
-                  !props.streamText &&
-                  detail().pendingApprovals.length === 0 &&
-                  !(props.run && isActiveState(props.run.state))
-                }
-              >
-                <EmptyState modelConfigured={props.modelConfigured} />
-              </Show>
+          <Show when={props.detail} fallback={<div class="loading">{t("Loading…")}</div>}>
+            {(detail) => (
+              <>
+                <Show
+                  when={
+                    detail().session.messages.length === 0 &&
+                    !props.streamText &&
+                    detail().pendingApprovals.length === 0 &&
+                    !(props.run && isActiveState(props.run.state))
+                  }
+                >
+                  <EmptyState modelConfigured={props.modelConfigured} />
+                </Show>
 
-              <Show when={rows().length > 0}>
-                <VirtualTranscript
-                  rows={rows()}
-                  scroll={() => transcript()}
-                  estimate={estimateRow}
-                  render={renderRow}
-                  revision={revision}
-                />
-              </Show>
-            </>
-          )}
-        </Show>
+                <Show when={rows().length > 0}>
+                  <VirtualTranscript
+                    rows={rows()}
+                    scroll={() => transcript()}
+                    estimate={estimateRow}
+                    render={renderRow}
+                    revision={revision}
+                  />
+                </Show>
+              </>
+            )}
+          </Show>
+        </div>
       </div>
+      <SideScrollbar host={() => transcript() ?? null} />
     </div>
   );
 }

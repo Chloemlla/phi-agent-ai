@@ -17,6 +17,7 @@ import {
   SAFE_IMAGE,
   SAFE_LINK,
   SCOPES,
+  UI_ATTR_VALUES,
 } from "./allowlist";
 import type { RenderContext } from "./context";
 
@@ -29,6 +30,8 @@ export function htmlProps(
   const props: Record<string, unknown> = {};
   if (classes.length > 0) props.class = classes.join(" ");
   applyGlobalAttributes(element, props, context);
+  applyUiAttributes(element, props);
+  applyVisibility(element, props, context);
 
   if (tag === "img") {
     applyImage(element, props, context);
@@ -48,7 +51,6 @@ export function htmlProps(
     }
   }
   applyBinding(tag, element, props, context);
-  applyVisibility(element, props, context);
 
   const setExpression = element.getAttribute("data-ui-set");
   if (setExpression && tag !== "button") {
@@ -75,10 +77,23 @@ function applyGlobalAttributes(
 ) {
   const title = element.getAttribute("title");
   if (title) textProp(props, "title", title, context, 200);
+  const ariaLabel = element.getAttribute("aria-label");
+  if (ariaLabel) textProp(props, "aria-label", ariaLabel, context, 200);
   const lang = element.getAttribute("lang");
   if (lang) props.lang = cap(lang, 20);
   const dir = element.getAttribute("dir");
   if (dir && DIRS.has(dir)) props.dir = dir;
+}
+
+/** Tokenized layout attributes. They are only forwarded when both the name and
+ * the value are known, so the stylesheet never sees model-invented values. */
+function applyUiAttributes(element: Element, props: Record<string, unknown>) {
+  for (const [name, allowed] of Object.entries(UI_ATTR_VALUES)) {
+    const value = element.getAttribute(name);
+    if (value !== null && allowed.has(value)) props[name] = value;
+  }
+  if (element.getAttribute("data-wrap") === "nowrap") props["data-wrap"] = "nowrap";
+  if (element.hasAttribute("data-border")) props["data-border"] = "";
 }
 
 function applyTagAttribute(

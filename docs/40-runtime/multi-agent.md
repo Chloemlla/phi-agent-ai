@@ -1,6 +1,6 @@
 # 多 Agent：线程化 Lead-Sidekick 委派
 
-> 状态：🌿 评审中 · 最后更新：2026-11-22
+> 状态：🌿 评审中 · 后端已实现（2026-11-22）；桌面 UI 待接 · 最后更新：2026-11-22
 > 上游：ADR-0012（Matter）、ADR-0013（线程化委派）、`40-runtime/agent-loop.md` §7
 > 关联：`20-domain/domain-model.md`、`40-runtime/model-gateway.md`、`40-runtime/auxiliary-models.md`
 
@@ -45,7 +45,7 @@
 | **Session（会话）** | 一段交互上下文，也是换端单位 | 可归档、可重新激活 | 是 |
 | **Turn（轮次）** | 一次「用户发言 + Agent 全部回应」 | 用户发起到根 Run 终态 | 是 |
 | **AgentInstance（Agent 实例）** | 一个持久 Agent 身份：Lead 或 Sidekick；拥有自己的消息线程 | 创建到归档 | 可进入查看 |
-| **Run（运行）** | 一次 Agent 行动循环的执行；根 Run 或子 Run | Scheduled → 终态；可恢复 | 间接（Runbar） |
+| **Run（运行）** | 一次 Agent 行动循环的执行；根 Run 或子 Run | Scheduled → 终态；可恢复 | 间接（用量面板） |
 | **Step（步骤）** | Run 内的一次循环迭代（一次模型调用 + 其工具调用） | 开始到完成 | 一般不对用户展示 |
 
 ```
@@ -244,7 +244,7 @@ Sidekick **没有** `delegate`，因此深度固定为 1。
 ### 6.4 用量
 
 - 每个 Run 自己的 `ModelCallReturned` 记录 token；按 Agent / Session 聚合展示。
-- 不设 Run 级预算硬上限（现行方向）；多 Agent 会放大用量，Runbar 和 headless 输出必须按 Agent 分项，避免账单黑箱。
+- 不设 Run 级预算硬上限（现行方向）；多 Agent 会放大用量，用量面板和 headless 输出必须按 Agent 分项，避免账单黑箱。
 
 ---
 
@@ -309,7 +309,7 @@ phi-headless agents cancel <agent_id>
 
 - 侧栏会话之外增加「协作」区：按事件顺序展示派发、成员消息、报告、文件交接；不是群聊广播。
 - 可以进入任一 Agent 线程查看完整对话；对活跃 Agent 可以追加消息（`steer`）、审批、取消。
-- Runbar 按 Agent 分项显示步数 / token / 状态；根 Run 展开可见子 Run。
+- 用量面板按 Agent 分项显示步数 / token / 状态；根 Run 展开可见子 Run。
 - 审批卡标注 Agent 身份和线程；从卡片可以跳到对应 Agent。
 - 没有「所有 Agent 群聊」界面；可见性由线程与定向消息决定。
 
@@ -322,7 +322,7 @@ phi-headless agents cancel <agent_id>
 | P0 | 本文件 + ADR-0012/0013/0014；事件与契约草案 | 文档评审通过 |
 | P1 | 消息线程、`AgentInstance`、子 Run、同步 `delegate`、模型 roster 与 scale 校验 | headless 集成测试：单 Sidekick 完成写文件并回报 |
 | P2 | 异步 `delegate`、多 Sidekick、`wait_for_agents`、`send_message`、`cancel_agent`、写租约 | 并发只读 / 单写者 / 取消传播测试 |
-| P3 | 桌面监督界面、协作面板、按 Agent 的 Runbar、审批标注 | 手动验收 + UI 测试 |
+| P3 | 桌面监督界面、协作面板、按 Agent 的用量面板、审批标注 | 手动验收 + UI 测试 |
 | P4 | Matter 与超级 Agent：看板、日程、长期委派、主动性 | 后续单独设计 |
 
 每个阶段都必须先有 headless 路径；不依赖本地完整 Rust 工具链，CI 上验证。

@@ -15,7 +15,7 @@ import {
   setActiveProvider,
   testProvider,
 } from "../bridge";
-import { t, tArgs } from "../i18n";
+import { t, tPlural } from "../i18n";
 import { errorText } from "../errors";
 import { pushToast } from "../toast";
 import { IconArrowLeft, IconCircleAlert, IconPlus } from "../components/Icons";
@@ -542,7 +542,9 @@ export function ProvidersPage(props: {
       await refreshList();
       await props.onRefresh().catch(() => undefined);
       setNotice(
-        wasNew ? tArgs("Added {count} models.", { count: wanted.length }) : t("Provider saved."),
+        wasNew
+          ? tPlural("Added {n} model.", "Added {n} models.", wanted.length)
+          : t("Provider saved."),
       );
       return true;
     } catch (e) {
@@ -689,7 +691,7 @@ export function ProvidersPage(props: {
                     <span class="provider-meta">
                       <span>{protocolLabel(provider.protocol)}</span>
                       <span class="provider-sep">·</span>
-                      <span>{tArgs("{count} models", { count: provider.models.length })}</span>
+                      <span>{tPlural("{n} model", "{n} models", provider.models.length)}</span>
                       <span class="provider-sep">·</span>
                       <span>
                         {provider.auth === "none"

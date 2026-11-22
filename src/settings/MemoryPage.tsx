@@ -10,7 +10,7 @@ import {
   listMemories,
   searchMemories,
 } from "../bridge";
-import { t, tArgs, lang } from "../i18n";
+import { t, tArgs, tPlural, lang } from "../i18n";
 import { errorText } from "../errors";
 import { IconCheck, IconSearch, IconTrash } from "../components/Icons";
 import type { MemoryRecord, MemoryStats } from "../types";
@@ -226,7 +226,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
     try {
       const report = await forgetMemories([memory.id]);
       setNotice(
-        tArgs("Deleted {records} fact(s) and {episodes} source excerpt(s).", {
+        tArgs("Deleted facts: {records} · source excerpts: {episodes}", {
           records: report.records,
           episodes: report.episodes,
         }),
@@ -256,11 +256,11 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       <Show when={stats()}>
         {(summary) => (
           <p class="hint">
-            {tArgs("{total} facts · {active} active · {episodes} source excerpts", {
-              total: summary().total,
-              active: summary().active,
-              episodes: summary().episodes,
-            })}
+            {[
+              tPlural("{n} fact", "{n} facts", summary().total),
+              tArgs("{n} active", { n: summary().active }),
+              tPlural("{n} source excerpt", "{n} source excerpts", summary().episodes),
+            ].join(" · ")}
           </p>
         )}
       </Show>

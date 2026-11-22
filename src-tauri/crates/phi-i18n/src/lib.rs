@@ -183,13 +183,17 @@ fn zh(msgid: &str) -> Option<&'static str> {
 
         // Policy
         "Read-only access inside the workspace" => "工作区内只读访问",
-        "Writing to the workspace modifies data and requires human approval (previous content is backed up)" => {
-            "写入工作区会修改数据，需要人工审批（旧内容会备份）"
+        "Workspace writes are reversible and backed up; no approval required" => {
+            "工作区写入可回退且会备份旧内容，无需审批"
         }
         "Empty command" => "空命令",
         "Command matches a dangerous pattern; denied by default" => "命令命中危险模式，默认拒绝",
-        "Command execution is irreversible and requires human approval" => {
-            "命令执行不可逆，需要人工审批"
+        "Read-only command inside the workspace; no approval required" => {
+            "工作区内的只读命令，无需审批"
+        }
+        "Project verification command; no approval required" => "项目验证命令，无需审批",
+        "Command is not on the safe whitelist; human approval is required" => {
+            "命令不在安全白名单中，需要人工审批"
         }
         "No policy matches {tool}; denied by default" => "没有匹配 {tool} 的策略，默认拒绝",
         "Reading long-term memory does not touch the workspace" => "读取长期记忆不会触碰工作区",
@@ -363,6 +367,9 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Failed to create workspace: {error}" => "创建工作区失败：{error}",
         "Workspace must be a directory" => "工作区必须是目录",
         "Unknown session: {id}" => "未知会话：{id}",
+        "The session has an active run; cancel it before deleting" => {
+            "会话正在运行；请先取消再删除"
+        }
         "Node is in {mode} mode: {reason}" => "节点处于 {mode} 模式：{reason}",
         "Message is empty" => "消息为空",
         "Unknown thinking effort {effort}; expected off, low, medium, high, xhigh or max" => {
@@ -554,6 +561,131 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "agents requires a subcommand: list <session-id> or show <agent-id>" => {
             "agents 需要子命令：list <session-id> 或 show <agent-id>"
         }
+
+        // Image generation
+        "Image generation is disabled" => "生图已禁用",
+        "Image generation is not configured" => "生图尚未配置",
+        "Image prompt egress is not granted" => "未授予图片提示词外发授权",
+        "Image API key is not configured" => "生图 API Key 尚未配置",
+        "Unknown image provider {provider}; expected openai_images or gemini_images" => {
+            "未知生图供应商 {provider}；应为 openai_images 或 gemini_images"
+        }
+        "The image endpoint must start with http:// or https://" => {
+            "生图端点必须以 http:// 或 https:// 开头"
+        }
+        "Unsupported image format {format}; expected png, jpeg, webp, gif or svg" => {
+            "不支持的图片格式 {format}；应为 png、jpeg、webp、gif 或 svg"
+        }
+        "Image prompt is empty" => "图片提示词为空",
+        "Image prompt is too long (max 4000 characters)" => "图片提示词过长（最多 4000 字符）",
+        "Image request failed: {error}" => "生图请求失败：{error}",
+        "Image provider returned {status}: {body}" => "生图供应商返回 {status}：{body}",
+        "Image provider returned invalid JSON: {error}" => "生图供应商返回了无效 JSON：{error}",
+        "The image provider returned a remote URL; configure it to return base64 data instead" => {
+            "生图供应商返回了远程 URL；请将其配置为返回 base64 数据"
+        }
+        "Image data is not valid base64: {error}" => "图片数据不是有效的 base64：{error}",
+        "The image provider returned no images" => "生图供应商没有返回图片",
+        "Unsupported image provider: {provider}" => "不支持的生图供应商：{provider}",
+        "Image is too large ({bytes} bytes; max {max})" => "图片过大（{bytes} 字节；上限 {max}）",
+        "The image provider returned an unsupported file format" => {
+            "生图供应商返回了不支持的文件格式"
+        }
+        "Image MIME mismatch: provider said {provider}, bytes look like {sniffed}" => {
+            "图片 MIME 不一致：供应商标注 {provider}，字节内容像 {sniffed}"
+        }
+        "Image generation is not available" => "生图能力不可用",
+        "Only the lead agent can generate images" => "只有主代理可以生成图片",
+        "Image generation is not ready" => "生图尚未就绪",
+        "Image generation limit reached for this turn ({used}+{requested} > {max})" => {
+            "本轮生图数量已达上限（{used}+{requested} > {max}）"
+        }
+        "Reference images are not supported by this image adapter yet" => {
+            "当前生图适配器尚不支持参考图"
+        }
+        "Image generated" => "图片已生成",
+        "Image asset not found: {id} ({error})" => "图片资产不存在：{id}（{error}）",
+        "Image metadata is unreadable: {error}" => "图片元数据无法读取：{error}",
+        "Invalid image asset id: {id}" => "无效的图片资产 id：{id}",
+        "Failed to write image asset: {error}" => "写入图片资产失败：{error}",
+        "Failed to write image metadata: {error}" => "写入图片元数据失败：{error}",
+        "Failed to write image: {error}" => "写入图片失败：{error}",
+
+        // Decision model
+        "The decision model is disabled" => "决策模型已禁用",
+        "The decision model is not configured" => "决策模型尚未配置",
+        "Decision state egress is not granted" => "未授予决策状态外发授权",
+        "The decision model API key is not configured" => "决策模型 API Key 尚未配置",
+        "The decision endpoint must start with http:// or https://" => {
+            "决策端点必须以 http:// 或 https:// 开头"
+        }
+        "Decision thresholds must be between 0 and 1" => "决策阈值必须在 0 到 1 之间",
+        "Decision probability is outside 0..1: {value}" => "决策概率超出 0..1：{value}",
+        "The decision response is missing a noul probability" => "决策响应缺少 noul 概率",
+        "The decision response is missing a choice" => "决策响应缺少 choice",
+        "The decision model chose an unknown option: {choice}" => {
+            "决策模型选择了未知选项：{choice}"
+        }
+        "The decision response is missing a score" => "决策响应缺少 score",
+        "The decision response has no answers object" => "决策响应没有 answers 对象",
+        "The decision response is missing answer {id}" => "决策响应缺少答案 {id}",
+        "Decision request failed: {error}" => "决策请求失败：{error}",
+        "Decision provider returned {status}: {body}" => "决策供应商返回 {status}：{body}",
+        "Decision provider returned invalid JSON: {error}" => "决策供应商返回了无效 JSON：{error}",
+        "The decision model is not available" => "决策模型不可用",
+        "Auto-approved by the decision model (probability {probability}, threshold {threshold})" => {
+            "由决策模型自动放行（概率 {probability}，阈值 {threshold}）"
+        }
+
+        // Auxiliary roles
+        "This auxiliary role is not configured" => "该辅助角色尚未配置",
+        "Auxiliary egress is not granted for this role" => "未授予该辅助角色的外发授权",
+        "Auxiliary role is not configured: {role}" => "辅助角色尚未配置：{role}",
+        "Auxiliary egress is not granted for {role}" => "未授予 {role} 的外发授权",
+        "Auxiliary call for {role} timed out" => "辅助调用 {role} 超时",
+        "Unknown auxiliary role {role}; expected one of {roles}" => {
+            "未知辅助角色 {role}；应为 {roles} 之一"
+        }
+        "Auxiliary model is empty" => "辅助模型为空",
+        "Auxiliary models are not available" => "辅助模型不可用",
+        "The memory maintenance role is not ready" => "记忆整理角色尚未就绪",
+        "No active facts to maintain" => "没有需要整理的活跃事实",
+        "Operation has no op field" => "操作缺少 op 字段",
+        "Invalid merge operation" => "无效的 merge 操作",
+        "Merge references an unknown or oversized fact" => "merge 引用了未知或过长的事实",
+        "Supersede references an unknown fact" => "supersede 引用了未知事实",
+        "Invalid supersede operation" => "无效的 supersede 操作",
+        "Forget is never performed automatically" => "forget 永远不会自动执行",
+        "Unknown maintenance operation: {op}" => "未知整理操作：{op}",
+        "The memory maintenance model returned no JSON object" => "记忆整理模型没有返回 JSON 对象",
+        "The memory maintenance model returned incomplete JSON" => {
+            "记忆整理模型返回了不完整的 JSON"
+        }
+        "The memory maintenance response is not valid JSON: {error}" => {
+            "记忆整理响应不是有效 JSON：{error}"
+        }
+        "The memory maintenance response has no operations array" => {
+            "记忆整理响应没有 operations 数组"
+        }
+        "Memory store is not available" => "记忆存储不可用",
+        "Session title is empty" => "会话标题为空",
+
+        // Optional-surface CLI
+        "image requires a subcommand: configure, show, generate, list or delete" => {
+            "image 需要子命令：configure、show、generate、list 或 delete"
+        }
+        "Unknown image subcommand: {command}" => "未知 image 子命令：{command}",
+        "decision requires a subcommand: configure, show or test" => {
+            "decision 需要子命令：configure、show 或 test"
+        }
+        "Unknown decision subcommand: {command}" => "未知 decision 子命令：{command}",
+        "roles requires a subcommand: list, set or clear" => "roles 需要子命令：list、set 或 clear",
+        "roles set requires a role name" => "roles set 需要角色名",
+        "Unknown roles subcommand: {command}" => "未知 roles 子命令：{command}",
+        "--prompt is required" => "必须提供 --prompt",
+        "--state is required" => "必须提供 --state",
+        "Invalid number for {flag}: {value}" => "{flag} 的数字无效：{value}",
+        "Unknown argument: {arg}" => "未知参数：{arg}",
 
         _ => return None,
     })

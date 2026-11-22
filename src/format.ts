@@ -58,6 +58,16 @@ export function formatClock(iso: string): string {
   });
 }
 
+/** Localized date + time for hover bubbles on message dots. */
+export function formatFullTime(iso: string): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "";
+  return new Intl.DateTimeFormat(locale(), {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(time));
+}
+
 export function formatElapsed(totalSeconds: number): string {
   const seconds = Math.max(0, Math.round(totalSeconds));
   const hours = Math.floor(seconds / 3600);
@@ -99,4 +109,33 @@ export function formatRelative(iso: string, now: number): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/** Join labels with the locale's conjunction list ("A, B, and C"). */
+export function formatList(parts: string[]): string {
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  return new Intl.ListFormat(locale(), { type: "conjunction", style: "long" }).format(parts);
+}
+
+/** English UI sentences start uppercase; Chinese has no case. */
+export function sentenceCase(text: string): string {
+  if (lang() !== "en" || !text) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Compact call duration: 4s, 1m 12s. */
+export function formatShortDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+}
+
+/** "Thought for 49s", "Thought for a while", or the live "Thinking". */
+export function thoughtTitle(durationMs: number, live: boolean): string {
+  if (live) return t("Thinking");
+  if (!Number.isFinite(durationMs) || durationMs < 3000) return t("Thought for a while");
+  return tArgs("Thought for {duration}", { duration: formatShortDuration(durationMs) });
 }

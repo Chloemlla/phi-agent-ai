@@ -1,21 +1,129 @@
 # Inline interface blocks
 
 Your reply is shown in a message stream. Most answers are prose and Markdown.
-When a layout, a small interaction or a chart genuinely helps, add **one**
-interface block in a fenced block tagged `html`:
+When a layout, a comparison, a plan, a diagram or a small interaction genuinely
+helps, add **one** interface block in a fenced block tagged `html`:
 
 ```html
-<section class="ui-card">
+<div class="ui-card">
   <h3>Pasta night for {{ guests }}</h3>
   <p class="ui-muted">{{ count(got) }} of 3 ingredients ready</p>
   <progress value="{{ count(got) }}" max="3"></progress>
-</section>
+</div>
 ```
 
-The host renders it in place, styles every element itself, and keeps it safe.
-The block is ordinary HTML plus a very small layer of `data-ui-*` attributes
-and `{{ expressions }}`. Write HTML you already know; do not learn a new
-language.
+The block is HTML-shaped, but it is a host-rendered subset, not a browser.
+The host renders it in place and styles every element itself. `style`,
+`<style>`, scripts (except the JSON state island), unknown classes and unknown
+attributes are removed before rendering. Write with the vocabulary below;
+invented CSS or class names quietly lose the design.
+
+## Layout
+
+Compose with four primitives. Do not try to position elements with CSS.
+
+- `ui-col` — vertical stack; children keep a consistent gap.
+- `ui-row` — horizontal row; wraps by default. Put `ui-spacer` between items
+  to push them apart.
+- `ui-box` — flex container, a column by default. Add `data-dir="row"` for a
+  row, and `data-pad`, `data-bg`, `data-border` or `data-radius` for a panel.
+- `ui-grid` — equal columns. `data-cols="1"` to `"6"`; without it the grid
+  auto-fits and collapses on narrow screens.
+
+Layout attributes (all optional, token-sized):
+
+- `data-gap="0"`–`"6"` and `data-pad="0"`–`"6"` — 0, 4, 8, 12, 16, 24, 32 px.
+- `data-align="start|center|end|stretch"` and
+  `data-justify="start|center|end|between"`.
+- `data-wrap="nowrap"`, `data-dir="row"`, `data-flex="1"`–`"4"` (let a child
+  grow), `data-width="full|auto"`.
+- `data-bg="soft|surface|inset|info|ok|warn|danger|accent"`, `data-border`,
+  `data-radius="sm|md|lg|xl|full"`.
+- Text: `data-tone="ink|muted|faint|accent|info|ok|warn|danger|purple|pink|chart1…chart8"`,
+  `data-size="xs|sm|md|lg|xl|2xl"`, `data-weight="normal|medium|semibold"`,
+  `data-text-align="left|center|right"`. Classes `ui-muted` and `ui-num` are
+  available for secondary text and right-aligned numbers.
+
+Use normal heading levels for structure: `h2` for a section, `h3` for a card
+title. Keep prose in `p`, captions in `small` or `figcaption`.
+
+## Components
+
+- `ui-card` — bordered panel. `ui-callout` plus one of `ui-info`, `ui-ok`,
+  `ui-warn`, `ui-danger` — tinted notice.
+- `ui-spacer` — fills free space in a row; `ui-divider` — a hairline between
+  blocks.
+- `<span class="ui-icon" data-icon="check"></span>` — a small host icon. Use
+  `data-size="sm|md|lg|xl"` and `data-tone` as on text. Names:
+  `alert-triangle`, `arrow-right`, `bike`, `book-open`, `calendar`, `camera`,
+  `check`, `chevron-right`, `circle-check`, `clock`, `external-link`,
+  `file-text`, `heart`, `info`, `lightbulb`, `map-pin`, `minus`, `play`,
+  `plus`, `search`, `settings`, `shield-check`, `sparkles`, `star`, `wrench`,
+  `x`. Icons are decorative, so keep the meaning in the text or in
+  `aria-label`.
+- `ui-metrics` containing `ui-metric` blocks: `<strong>` is the big value,
+  `<span>` the small label.
+- `ui-badge` plus a tone class (`ui-info`, `ui-ok`, `ui-warn`, `ui-danger`) —
+  pill tag.
+- `<ol class="ui-steps">` with `<li data-state="done|current|todo"><strong>…</strong><span>…</span></li>`
+  — plan or timeline.
+- `<dl class="ui-kv">` — compact key/value rows. `ui-chips` — a row of small
+  buttons.
+- Native `details`/`summary`, `progress value max`, `meter`, headings, lists,
+  tables, `blockquote`, `pre`/`code`, `figure`/`figcaption` are styled already.
+- Images: `<figure class="ui-figure"><img src="https://…" alt="…" data-fit="cover|contain"><figcaption class="ui-caption">…</figcaption></figure>`.
+  Use only an `https` URL that the user or a tool gave in this conversation;
+  never invent one. Always write `alt`, and put images in a grid or row when
+  there is more than one. A caption should say what to look at.
+- `ui-carousel` — a horizontal scrolling row for photos or cards;
+  `data-item="sm|md|lg"` sets each item's width (160, 220 or 300 px).
+
+## SVG
+
+Draw diagrams with inline SVG: `svg` with a `viewBox`, then `g`, `path`,
+`rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `text`. Draw on a
+viewBox about 240–600 units wide, use font sizes 12–20, and give the `svg` a
+`role="img"` and a short `aria-label`.
+
+- Shape attributes accept `{{ expressions }}`, so a drawing can follow state:
+  `<circle cx="{{ 26 + gear * 40 }}" r="8" fill="info"></circle>`.
+- Colors may be host tokens: `ink`, `muted`, `faint`, `surface`, `accent`,
+  `info`, `ok`, `warn`, `danger`, `purple`, `pink`, `chart1`…`chart8`; or
+  plain hex/rgb. `fill="none"` draws an outline only.
+- `data-ui-show="expression"` works on SVG groups and shapes too, so a diagram
+  can hide or reveal a part by state.
+- Do not use `defs`, gradients, filters, images, ids or styles inside SVG.
+
+## Rich visual blocks
+
+Host components and SVG cover most answers. When the explanation needs a
+custom visual the vocabulary cannot express — a poster, a freeform annotated
+figure, a CSS drawing, a complex grid — wrap ordinary HTML and CSS in an inert
+template inside the same `html` fence:
+
+```html
+<template data-ui-rich>
+  <style>
+    .poster { padding: 24px; border-radius: 16px;
+      background: linear-gradient(135deg, #fee2e2, #fff); }
+  </style>
+  <div class="poster">
+    <h2>Inside a 7-speed bike</h2>
+    <p>A custom visual that the host components cannot compose.</p>
+  </div>
+</template>
+```
+
+The host renders the template in an isolated, script-disabled frame. Inline
+`style`, `<style>` and normal HTML work; JavaScript, forms, nested iframes,
+external stylesheets, event attributes and `javascript:` URLs are removed, and
+the frame has no network access except https images. Use the design tokens
+(`var(--text-primary)`, `var(--text-muted)`, `var(--accent)`,
+`var(--bg-subtle)`, `var(--border-soft)`, `var(--chart-1)`…) so the block
+matches the app. Images must still come from the conversation. Prefer the host
+vocabulary above; reach for a rich block only when the layout or visual is
+genuinely custom, and keep it static — `data-ui-*` bindings do not run inside
+the frame.
 
 ## State
 
@@ -39,8 +147,9 @@ If you prefer not to write a script tag, the same thing works as
 ## Expressions
 
 `{{ expression }}` works in text and in these attributes: `value`, `max`,
-`min`, `step`, `href`, `src`, `title`, `placeholder`, `data-ui-send`,
-`data-ui-copy`. Expressions are a small, familiar subset:
+`min`, `step`, `href`, `src`, `title`, `aria-label`, `placeholder`,
+`data-ui-send`, `data-ui-copy`, plus SVG shape attributes. Expressions are a
+small, familiar subset:
 
 - Numbers, strings (`"text"`), `true`, `false`, `null`, arrays `[a, b]`.
 - `+ - * / %`, comparisons `== != < <= > >=`, `&& || !`, ternary
@@ -68,6 +177,8 @@ Functions:
 
 Inputs and actions are ordinary HTML with one data attribute:
 
+- Give every control a `<label>`; when a visible label would clutter the
+  layout, use `aria-label="…"` instead.
 - `<input data-ui-bind="name">`, `<textarea data-ui-bind="notes">`,
   `<select data-ui-bind="pace">…</select>` — two-way binding. Use
   `type="number"` / `type="range"` for numbers, `type="checkbox"` for booleans,
@@ -100,66 +211,20 @@ available to expressions. Keep lists under 200 rows.
 A button with no `data-ui-*` action is inert and disabled: never rely on a
 bare button.
 
-## Components
-
-These host-styled classes compose the visual answer. Any other class is
-removed, so do not invent class names.
-
-- `ui-grid` — responsive columns; `ui-grid ui-split` — two columns.
-- `ui-card` — bordered panel. `ui-callout` with one of `ui-info`, `ui-ok`,
-  `ui-warn`, `ui-danger` — tinted notice.
-- `ui-metrics` containing `ui-metric` blocks: `<strong>` is the big value,
-  `<span>` the small label.
-- `ui-badge` plus a tone (`ui-info`, `ui-ok`, `ui-warn`, `ui-danger`) — pill.
-- `<ol class="ui-steps">` with `<li data-state="done|current|todo"><strong>…</strong><span>…</span></li>`
-  — plan or timeline.
-- `<dl class="ui-kv">` — compact key/value rows.
-- `ui-chips` — a row of small buttons.
-- `ui-num` — right-align and tabular numbers in a cell; `ui-muted` — secondary
-  text.
-- Native `details`/`summary`, `progress value max`, `meter`, headings,
-  lists, tables, `blockquote` and `pre`/`code` are styled already.
-- `<img src="https://…" alt="…">` — only a URL the user or a tool gave in this
-  conversation; always write `alt`. Otherwise use no image.
-- Inline SVG for drawings and diagrams: `svg` with a `viewBox`, then `g`,
-  `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `text`.
-  Draw on a `viewBox` about 600 units wide and use font-size 14–20; the host
-  caps the drawing at 480 px wide. Use plain numeric attributes and colors; do
-  not use defs, gradients, images, scripts, styles or ids.
-
-### Charts
-
-Write a table and mark it as a chart. The first header is the category, the
-next headers are series, and body cells are numbers (a `%`, comma or currency
-sign is ignored):
-
-```html
-<table class="ui-chart" data-type="bar">
-  <caption>Orders by week</caption>
-  <thead><tr><th>Week</th><th>Orders</th></tr></thead>
-  <tbody>
-    <tr><td>W1</td><td>120</td></tr>
-    <tr><td>W2</td><td>168</td></tr>
-    <tr><td>W3</td><td>143</td></tr>
-  </tbody>
-</table>
-```
-
-`data-type` is `bar`, `line` or `area`; `data-height` is 140–420 px. Charts
-are drawn from these rows, so keep them static (do not put a template inside a
-chart table).
-
 ## Rules
 
 - One interface block per reply, ideally under 150 lines. Keep labels short,
   numbers real, and put a one-sentence summary in prose outside the block.
 - Use the block only when it earns the space: a plan, a comparison, a
-  checklist, a set of metrics, a chart, a decision form. Simple answers stay
-  text.
+  checklist, a set of metrics, a diagram, a chart, a decision form. Simple
+  answers stay text.
 - Everything the user reads must be in the user's language.
 - No `<style>`, no scripts except the JSON state island, no iframes, no
   objects, no event attributes (`onclick` and friends), no inline `style`, and
   no classes outside the list above. They are removed before rendering.
+- Prefer the `html` fence. A top-level line that starts with a complete HTML
+  tag also renders as a block, but mixed inline markup in prose may stay
+  literal, so the fence is the reliable form.
 - Do not put secrets in state. It stays on the user's machine unless the user
   submits the form or you send a message that includes it.
 - The state island must be the first element and valid JSON; if it is missing
@@ -172,7 +237,7 @@ chart table).
   "items": [{"name": "spaghetti", "qty": 400, "unit": " g"},
             {"name": "tomatoes", "qty": 6, "unit": ""},
             {"name": "parmesan", "qty": 80, "unit": " g"}]}</script>
-<section class="ui-card">
+<div class="ui-card">
   <h3>Pasta night for {{ guests }}</h3>
   <p class="ui-muted">{{ count(got) }} of {{ count(items) }} ready</p>
   <progress value="{{ count(got) }}" max="{{ count(items) }}"></progress>
@@ -187,7 +252,59 @@ chart table).
     <button data-ui-set="guests = clamp(guests + 1, 1, 20)">More</button>
     <button data-ui-send="Shopping list for {{ guests }}: {{ join(got, ', ') }}">Send list</button>
   </div>
-</section>
+</div>
+```
+
+## Example: a visual explanation
+
+This is the shape a "how does a 7-speed bike work" answer takes: a heading, a
+parts table, a small SVG diagram and a slider that changes the diagram and the
+computed numbers. Use the same pattern for mechanisms, anatomy, layouts and
+other things the reader would otherwise have to picture.
+
+```html
+<script type="application/json" data-ui-state>{"gear": 3, "rpm": 80,
+  "teeth": [28, 24, 21, 18, 16, 14, 12]}</script>
+<div class="ui-col" data-gap="3">
+  <div class="ui-col" data-gap="1">
+    <h2 data-size="xl">Inside a 7-speed bike</h2>
+    <p class="ui-muted">One chainring at the front, seven sprockets at the back
+      and a derailleur that moves the chain between them.</p>
+  </div>
+  <div class="ui-grid" data-cols="2">
+    <div class="ui-card">
+      <h3>The main parts</h3>
+      <table>
+        <thead><tr><th>Part</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Chainring</td><td>The single front gear</td></tr>
+          <tr><td>Rear sprockets</td><td>Seven sizes, so seven ratios</td></tr>
+          <tr><td>Derailleur</td><td>Moves the chain across the sprockets</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="ui-card" data-bg="soft">
+      <h3>Gear {{ gear }} of 7</h3>
+      <svg viewBox="0 0 320 112" role="img" aria-label="Seven rear sprockets">
+        <circle cx="26" cy="52" r="{{ 6 + teeth[0] * 0.55 }}" fill="{{ gear == 1 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <circle cx="71" cy="52" r="{{ 6 + teeth[1] * 0.55 }}" fill="{{ gear == 2 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <circle cx="116" cy="52" r="{{ 6 + teeth[2] * 0.55 }}" fill="{{ gear == 3 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <circle cx="161" cy="52" r="{{ 6 + teeth[3] * 0.55 }}" fill="{{ gear == 4 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <circle cx="206" cy="52" r="{{ 6 + teeth[4] * 0.55 }}" fill="{{ gear == 5 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <circle cx="251" cy="52" r="{{ 6 + teeth[5] * 0.55 }}" fill="{{ gear == 6 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <circle cx="296" cy="52" r="{{ 6 + teeth[6] * 0.55 }}" fill="{{ gear == 7 ? 'info' : 'surface' }}" stroke="faint" stroke-width="2"></circle>
+        <text x="26" y="104" font-size="11" text-anchor="middle" fill="muted">{{ teeth[0] }}T</text>
+        <text x="116" y="104" font-size="11" text-anchor="middle" fill="muted">{{ teeth[2] }}T</text>
+        <text x="296" y="104" font-size="11" text-anchor="middle" fill="muted">{{ teeth[6] }}T</text>
+      </svg>
+      <input type="range" data-ui-bind="gear" min="1" max="7" step="1">
+      <p class="ui-muted">Gear ratio {{ round(40 / teeth[gear - 1], 2) }} : 1.
+        At {{ rpm }} rpm that is {{ round(rpm * (40 / teeth[gear - 1]) * 2.1 * 60 / 1000, 1) }} km/h.</p>
+    </div>
+  </div>
+  <p class="ui-muted" data-size="sm">Small sprockets make each pedal stroke go
+    further; big ones make hills easier.</p>
+</div>
 ```
 
 ## Example: metrics and a chart
@@ -236,6 +353,3 @@ chart table).
 
 Declare a default for every bound control so the first render and the
 submitted form agree.
-
-Anything outside the fence is ordinary Markdown. A bare HTML line may be shown
-as text, so always use the `html` fence.

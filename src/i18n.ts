@@ -35,12 +35,21 @@ const ZH: Record<string, string> = {
   "Close window": "关闭窗口",
   "Collapse sidebar": "收起侧栏",
   "Expand sidebar": "展开侧栏",
+  "No sessions": "还没有会话",
+  "Create a session to start a task.": "新建一个会话开始任务。",
+  "Delete session": "删除会话",
+  "Delete session {title}": "删除会话 {title}",
+  "Click again to delete": "再次点击删除",
+  "Cancel the active run before deleting this session.": "请先取消正在运行的任务，再删除这个会话。",
+  "Creating session…": "正在创建会话…",
+  Stop: "停止",
 
   // time
   "just now": "刚刚",
   "{n} min ago": "{n} 分钟前",
   "{n} h ago": "{n} 小时前",
   "{n} d ago": "{n} 天前",
+  "Messages: {n}": "消息：{n}",
   Expired: "已过期",
 
   // conversation
@@ -63,6 +72,48 @@ const ZH: Record<string, string> = {
   "Describe a task… (Enter to send, Shift+Enter for a newline)":
     "输入任务…（Enter 发送，Shift+Enter 换行）",
   Message: "消息",
+  Input: "输入",
+  Output: "输出",
+  Error: "错误",
+  "Running…": "运行中…",
+  "Thought for a while": "思考了一会儿",
+  "Thought for {duration}": "思考用时 {duration}",
+  "Reading {n} file": "正在读取 {n} 个文件",
+  "Reading {n} files": "正在读取 {n} 个文件",
+  "Read {n} file": "读取了 {n} 个文件",
+  "Read {n} files": "读取了 {n} 个文件",
+  "Searching for {n} pattern": "正在搜索 {n} 个模式",
+  "Searching for {n} patterns": "正在搜索 {n} 个模式",
+  "Searched for {n} pattern": "搜索了 {n} 个模式",
+  "Searched for {n} patterns": "搜索了 {n} 个模式",
+  "Listing {n} directory": "正在列出 {n} 个目录",
+  "Listing {n} directories": "正在列出 {n} 个目录",
+  "Listed {n} directory": "列出了 {n} 个目录",
+  "Listed {n} directories": "列出了 {n} 个目录",
+  "No result recorded.": "没有记录到结果。",
+  "Read file": "读取文件",
+  "List directory": "列出目录",
+  "Write file": "写入文件",
+  "Run command": "运行命令",
+  "Search memory": "搜索记忆",
+  "Write memory": "写入记忆",
+  "Delegate task": "委派任务",
+  "Tool calls": "工具调用",
+
+  // context meter
+  "Context window": "上下文窗口",
+  "Session stats": "会话统计",
+  Messages: "消息",
+  "System tools": "系统工具",
+  "System prompt": "系统提示",
+  Remaining: "剩余空间",
+  "Turns / steps": "轮次 / 步数",
+  "Total tokens": "累计 Token",
+  "Average speed": "平均速度",
+  "Cache hit": "缓存命中",
+  "Estimated from character share.": "组成按字符比例估算。",
+  "No model calls yet.": "还没有模型调用。",
+  "Context usage": "上下文占用",
 
   // approvals
   "Approval required": "需要审批",
@@ -93,6 +144,7 @@ const ZH: Record<string, string> = {
   Save: "保存",
   Saved: "已保存",
   General: "通用",
+  "Generated interface": "生成的界面",
   "Back to chat": "返回对话",
   "Settings are stored on this node.": "设置保存在当前节点上。",
   "Workspace boundary, language and the node this window is connected to.":
@@ -113,7 +165,8 @@ const ZH: Record<string, string> = {
   "Add a provider to call a model. The agent cannot run without one.":
     "添加一个供应商以调用模型；没有供应商时 Agent 无法运行。",
   Active: "当前",
-  "{count} models": "{count} 个模型",
+  "{n} model": "{n} 个模型",
+  "{n} models": "{n} 个模型",
   "Key configured": "已配置密钥",
   "No key": "无密钥",
   "No authentication": "无认证",
@@ -152,8 +205,8 @@ const ZH: Record<string, string> = {
   Value: "值",
   "Remove header": "移除请求头",
   "Add header": "添加请求头",
-  "Connected in {ms} ms, {count} models available.":
-    "连接成功，耗时 {ms} ms，可用模型 {count} 个。",
+  "Connected in {ms} ms, {n} model available.": "连接成功，耗时 {ms} ms，可用模型 {n} 个。",
+  "Connected in {ms} ms, {n} models available.": "连接成功，耗时 {ms} ms，可用模型 {n} 个。",
   "Connection failed: {error}": "连接失败：{error}",
   "Saving…": "保存中…",
   "Test connection": "测试连接",
@@ -177,8 +230,11 @@ const ZH: Record<string, string> = {
   Memory: "记忆",
   "Facts the agent remembers across runs, stored in the local data directory. Deleting a fact erases it and its stored source excerpt from memory; past conversations are not rewritten.":
     "Agent 跨运行记住的事实在本地数据目录中。删除一条事实会同时从记忆中删除它的原文；过去的对话记录不会被改写。",
-  "{total} facts · {active} active · {episodes} source excerpts":
-    "{total} 条事实 · {active} 条有效 · {episodes} 条原文",
+  "{n} fact": "{n} 条事实",
+  "{n} facts": "{n} 条事实",
+  "{n} active": "{n} 条有效",
+  "{n} source excerpt": "{n} 条原文",
+  "{n} source excerpts": "{n} 条原文",
   "Add a stable fact the agent should remember": "添加一条 Agent 应记住的稳定事实",
   Project: "项目",
   User: "用户",
@@ -195,8 +251,8 @@ const ZH: Record<string, string> = {
   "Something went wrong.": "出错了。",
   Reload: "重新加载",
   "Click delete again to confirm permanent deletion.": "再次点击删除以确认永久删除。",
-  "Deleted {records} fact(s) and {episodes} source excerpt(s).":
-    "已删除 {records} 条事实和 {episodes} 条原文。",
+  "Deleted facts: {records} · source excerpts: {episodes}":
+    "已删除事实：{records} 条 · 原文：{episodes} 条",
   "Memory saved.": "记忆已保存。",
   "This fact is already stored.": "这条事实已经存在。",
   "No memories match this search.": "没有匹配的记忆。",
@@ -219,8 +275,10 @@ const ZH: Record<string, string> = {
   "Add manually": "手动添加",
   "Add model IDs manually": "手动添加模型 ID",
   "Add model by id": "按 ID 添加模型",
-  "Add {count} models": "添加 {count} 个模型",
-  "Added {count} models.": "已添加 {count} 个模型。",
+  "Add {n} model": "添加 {n} 个模型",
+  "Add {n} models": "添加 {n} 个模型",
+  "Added {n} model.": "已添加 {n} 个模型。",
+  "Added {n} models.": "已添加 {n} 个模型。",
   Advanced: "高级",
   Back: "返回",
   "Base URL is required.": "基础 URL 不能为空。",
@@ -259,7 +317,6 @@ const ZH: Record<string, string> = {
   "No model provider is configured. Add one in Settings.":
     "还没有配置模型供应商。请先在设置中添加一个。",
   "No models are enabled for this provider.": "这个供应商没有启用的模型。",
-  "No sessions yet.": "还没有会话。",
   "Optional note, one line": "可选备注，一行",
   "Optional. Leave empty for endpoints that do not require authentication.":
     "可选。不需要认证的端点可以留空。",
@@ -296,4 +353,23 @@ export function tArgs(key: string, args: Record<string, string | number>): strin
     text = text.split(`{${name}}`).join(String(value));
   }
   return text;
+}
+
+/**
+ * Plural-aware lookup. English one/other forms are both message ids; the
+ * Chinese catalog maps both to the same sentence because Chinese does not
+ * inflect the noun. Tense is not handled here: callers pick the message id
+ * (for example "Read {n} files" vs "Reading {n} files").
+ */
+export function tPlural(
+  one: string,
+  other: string,
+  count: number,
+  args: Record<string, string | number> = {},
+): string {
+  const form =
+    new Intl.PluralRules(current() === "zh-CN" ? "zh-CN" : "en").select(count) === "one"
+      ? one
+      : other;
+  return tArgs(form, { n: count, ...args });
 }

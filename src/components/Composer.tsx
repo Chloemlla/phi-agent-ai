@@ -3,8 +3,9 @@
 
 import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { t } from "../i18n";
-import type { ModelSelection, ProviderView } from "../types";
-import { IconArrowUp } from "./Icons";
+import type { ContextUsageView, ModelSelection, ProviderView } from "../types";
+import { ContextMeter } from "./ContextMeter";
+import { IconArrowUp, IconStop } from "./Icons";
 import { ModelPicker } from "./ModelPicker";
 
 const MAX_COMPOSER_HEIGHT = 180;
@@ -24,9 +25,11 @@ export function Composer(props: {
   provider: ProviderView | null;
   fallbackModel: string;
   selection: ModelSelection | null;
+  usage: ContextUsageView | null;
   onModelChange: (selection: ModelSelection) => void;
   onInput: (value: string) => void;
   onSend: () => void;
+  onStop: () => void;
 }) {
   let textareaRef: HTMLTextAreaElement | undefined;
   // 2-in-1 devices can switch between touch and a trackpad, so keep this live
@@ -101,14 +104,33 @@ export function Composer(props: {
           disabledHint={props.disabledHint}
           onChange={props.onModelChange}
         />
-        <button
-          class="btn primary send"
-          onClick={props.onSend}
-          disabled={props.disabled || !props.value.trim()}
-        >
-          {t("Send")}
-          <IconArrowUp size={14} />
-        </button>
+        <div class="composer-actions-right">
+          <ContextMeter usage={props.usage} />
+          <Show
+            when={props.running}
+            fallback={
+              <button
+                class="btn primary send"
+                onClick={props.onSend}
+                disabled={props.disabled || !props.value.trim()}
+              >
+                {t("Send")}
+                <IconArrowUp size={14} />
+              </button>
+            }
+          >
+            <button
+              type="button"
+              class="btn stop send"
+              title={t("Stop")}
+              aria-label={t("Stop")}
+              onClick={props.onStop}
+            >
+              <IconStop size={13} />
+              {t("Stop")}
+            </button>
+          </Show>
+        </div>
       </div>
     </div>
   );

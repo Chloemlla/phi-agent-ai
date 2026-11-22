@@ -149,17 +149,34 @@ If a model call fails after some text was already streamed, that partial text is
 persisted instead of being dropped. `shell_exec` keeps its own per-command
 timeout (default 120s, max 300s); the HTTP client keeps its request timeout.
 
-Multi-agent (single-level Lead-Sidekick with per-agent message threads) and
-auxiliary model roles (session title, memory maintenance) are designed but not
-implemented: see `docs/40-runtime/multi-agent.md`,
-`docs/40-runtime/auxiliary-models.md` and ADR-0012–0014. Image generation has
-its own user-selected model configuration and `image.generate` port
-(`docs/40-runtime/auxiliary-models.md` §6, ADR-0016); the decision model is a
-separate typed-judgment port (`docs/40-runtime/decision-model.md`, ADR-0015).
-The legacy `Task` entity, `TaskCreated` event and `taskId` field were deleted
-outright (ADR-0012); runs no longer carry a task id. Delegation is expected to
-live in the runtime skeleton; do not add a `strategy.orchestration` slot until
-a replaceable orchestrator is actually needed.
+Multi-agent and optional model surfaces are implemented in the backend; the
+desktop surfaces are still being connected. See `docs/40-runtime/multi-agent.md`,
+`docs/40-runtime/auxiliary-models.md`, `docs/40-runtime/decision-model.md` and
+ADR-0012–0016. Key entry points:
+
+- Delegation: `AgentCreated/AgentStatusChanged/AgentReported`, per-agent
+  `threadId`, `RunScheduled.parentRunId`, `SessionView.agents`, and the
+  `delegate` / `wait_for_agents` / `send_message` / `cancel_agent` tools. Depth
+  is 1; a subagent cannot delegate. Lead chooses the model from the active
+  provider roster and `ModelSpec.scale` caps it. `shared` subagents take the
+  single workspace write lease; `read_only` subagents never see write tools.
+- Image generation: `<data-dir>/image.json`, the optional `image.generate`
+  port and the `image_generate` tool. The user selects the model; the tool has
+  no model parameter. Assets are content-addressed under
+  `<data-dir>/assets/`. Headless: `image configure|show|generate|list|delete`.
+- Decisions: `<data-dir>/decision.json`, the optional `decision.evaluate` port
+  (Jev-compatible `noul`/`choice`/`score`), approval triage and long tool-output
+  compaction. Failures and low confidence always fall back to the human or to
+  deterministic head/tail truncation. Headless: `decision configure|show|test`.
+- Text auxiliary roles: `<data-dir>/auxiliary.json`, `session_title`,
+  `memory_maintenance`, `summarizer`. They are service calls, not Runs.
+  `Node::settle_auxiliary` runs title generation and threshold-triggered memory
+  maintenance after a turn; headless `run` calls it. Headless: `roles list|set|clear`
+  and `memory maintain [--dry-run|--apply]`.
+- The legacy `Task` entity, `TaskCreated` event and `taskId` field were deleted
+  outright (ADR-0012); runs no longer carry a task id. Do not add a
+  `strategy.orchestration` slot until a replaceable orchestrator is actually
+  needed.
 
 ## Memory
 
@@ -212,21 +229,32 @@ phi-headless memory stats
 ## Inline interface blocks
 
 The agent can put a small, working interface directly into its reply instead
-of into a separate panel. It writes ordinary HTML inside a fenced `html`
-block; the text around the fence is normal Markdown. Every run receives the
-guidance in `src-tauri/assets/inline-ui-system-prompt.txt`; there is no
-per-message or per-run switch, and the node stores the reply verbatim, so
-headless mode sees the fence like any other text.
+of into a separate panel. It writes HTML inside a fenced `html` block; the
+text around the fence is normal Markdown. A top-level raw HTML block is also
+recognized (any complete tag, ending at the first blank line), so a model that
+writes `<div>` or `<span>` directly does not leak markup into the prose. The
+live stream and the durable message use the same rules, including non-HTML
+fences, whose contents stay prose. Every run receives the guidance in
+`src-tauri/assets/inline-ui-system-prompt.txt`; there is no per-message or
+per-run switch, and the node stores the reply verbatim, so headless mode sees
+the fence like any other text.
 
 The block is HTML plus a deliberately small layer:
 
+- layout primitives: `ui-col`, `ui-row`, `ui-box`, `ui-grid` with validated
+  token attributes (`data-gap`, `data-pad`, `data-cols`, `data-align`,
+  `data-justify`, `data-flex`, `data-bg`, `data-border`, `data-radius`,
+  `data-tone`, `data-size`, `data-weight`, `data-text-align`); the model
+  composes layout without arbitrary CSS;
 - a JSON data island (`<script type="application/json" data-ui-state>` or a
   `data-ui-state` template) holds state; it is parsed with `JSON.parse` and
   never executed;
 - `{{ expression }}` interpolates state into text and a few attributes, parsed
   by `src/components/uiExpression.ts` (a fixed grammar: arithmetic,
   comparisons, ternary, member/index access and a closed function set — never
-  `eval` or `new Function`);
+  `eval` or `new Function`); SVG shape attributes accept the same
+  expressions, and SVG colors may name host tokens (`info`, `muted`,
+  `chart1`…);
 - `data-ui-bind` wires inputs, `data-ui-set` changes state,
   `data-ui-send`/`data-ui-copy` act, `data-ui-show` hides, and
   `<template data-ui-each>` repeats markup;
@@ -234,22 +262,29 @@ The block is HTML plus a deliberately small layer:
 
 The shell never injects model HTML. `src/components/RichHtml.tsx` parses the
 block with an inert `DOMParser`, drops scripts, styles, iframes, objects and
-event attributes, and rebuilds allowlisted elements, host-owned classes and
-attributes as Solid JSX. Host CSS owns the look: cards, callouts, badges,
-metrics, steps, key/value rows, chips and form controls. `InlineChart.tsx`
-draws bar, line and area charts from a `table.ui-chart` with static rows.
-Links must be `http(s)`/`mailto`; images must be `https` and are expected to
-come from the conversation. Blocks render in the message flow, including
-while the reply streams (`src/components/inlineUi.ts`); the durable message
-goes through the same Markdown renderer. State is cached for the session,
-keyed by the block source, so choices survive transcript refreshes.
+event attributes (including inline `style`), and rebuilds allowlisted
+elements, host-owned classes, layout attributes and attributes as Solid JSX.
+Host CSS owns the look: layout, cards, callouts, badges, icons, metrics, steps,
+key/value rows, chips, figures, captioned images, carousels and form controls.
+`InlineChart.tsx` draws bar, line and area charts from a `table.ui-chart` with
+static rows. Links must be `http(s)`/`mailto`; images must be `https` and are
+expected to come from the conversation. Blocks render in the message flow,
+including while the reply streams (`src/components/inlineUi.ts`); the durable
+message goes through the same Markdown renderer. State is cached for the
+session, keyed by the block source, so choices survive transcript refreshes.
 
 There is no UI protocol, no live view event and no `ui_update` tool (the old
 `UiViewUpdated` variant survives only so pre-2026-11-20 journals replay).
-There is no model-authored JavaScript, no iframe or sandboxed page, and no
-map/photo search: the expression layer and host components are the whole
-surface. The old workbench protocol and its history are recorded in
-`docs/80-roadmap/scope-additions.md` §2.1–§2.2 and §2.17.
+Model-authored JavaScript is never executed. A rich visual block is ordinary
+HTML/CSS wrapped in `<template data-ui-rich>` inside the `html` fence; the
+host sanitizes it and renders it in a script-disabled, same-origin iframe
+(`src/components/RichSandbox.tsx`) with its own CSP, so the host document still
+never receives model markup. Forms, external stylesheets, nested frames and
+scripts are removed or blocked, and the frame has no network except https
+images. There is still no map/photo search, and host components plus the
+expression layer remain the default surface. The old workbench protocol and
+its history are recorded in `docs/80-roadmap/scope-additions.md` §2.1–§2.2 and
+§2.17.
 
 ## Tests and CI
 

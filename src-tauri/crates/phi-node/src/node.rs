@@ -4,6 +4,7 @@
 //! headless CLI both compose the same `Node` and call the same methods. No
 //! Tauri type may appear here.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +21,11 @@ use phi_adapters::fs_journal::JsonlJournal;
 use phi_adapters::lock::DataDirLock;
 use phi_adapters::memory_sqlite::SqliteMemoryStore;
 use phi_adapters::system::{StderrLog, SystemClock, UuidIds};
+use phi_contracts::auxiliary::{
+    AuxiliaryRoleInput, AuxiliaryRoleView, DecisionConfigInput, DecisionQuestion, DecisionRequest,
+    DecisionResponse, DecisionStatus, ImageAsset, ImageConfigInput, ImageRequest, ImageResponse,
+    ImageStatus, MaintenanceReport, SettleReport,
+};
 use phi_contracts::memory::{
     ForgetReport, ForgetSelector, MemoryAddOutcome, MemoryAddRequest, MemoryHit, MemoryListFilter,
     MemoryPort, MemoryQuery, MemoryStats, MemoryStore, Principal,
@@ -39,7 +45,10 @@ use phi_kernel::lifecycle::{Kernel, RunMode};
 use phi_kernel::ports::LogPort;
 use phi_kernel::registry::Registry;
 use phi_plugins::approver::HumanApprover;
+use phi_plugins::auxiliary::AuxiliaryPlugin;
 use phi_plugins::context::DefaultContextPlugin;
+use phi_plugins::decision::DecisionPlugin;
+use phi_plugins::image::ImagePlugin;
 use phi_plugins::loop_plugin::LoopPlugin;
 use phi_plugins::memory::MemoryPlugin;
 use phi_plugins::model_gateway::ModelGateway;
@@ -297,6 +306,35 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     ));
     services.add_tool_provider(subagent.clone());
 
+    let image = Arc::new(ImagePlugin::new(
+        config.data_dir.join("image.json"),
+        config.data_dir.join("assets"),
+        bus.clone(),
+        clock.clone(),
+        log.clone(),
+    ));
+    services.set_image(image.clone());
+    services.add_tool_provider(image.clone());
+
+    let decision = Arc::new(DecisionPlugin::new(
+        config.data_dir.join("decision.json"),
+        bus.clone(),
+        ids.clone(),
+        log.clone(),
+    ));
+    services.set_decision(decision.clone());
+
+    let auxiliary = Arc::new(AuxiliaryPlugin::new(
+        services.clone(),
+        config.data_dir.join("auxiliary.json"),
+        config.data_dir.join("memory").join("maintenance.json"),
+        bus.clone(),
+        ids.clone(),
+        clock.clone(),
+        log.clone(),
+    ));
+    services.set_auxiliary(auxiliary.clone());
+
     let registry = Arc::new(Registry::new());
     let kernel = Arc::new(Kernel::new(bus.clone(), registry.clone(), log.clone()));
     kernel.add_plugin(Arc::new(StorePlugin::new(journal.clone(), blob.clone())));
@@ -309,6 +347,9 @@ pub fn compose(config: NodeConfig) -> Result<Arc<Node>, String> {
     kernel.add_plugin(context.clone());
     kernel.add_plugin(runtime.clone());
     kernel.add_plugin(subagent.clone());
+    kernel.add_plugin(image.clone());
+    kernel.add_plugin(decision.clone());
+    kernel.add_plugin(auxiliary.clone());
     if let Some(memory) = &memory {
         kernel.add_plugin(memory.clone());
     }
@@ -606,6 +647,11 @@ impl Node {
             .create_session(title.unwrap_or(&i18n::t("New session")))
     }
 
+    pub fn delete_session(&self, session_id: &str) -> Result<bool, String> {
+        self.require_writable()?;
+        self.session_port()?.delete_session(session_id)
+    }
+
     pub fn get_session(&self, session_id: &str) -> Result<SessionDetail, String> {
         let session = self.session_view(session_id).ok_or_else(|| {
             i18n::t_args("Unknown session: {id}", &[("id", session_id.to_string())])
@@ -747,6 +793,176 @@ impl Node {
             return true;
         }
         false
+    }
+
+    pub fn image_status(&self) -> Option<ImageStatus> {
+        self.services.image().map(|image| image.status())
+    }
+
+    pub fn configure_image(&self, input: ImageConfigInput) -> Result<ImageStatus, String> {
+        self.require_writable()?;
+        self.services
+            .image()
+            .ok_or_else(|| i18n::t("Image generation is not available"))?
+            .configure(input)
+    }
+
+    pub async fn generate_images(
+        &self,
+        session_id: Option<&str>,
+        request: ImageRequest,
+    ) -> Result<ImageResponse, String> {
+        self.require_writable()?;
+        self.services
+            .image()
+            .ok_or_else(|| i18n::t("Image generation is not available"))?
+            .generate(
+                request,
+                session_id.map(str::to_string),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+    }
+
+    pub fn image_assets(&self, session_id: Option<&str>) -> Vec<ImageAsset> {
+        self.services
+            .image()
+            .map(|image| image.list(session_id))
+            .unwrap_or_default()
+    }
+
+    pub fn image_asset_bytes(&self, asset_id: &str) -> Result<Vec<u8>, String> {
+        self.services
+            .image()
+            .ok_or_else(|| i18n::t("Image generation is not available"))?
+            .bytes(asset_id)
+    }
+
+    pub fn delete_image_asset(&self, asset_id: &str) -> Result<bool, String> {
+        self.require_writable()?;
+        self.services
+            .image()
+            .ok_or_else(|| i18n::t("Image generation is not available"))?
+            .delete(asset_id)
+    }
+
+    pub fn decision_status(&self) -> Option<DecisionStatus> {
+        self.services.decision().map(|decision| decision.status())
+    }
+
+    pub fn configure_decision(&self, input: DecisionConfigInput) -> Result<DecisionStatus, String> {
+        self.require_writable()?;
+        self.services
+            .decision()
+            .ok_or_else(|| i18n::t("The decision model is not available"))?
+            .configure(input)
+    }
+
+    pub async fn test_decision(&self, state: &str) -> Result<DecisionResponse, String> {
+        self.require_writable()?;
+        let decision = self
+            .services
+            .decision()
+            .ok_or_else(|| i18n::t("The decision model is not available"))?;
+        let mut questions = BTreeMap::new();
+        questions.insert(
+            "probe".to_string(),
+            DecisionQuestion::Noul {
+                instructions: "Is this a safe, well-formed test decision?".to_string(),
+            },
+        );
+        decision
+            .evaluate(
+                DecisionRequest {
+                    point: "probe".to_string(),
+                    state: state.to_string(),
+                    questions,
+                    session_id: None,
+                    run_id: None,
+                },
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+    }
+
+    pub fn auxiliary_roles(&self) -> Vec<AuxiliaryRoleView> {
+        self.services
+            .auxiliary()
+            .map(|auxiliary| auxiliary.roles())
+            .unwrap_or_default()
+    }
+
+    pub fn set_auxiliary_role(
+        &self,
+        role: &str,
+        input: AuxiliaryRoleInput,
+    ) -> Result<AuxiliaryRoleView, String> {
+        self.require_writable()?;
+        self.services
+            .auxiliary()
+            .ok_or_else(|| i18n::t("Auxiliary models are not available"))?
+            .set_role(role, input)
+    }
+
+    pub fn clear_auxiliary_role(&self, role: &str) -> Result<bool, String> {
+        self.require_writable()?;
+        self.services
+            .auxiliary()
+            .ok_or_else(|| i18n::t("Auxiliary models are not available"))?
+            .clear_role(role)
+    }
+
+    /// Run the post-turn auxiliary work: a session title when one is needed,
+    /// and memory maintenance when the fact threshold is reached. Both are
+    /// best-effort; failures are returned as warnings, not run failures.
+    pub async fn settle_auxiliary(&self, session_id: &str) -> SettleReport {
+        let mut report = SettleReport::default();
+        let Some(auxiliary) = self.services.auxiliary() else {
+            return report;
+        };
+        if !self.writable {
+            report.warnings.push(i18n::t("The node is read-only"));
+            return report;
+        }
+        let cancel = tokio_util::sync::CancellationToken::new();
+        if auxiliary.title_ready() {
+            match auxiliary.suggest_title(session_id, cancel.clone()).await {
+                Ok(title) => report.title = title,
+                Err(error) => report.warnings.push(error),
+            }
+        }
+        let project = self.config.snapshot().workspace;
+        if auxiliary.maintenance_due(project.as_deref()) {
+            match auxiliary
+                .maintain_memory(project, false, "threshold", cancel)
+                .await
+            {
+                Ok(maintenance) => report.maintenance = Some(maintenance),
+                Err(error) => report.warnings.push(error),
+            }
+        }
+        report
+    }
+
+    pub async fn maintain_memory(
+        &self,
+        project_id: Option<&str>,
+        dry_run: bool,
+        trigger: &str,
+    ) -> Result<MaintenanceReport, String> {
+        self.require_writable()?;
+        let auxiliary = self
+            .services
+            .auxiliary()
+            .ok_or_else(|| i18n::t("Auxiliary models are not available"))?;
+        auxiliary
+            .maintain_memory(
+                project_id.map(str::to_string),
+                dry_run,
+                trigger,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
     }
 
     pub fn model_status(&self) -> ModelStatus {

@@ -6,7 +6,7 @@ use phi_contracts::ports::{SessionPort, TurnInfo};
 use phi_domain::agent::{AgentRole, AgentStatus, AgentView, MessageKind, WorkMode};
 use phi_domain::events::DomainEvent;
 use phi_domain::message::{ChatMessage, ContentBlock, Role};
-use phi_domain::view::{MessageView, RunView, SessionSummary, SessionView};
+use phi_domain::view::{ContextUsageView, MessageView, RunView, SessionSummary, SessionView};
 use phi_i18n as i18n;
 use phi_kernel::event_bus::{EventBus, EventRecord, EventSink};
 use phi_kernel::lifecycle::{Plugin, PluginContext};
@@ -42,6 +42,16 @@ struct RunRecord {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_write_tokens: u64,
+    /// Prompt size of the most recent model call (input + cache read/write).
+    last_prompt_tokens: u64,
+    /// Sum of model call durations and the output they produced, used for the
+    /// session's average throughput.
+    call_ms_total: u64,
+    call_output_tokens_total: u64,
+    system_chars: u64,
+    tools_chars: u64,
+    history_chars: u64,
+    context_window: Option<u64>,
     pending_approval_id: Option<String>,
     error: Option<String>,
     stop_confirmation: Option<String>,
@@ -96,6 +106,7 @@ struct StoredSession {
     id: String,
     owner_node_id: String,
     title: String,
+    title_source: String,
     created_at: String,
     updated_at: String,
     messages: Vec<StoredMessage>,
@@ -320,6 +331,62 @@ impl SessionPlugin {
                 .map(|r| r.state.clone()),
         }
     }
+
+    /// Latest lead-run prompt composition plus session-wide throughput.
+    /// Composition is exposed as character counts; the UI estimates the token
+    /// split. `used_tokens` comes from the provider's own usage report.
+    fn context_usage_of(session: &StoredSession) -> Option<ContextUsageView> {
+        let run = session
+            .run_order
+            .iter()
+            .rev()
+            .filter_map(|id| session.runs.get(id))
+            .find(|run| run.parent_run_id.is_none())?;
+
+        let mut total_input = 0_u64;
+        let mut total_output = 0_u64;
+        let mut total_prompt = 0_u64;
+        let mut total_cache_read = 0_u64;
+        let mut call_ms = 0_u64;
+        let mut call_output = 0_u64;
+        for candidate in session.runs.values() {
+            total_input = total_input.saturating_add(candidate.input_tokens);
+            total_output = total_output.saturating_add(candidate.output_tokens);
+            total_prompt = total_prompt.saturating_add(
+                candidate
+                    .input_tokens
+                    .saturating_add(candidate.cache_read_tokens)
+                    .saturating_add(candidate.cache_write_tokens),
+            );
+            total_cache_read = total_cache_read.saturating_add(candidate.cache_read_tokens);
+            call_ms = call_ms.saturating_add(candidate.call_ms_total);
+            call_output = call_output.saturating_add(candidate.call_output_tokens_total);
+        }
+
+        let cache_hit = if total_prompt > 0 {
+            total_cache_read as f64 / total_prompt as f64
+        } else {
+            0.0
+        };
+        let average_tps = if call_ms > 0 {
+            call_output as f64 / (call_ms as f64 / 1000.0)
+        } else {
+            0.0
+        };
+
+        Some(ContextUsageView {
+            context_window: run.context_window,
+            used_tokens: run.last_prompt_tokens,
+            system_chars: run.system_chars,
+            tools_chars: run.tools_chars,
+            history_chars: run.history_chars,
+            turns: session.turn_count,
+            steps: run.steps,
+            total_tokens: total_input.saturating_add(total_output),
+            average_tps,
+            cache_hit,
+        })
+    }
 }
 
 impl SessionPort for SessionPlugin {
@@ -356,6 +423,49 @@ impl SessionPort for SessionPlugin {
             projection.sessions.values().map(Self::summary_of).collect();
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         sessions
+    }
+
+    fn rename_session(&self, session_id: &str, title: &str, source: &str) -> Result<(), String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(i18n::t("Session title is empty"));
+        }
+        self.bus.publish(
+            session_id,
+            "plugin-session",
+            &DomainEvent::SessionRenamed {
+                session_id: session_id.to_string(),
+                title: title.to_string(),
+                source: source.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    fn delete_session(&self, session_id: &str) -> Result<bool, String> {
+        let exists = {
+            let projection = self.state.read().unwrap();
+            projection.sessions.contains_key(session_id)
+        };
+        if !exists {
+            return Err(i18n::t_args(
+                "Unknown session: {id}",
+                &[("id", session_id.to_string())],
+            ));
+        }
+        if self.active_run(session_id).is_some() {
+            return Err(i18n::t(
+                "The session has an active run; cancel it before deleting",
+            ));
+        }
+        self.bus.publish(
+            session_id,
+            "plugin-session",
+            &DomainEvent::SessionArchived {
+                session_id: session_id.to_string(),
+            },
+        )?;
+        Ok(true)
     }
 
     fn get_session(&self, session_id: &str) -> Option<SessionView> {
@@ -400,6 +510,7 @@ impl SessionPort for SessionPlugin {
             messages,
             runs,
             agents,
+            context_usage: Self::context_usage_of(&stored),
         })
     }
 
@@ -649,6 +760,7 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     id: session_id,
                     owner_node_id,
                     title,
+                    title_source: "system".to_string(),
                     created_at: record.ts.clone(),
                     updated_at: record.ts.clone(),
                     messages: Vec::new(),
@@ -657,6 +769,20 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     agents: HashMap::new(),
                     turn_count: 0,
                 });
+        }
+        DomainEvent::SessionRenamed {
+            session_id,
+            title,
+            source,
+        } => {
+            if let Some(session) = projection.sessions.get_mut(&session_id) {
+                session.title = title;
+                session.title_source = source;
+                session.updated_at = record.ts.clone();
+            }
+        }
+        DomainEvent::SessionArchived { session_id } => {
+            projection.sessions.remove(&session_id);
         }
         DomainEvent::TurnStarted {
             session_id, index, ..
@@ -787,6 +913,13 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                         output_tokens: 0,
                         cache_read_tokens: 0,
                         cache_write_tokens: 0,
+                        last_prompt_tokens: 0,
+                        call_ms_total: 0,
+                        call_output_tokens_total: 0,
+                        system_chars: 0,
+                        tools_chars: 0,
+                        history_chars: 0,
+                        context_window: None,
                         pending_approval_id: None,
                         error: None,
                         stop_confirmation: None,
@@ -842,12 +975,28 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 &record.ts,
             );
         }
+        DomainEvent::ModelCallIssued {
+            run_id,
+            system_chars,
+            tools_chars,
+            history_chars,
+            context_window,
+            ..
+        } => {
+            update_run(projection, record, &run_id, |run| {
+                run.system_chars = system_chars;
+                run.tools_chars = tools_chars;
+                run.history_chars = history_chars;
+                run.context_window = context_window;
+            });
+        }
         DomainEvent::ModelCallReturned {
             run_id,
             input_tokens,
             output_tokens,
             cache_read_tokens,
             cache_write_tokens,
+            duration_ms,
             ..
         } => {
             update_run(projection, record, &run_id, |run| {
@@ -855,6 +1004,12 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                 run.output_tokens += output_tokens;
                 run.cache_read_tokens += cache_read_tokens;
                 run.cache_write_tokens += cache_write_tokens;
+                run.last_prompt_tokens = input_tokens
+                    .saturating_add(cache_read_tokens)
+                    .saturating_add(cache_write_tokens);
+                run.call_ms_total = run.call_ms_total.saturating_add(duration_ms);
+                run.call_output_tokens_total =
+                    run.call_output_tokens_total.saturating_add(output_tokens);
             });
             add_agent_tokens(projection, &run_id, input_tokens, output_tokens, &record.ts);
         }
@@ -1097,6 +1252,34 @@ mod tests {
         assert_eq!(view.messages.len(), 1);
         assert_eq!(view.messages[0].blocks.len(), 1);
         assert_eq!(view.runs[0].state, "Succeeded");
+    }
+
+    #[test]
+    fn delete_session_hides_it_from_the_projection() {
+        let dir = temp_dir("session-delete");
+        let bus = Arc::new(EventBus::new(
+            Arc::new(JsonlJournal::new(dir.join("events.jsonl"))),
+            Arc::new(SystemClock::new()),
+            Arc::new(UuidIds),
+            Arc::new(StderrLog),
+        ));
+        let plugin = Arc::new(SessionPlugin::new(
+            bus.clone(),
+            Arc::new(UuidIds),
+            Arc::new(FsBlobStore::new(dir.join("blobs"))),
+            "node-test".to_string(),
+        ));
+        bus.subscribe(plugin.clone());
+
+        let session = plugin.create_session("t").unwrap();
+        assert_eq!(plugin.list_sessions().len(), 1);
+
+        assert!(plugin.delete_session(&session.id).unwrap());
+        assert!(plugin.list_sessions().is_empty());
+        assert!(plugin.get_session(&session.id).is_none());
+        // A second delete reports the unknown session instead of silently
+        // succeeding.
+        assert!(plugin.delete_session(&session.id).is_err());
     }
 
     #[test]
@@ -1347,6 +1530,7 @@ mod tests {
                 output_tokens: 5,
                 cache_read_tokens: 2,
                 cache_write_tokens: 1,
+                duration_ms: 250,
                 finish_reason: "end_turn".to_string(),
             },
         )

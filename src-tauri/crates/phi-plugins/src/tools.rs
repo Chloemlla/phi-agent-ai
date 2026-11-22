@@ -93,7 +93,7 @@ impl ToolPort for BuiltinToolsPlugin {
             tool(
                 "fs_write",
                 "fs_write",
-                "Create or overwrite a text file inside the workspace. Requires human approval. The previous content is backed up.",
+                "Create or overwrite a text file inside the workspace. Workspace writes run without approval in normal mode; the previous content is backed up.",
                 json!({
                     "path": { "type": "string", "description": "File path relative to the workspace root" },
                     "content": { "type": "string", "description": "Full new file content" },
@@ -105,7 +105,7 @@ impl ToolPort for BuiltinToolsPlugin {
             tool(
                 "shell_exec",
                 "shell_exec",
-                "Run a shell command with the workspace as cwd. Requires human approval. Returns stdout/stderr and exit code.",
+                "Run a shell command with the workspace as cwd. Read-only and project verification commands run without approval; other commands require human approval. Returns stdout/stderr and exit code.",
                 json!({
                     "command": { "type": "string", "description": "Command line to execute" },
                     "timeout_secs": { "type": "integer", "description": "Timeout in seconds, default 120, max 300" }

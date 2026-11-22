@@ -4,7 +4,7 @@
 
 import { For, Show, createSignal, onMount } from "solid-js";
 import { describeModels, previewModels } from "../bridge";
-import { t, tArgs } from "../i18n";
+import { t, tArgs, tPlural } from "../i18n";
 import { errorText } from "../errors";
 import { IconCircleAlert, IconPlus, IconRefresh } from "../components/Icons";
 import { cloneModel, modelFromId, normalizeModelId, type ModelSpec } from "./types";
@@ -374,7 +374,7 @@ export function ModelSelectionStep(props: {
           >
             {saving() || props.busy
               ? t("Saving…")
-              : tArgs("Add {count} models", { count: selectedCount() })}
+              : tPlural("Add {n} model", "Add {n} models", selectedCount())}
           </button>
         </div>
       </div>

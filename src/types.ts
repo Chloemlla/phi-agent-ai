@@ -15,6 +15,7 @@ import type {
 
 export type {
   Bootstrap,
+  ContextUsageView,
   ForgetReport,
   MemoryAddOutcome,
   MemoryHit,

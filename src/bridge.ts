@@ -41,6 +41,10 @@ export function createSession(title: string | null = null): Promise<SessionSumma
   return invoke<SessionSummary>("create_session", { title });
 }
 
+export function deleteSession(sessionId: string): Promise<boolean> {
+  return invoke<boolean>("delete_session", { sessionId });
+}
+
 export function getSession(sessionId: string): Promise<SessionDetail> {
   return invoke<SessionDetail>("get_session", { sessionId });
 }

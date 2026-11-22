@@ -1,4 +1,4 @@
-/* ─────────────────────────── dock: runbar + composer ─────────────────────────── */
+/* ─────────────────────────── dock: composer ─────────────────────────── */
 
 .dock-wrap {
   flex: none;
@@ -23,39 +23,7 @@
   box-shadow: 0 0 0 1px var(--text-faint);
 }
 
-.runbar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  padding: 7px 12px;
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border-softer);
-  border-radius: var(--r-lg) var(--r-lg) 0 0;
-  flex-wrap: wrap;
-}
-
-.run-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.run-state.live {
-  color: var(--accent-ink);
-}
-
-.run-state.waiting {
-  color: var(--warn-ink);
-}
-
-.run-state .dot.tone-warn {
-  animation: pulse 2.4s var(--ease) infinite;
-}
-
+/* Spinner used by settings and other async buttons. */
 .ring {
   width: 12px;
   height: 12px;
@@ -64,53 +32,6 @@
   border: 2px solid var(--accent-soft);
   border-top-color: var(--accent);
   animation: spin 0.9s linear infinite;
-}
-
-.run-stats {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  flex-wrap: wrap;
-}
-
-.run-stat {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.run-stat-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.run-stat .mono {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-}
-
-.token-pair {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.token-sep {
-  color: var(--text-faint);
-}
-
-.token-arrow {
-  color: var(--text-muted);
-}
-
-.cancel {
-  flex: none;
 }
 
 .composer {
@@ -152,6 +73,20 @@
   flex-wrap: wrap;
 }
 
+.composer-actions-right {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* The context ring's Alt wrapper must not claim the action row. */
+.composer-actions-right > .alt-trigger {
+  width: auto;
+  flex: none;
+}
+
 .composer-hint {
   margin: 0;
   padding: 0 14px 6px;
@@ -164,4 +99,16 @@
   height: 32px;
   padding: 0 14px;
   gap: 6px;
+}
+
+.btn.stop {
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+.btn.stop:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--danger-soft-hover);
+  color: var(--danger-ink);
 }

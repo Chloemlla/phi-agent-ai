@@ -1,16 +1,18 @@
-// Splits streamed assistant text into plain prose and `html` fenced blocks so
-// the live transcript can render an interface block as soon as it arrives.
-// The durable message goes through the full Markdown renderer instead.
+// Splits streamed assistant text into plain prose and `html` segments so the
+// live transcript can render an interface block as soon as it arrives.
+// Fenced `html` blocks and top-level raw HTML blocks are both recognized, so
+// the live stream follows the same rules as the durable Markdown renderer.
 //
 // The splitter is incremental: a live stream only appends text, so only the
 // newly arrived lines are classified. The pure `splitInlineUi` entry point
-// keeps the old whole-string semantics for callers and tests.
+// keeps the whole-string semantics for callers and tests.
 
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
+import { startsHtmlBlock } from "./markdown/parse";
 
 export type InlineUiSegment = { kind: "text"; text: string } | { kind: "html"; html: string };
 
-const OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*html\s*$/i;
+const OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)/;
 
 function isClosingFence(line: string, marker: string, length: number): boolean {
   const fence = line.trim();
@@ -21,21 +23,24 @@ function isClosingFence(line: string, marker: string, length: number): boolean {
   return true;
 }
 
-function hasFence(value: string, from: number): boolean {
-  return value.indexOf("```", from) !== -1 || value.indexOf("~~~", from) !== -1;
+/** True when appended text may open a fence or a raw HTML block. Once a block
+ * exists the splitter keeps parsing; this is only the plain-text fast path. */
+function hasMarkup(value: string, from: number): boolean {
+  const tail = value.slice(Math.max(0, from - 4));
+  return tail.includes("```") || tail.includes("~~~") || /(?:^|\n)[ \t]{0,3}<[A-Za-z!/]/.test(tail);
 }
 
 /**
  * Stateful line scanner. `update` is O(new characters) for appended text;
- * it reparses from the start only when the stream is replaced or the first
- * fence marker appears (the no-fence fast path is plain text).
+ * it reparses from the start only when the stream is replaced or markup first
+ * appears (the no-markup fast path is plain text).
  */
 export function createInlineUiSplitter() {
   let source = "";
   let consumed = 0;
-  let fenced = false;
+  let parsing = false;
   let line = "";
-  let mode: "prose" | "html" = "prose";
+  let mode: "prose" | "fence" | "raw" | "code" = "prose";
   let marker = "";
   let markerLength = 0;
   let prose: string[] = [];
@@ -44,7 +49,6 @@ export function createInlineUiSplitter() {
 
   function reset() {
     consumed = 0;
-    fenced = false;
     line = "";
     mode = "prose";
     marker = "";
@@ -60,24 +64,57 @@ export function createInlineUiSplitter() {
     prose = [];
   }
 
+  function flushHtml() {
+    segments.push({ kind: "html", html: html.join("\n") });
+    html = [];
+  }
+
   function pushLine(raw: string) {
     const value = raw.replace(/\r$/, "");
-    if (mode === "html") {
+    if (mode === "fence") {
       if (isClosingFence(value, marker, markerLength)) {
-        segments.push({ kind: "html", html: html.join("\n") });
-        html = [];
+        flushHtml();
         mode = "prose";
       } else {
         html.push(value);
       }
       return;
     }
+    if (mode === "raw") {
+      // CommonMark HTML blocks end at the first blank line.
+      if (!value.trim()) {
+        flushHtml();
+        mode = "prose";
+      } else {
+        html.push(value);
+      }
+      return;
+    }
+    if (mode === "code") {
+      prose.push(value);
+      if (isClosingFence(value, marker, markerLength)) mode = "prose";
+      return;
+    }
     const open = value.match(OPEN_FENCE);
     if (open) {
+      const fenceMarker = open[1];
+      if ((open[2] ?? "").toLowerCase() === "html") {
+        flushProse();
+        mode = "fence";
+      } else {
+        // A non-HTML fence stays prose; its contents must never be mistaken
+        // for an interface block.
+        prose.push(value);
+        mode = "code";
+      }
+      marker = fenceMarker[0];
+      markerLength = fenceMarker.length;
+      return;
+    }
+    if (startsHtmlBlock(value)) {
       flushProse();
-      mode = "html";
-      marker = open[1][0];
-      markerLength = open[1].length;
+      mode = "raw";
+      html.push(value);
       return;
     }
     prose.push(value);
@@ -87,7 +124,7 @@ export function createInlineUiSplitter() {
   function snapshot(): InlineUiSegment[] {
     const out = segments.slice();
     const partial = line.replace(/\r$/, "");
-    if (mode === "html") {
+    if (mode === "fence") {
       if (isClosingFence(partial, marker, markerLength)) {
         out.push({ kind: "html", html: html.join("\n") });
       } else {
@@ -95,8 +132,23 @@ export function createInlineUiSplitter() {
       }
       return out;
     }
-    const open = partial.match(OPEN_FENCE);
-    if (open) {
+    if (mode === "raw") {
+      if (!partial.trim()) {
+        out.push({ kind: "html", html: html.join("\n") });
+      } else {
+        out.push({ kind: "html", html: [...html, partial].join("\n") });
+      }
+      return out;
+    }
+    if (mode === "prose" && startsHtmlBlock(partial)) {
+      if (prose.length > 0) {
+        out.push({ kind: "text", text: prose.join("\n") });
+      }
+      out.push({ kind: "html", html: partial });
+      return out;
+    }
+    const open = mode === "prose" ? partial.match(OPEN_FENCE) : null;
+    if (open && (open[2] ?? "").toLowerCase() === "html") {
       if (prose.length > 0) {
         out.push({ kind: "text", text: prose.join("\n") });
       }
@@ -111,23 +163,19 @@ export function createInlineUiSplitter() {
     update(next: string): InlineUiSegment[] {
       if (!next.startsWith(source)) {
         reset();
-        if (!hasFence(next, 0)) {
+        parsing = false;
+      }
+
+      if (!parsing) {
+        if (!hasMarkup(next, consumed)) {
           source = next;
           consumed = next.length;
           return [{ kind: "text", text: next }];
         }
-        fenced = true;
-      } else if (!fenced) {
-        // Check a two-character overlap so a marker split across chunks is
-        // still noticed. Without a fence the old fast path returned the raw
-        // text, which also preserves CRLF.
-        if (!hasFence(next, Math.max(0, consumed - 2))) {
-          source = next;
-          consumed = next.length;
-          return [{ kind: "text", text: next }];
-        }
+        // Markup appeared: rebuild from the beginning so earlier plain text
+        // and the new block are split at the right boundary.
         reset();
-        fenced = true;
+        parsing = true;
       }
 
       let index = consumed;

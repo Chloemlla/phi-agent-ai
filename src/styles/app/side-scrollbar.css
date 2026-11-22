@@ -1,0 +1,32 @@
+/* ─────────────────────────── side scrollbar ─────────────────────────── */
+
+/* The track is an invisible grab strip pinned to the right edge of a
+   position:relative wrapper; only the 3px square thumb is painted. */
+.side-scroll-track {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  width: 12px;
+  justify-content: flex-end;
+  pointer-events: auto;
+}
+
+.side-scroll-thumb {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 3px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--border-strong) 80%, transparent);
+  cursor: default;
+  touch-action: none;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.side-scroll-thumb--active,
+.side-scroll-track:hover .side-scroll-thumb {
+  background: var(--text-faint);
+}

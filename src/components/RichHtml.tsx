@@ -23,6 +23,7 @@ import { t } from "../i18n";
 import { pushToast } from "../toast";
 import { createCoalesced } from "./inlineUi";
 import { InlineChart, readChartTable } from "./InlineChart";
+import { RichSandbox } from "./RichSandbox";
 import {
   applyAssignments,
   asList,
@@ -44,12 +45,14 @@ import {
   MAX_SEND_CHARS,
   SVG_NS,
   SVG_TAGS,
+  UI_TONES,
   VOID_TAGS,
   allowedClasses,
 } from "./rich-html/allowlist";
 import { applyVisibility, cap, htmlProps, validImageSource } from "./rich-html/attributes";
 import type { RenderContext } from "./rich-html/context";
 import { formMessage } from "./rich-html/forms";
+import { HOST_ICONS, hostIconSize } from "./rich-html/icons";
 import {
   cacheState,
   compatible,
@@ -184,6 +187,9 @@ function renderNode(node: ChildNode, context: RenderContext): JSX.Element | null
 
   if (tag === "script") return null;
   if (tag === "template") {
+    if (element.hasAttribute("data-ui-rich")) {
+      return <RichSandbox html={element.innerHTML} onOpenUrl={context.onOpenUrl} />;
+    }
     return element.hasAttribute("data-ui-each") ? (
       <EachView element={element as HTMLTemplateElement} context={context} />
     ) : null;
@@ -191,6 +197,32 @@ function renderNode(node: ChildNode, context: RenderContext): JSX.Element | null
   if (DROPPED_TAGS.has(tag)) return null;
 
   const classes = allowedClasses(element);
+  if (classes.includes("ui-icon")) {
+    const Icon = HOST_ICONS[(element.getAttribute("data-icon") ?? "").trim()];
+    if (!Icon) {
+      // An unknown name falls back to the element's own content.
+      return <>{renderChildren(Array.from(element.childNodes), nested)}</>;
+    }
+    const props: Record<string, unknown> = { class: "ui-icon" };
+    const tone = element.getAttribute("data-tone");
+    if (tone && UI_TONES.has(tone)) props["data-tone"] = tone;
+    const title = element.getAttribute("title");
+    if (title) props.title = cap(title, 200);
+    const label = element.getAttribute("aria-label");
+    if (label) {
+      props["aria-label"] = cap(label, 200);
+      props.role = "img";
+    } else {
+      props["aria-hidden"] = "true";
+    }
+    applyVisibility(element, props, context);
+    const size = hostIconSize(element.getAttribute("data-size"));
+    return (
+      <span {...props}>
+        <Icon size={size} aria-hidden="true" />
+      </span>
+    );
+  }
   if (tag === "table" && classes.includes("ui-chart")) {
     const chart = readChartTable(element);
     if (chart) {
@@ -365,7 +397,7 @@ function renderSvgNode(element: Element, context: RenderContext): JSX.Element | 
 
   const children = renderChildren(Array.from(element.childNodes), nested);
   return (
-    <Dynamic component={tag} isSVG {...svgProps(element)}>
+    <Dynamic component={tag} isSVG {...svgProps(element, context)}>
       {children}
     </Dynamic>
   );

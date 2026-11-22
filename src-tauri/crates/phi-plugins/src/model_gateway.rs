@@ -510,6 +510,43 @@ impl ModelPort for ModelGateway {
         }
     }
 
+    fn resolve_model_on(&self, provider_id: Option<&str>, requested: &str) -> String {
+        let Some(provider_id) = provider_id else {
+            return self.resolve_model(requested);
+        };
+        let file = self.providers.snapshot();
+        match file
+            .providers
+            .iter()
+            .find(|profile| profile.id == provider_id)
+        {
+            Some(profile) => {
+                let resolved = profile.resolve_model(requested);
+                if resolved.trim().is_empty() {
+                    requested.trim().to_string()
+                } else {
+                    resolved
+                }
+            }
+            None => requested.trim().to_string(),
+        }
+    }
+
+    async fn invoke_on(
+        &self,
+        provider_id: Option<&str>,
+        req: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<ModelResponse, ModelError> {
+        let Some(provider_id) = provider_id else {
+            return self.invoke(req, cancel).await;
+        };
+        match self.providers.resolve(provider_id) {
+            Ok(resolved) => self.invoke_resolved(resolved, req, cancel).await,
+            Err(error) => Err(model_error(format!("provider: {error}"))),
+        }
+    }
+
     async fn invoke(
         &self,
         req: ModelRequest,

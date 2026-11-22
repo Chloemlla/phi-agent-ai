@@ -232,6 +232,11 @@ pub trait ModelPort: Send + Sync {
     fn resolve_model(&self, requested: &str) -> String {
         requested.trim().to_string()
     }
+    /// Resolve a model id against a specific provider. `None` uses the active
+    /// provider. Used by auxiliary roles that bind their own provider.
+    fn resolve_model_on(&self, _provider_id: Option<&str>, requested: &str) -> String {
+        self.resolve_model(requested)
+    }
     /// Empty string clears the key. Returns the new status.
     fn set_api_key(&self, key: &str) -> Result<ModelStatus, String>;
     async fn invoke(
@@ -239,6 +244,16 @@ pub trait ModelPort: Send + Sync {
         req: ModelRequest,
         cancel: CancellationToken,
     ) -> Result<ModelResponse, ModelError>;
+    /// Invoke on a specific provider when `provider_id` is set. Defaults to
+    /// the active provider.
+    async fn invoke_on(
+        &self,
+        _provider_id: Option<&str>,
+        req: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<ModelResponse, ModelError> {
+        self.invoke(req, cancel).await
+    }
 }
 
 // ─────────────────────────── policy ───────────────────────────
@@ -346,6 +361,15 @@ pub trait SessionPort: Send + Sync {
     fn create_session(&self, title: &str) -> Result<SessionSummary, String>;
     fn list_sessions(&self) -> Vec<SessionSummary>;
     fn get_session(&self, session_id: &str) -> Option<SessionView>;
+    /// Rename a session and record where the title came from.
+    fn rename_session(&self, _session_id: &str, _title: &str, _source: &str) -> Result<(), String> {
+        Err("session rename is not supported".to_string())
+    }
+    /// Archive a session so it leaves the session list. The journal keeps the
+    /// historical events; replay folds the archive and hides the session.
+    fn delete_session(&self, _session_id: &str) -> Result<bool, String> {
+        Err("session delete is not supported".to_string())
+    }
     fn start_turn(&self, session_id: &str) -> Result<TurnInfo, String>;
     fn append_message(
         &self,

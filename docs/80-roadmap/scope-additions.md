@@ -38,12 +38,15 @@
 | 17 | 内联 HTML 界面块 | 界面 + 提示词 + 状态 | 已实现（取代工作台视图） | `src/components/RichHtml.tsx`、`uiExpression.ts`、`InlineChart.tsx`、`assets/inline-ui-system-prompt.txt` |
 | 18 | 动效与字体策略调整 | 界面 / 设计系统 | 已实现（2026-11-22） | `design/SPEC.md`、`src/App.css`、`src/index.tsx`、字体打包 |
 | 19 | Matter 事项（取代隐式 Task） | 领域 | 设计中（未实现） | `adr/0012`、`40-runtime/multi-agent.md` §2 |
-| 20 | Lead-Sidekick 线程化委派 | 运行时 + 界面 | 设计中（未实现） | `adr/0013`、`40-runtime/multi-agent.md` |
-| 21 | 文本辅助模型角色（标题/记忆整理） | 模型 + 运行时 + 界面 | 设计中（未实现） | `adr/0014`、`40-runtime/auxiliary-models.md` |
+| 20 | Lead-Sidekick 线程化委派 | 运行时 + 界面 | 后端已实现（桌面 UI 待接） | `adr/0013`、`40-runtime/multi-agent.md` |
+| 21 | 文本辅助模型角色（标题/记忆整理） | 模型 + 运行时 + 界面 | 后端已实现（桌面 UI 待接） | `adr/0014`、`40-runtime/auxiliary-models.md` |
 | 22 | 结构化审批风险等级 | 安全 + 界面 | 已实现（2026-11-22） | `src-tauri/crates/phi-contracts`、`src/status.ts` |
-| 23 | 决策模型（Jev 类型化判断） | 模型 + 运行时 + 安全 | 设计中（未实现） | `adr/0015`、`40-runtime/decision-model.md` |
-| 24 | 生图独立配置（用户选模型） | 模型 + 界面 | 设计中（未实现） | `adr/0016`、`40-runtime/auxiliary-models.md` §6 |
+| 23 | 决策模型（Jev 类型化判断） | 模型 + 运行时 + 安全 | 后端已实现（桌面 UI 待接） | `adr/0015`、`40-runtime/decision-model.md` |
+| 24 | 生图独立配置（用户选模型） | 模型 + 界面 | 后端已实现（桌面 UI 待接） | `adr/0016`、`40-runtime/auxiliary-models.md` §6 |
 | 25 | 思考强度扩展（xhigh / max） | 模型 + 界面 | 已实现（2026-11-22） | `phi-contracts`、`model_protocol.rs`、`ModelPicker.tsx` |
+| 26 | Janus 风格界面对齐 | 界面 | 已实现（2026-11-22） | `src/components/`、`src/styles/app/` |
+| 27 | 上下文占用面板 | 运行时 + 界面 | 已实现（2026-11-22） | `ContextUsageView`、`src/components/ContextMeter.tsx`、`session.rs` |
+| 28 | 审批白名单与安全命令自动放行 | 安全 + 运行时 | 已实现（2026-11-22） | `policy.rs`、`tools.rs`、`context.rs` |
 | 22 | 结构化审批风险等级 | 协议 / 界面 | 已实现（2026-11-22） | `phi-contracts/src/ports.rs`、`phi-domain`、`phi-plugins`、`src/status.ts`、`src/types.ts` |
 
 ---
@@ -231,14 +234,14 @@
 - **原状**：Agent 通过 `ui_update` 把声明式视图树写到对话旁的工作台面板；用户要求去掉工作台，界面直接出现在回复正文里。
 - **参考**：本地参考项目 `references/open-intelligent-ui`（Open Intelligent UI，基于 OpenUI Lang；https://github.com/thesysdev/open-intelligent-ui）展示了足够强的目标：模型编排组件、输入绑定状态、页面内计算、图表/表单/动作。它本身是一门新语言，模型驾驭成本高；本实现保留它的**能力模型**（组件词汇、状态、表达式、动作），但把表面语言换成模型最熟悉的 HTML。
 - **当前实现**：
-  - 每次运行的模型调用都追加 `src-tauri/assets/inline-ui-system-prompt.txt`：引导模型在回复中用围栏代码块（语言标记 `html`）写 HTML，并只在需要时叠加 `data-ui-*` 与 `{{ }}`；没有按消息或按运行的用户开关。
+  - 每次运行的模型调用都追加 `src-tauri/assets/inline-ui-system-prompt.txt`：引导模型在回复中用围栏代码块（语言标记 `html`）写 HTML，并只在需要时叠加 `data-ui-*` 与 `{{ }}`；没有按消息或按运行的用户开关。顶层裸 HTML 块（任意完整标签，空行结束）也进入同一个渲染器，避免 `<span>` 一类行内标签漏成源码。
   - 状态：`<script type="application/json" data-ui-state>` 数据岛，`JSON.parse` 读取，永不执行；每次渲染按块源码缓存，刷新会话时保留用户在块内的选择（进程内）。
   - 表达式：`src/components/uiExpression.ts` 使用固定文法（算术、比较、三元、成员/索引、白名单函数）求值，**不使用 `eval` / `new Function`**；`items.amount` 这类数组取字段、`filter/sort/toggle/sum` 等函数让页面内计算成为可能。
   - 交互：`data-ui-bind` 双向绑定 input/select/textarea；`data-ui-set` 修改状态；`data-ui-send` / `data-ui-copy` / 表单提交沿用会话输入 owner，一次只允许一个运行；`data-ui-show` 条件显示；`<template data-ui-each>` 重复标记（≤200 行）。
-  - 组件：宿主 CSS 提供 `ui-grid`、`ui-card`、`ui-callout`、`ui-badge`、`ui-metrics`、`ui-steps`、`ui-kv`、`ui-chips`、`ui-num` 等词汇；`table.ui-chart` 由 `InlineChart.tsx` 绘制 bar/line/area，并提供无障碍表格；原生 `details`、`progress`、`meter`、表单控件与图片（仅对话中出现过的 https 地址）都可用；SVG 仅基础形状/文本。
-  - 安全：`RichHtml.tsx` 用 inert `DOMParser` 解析后按标签、class、属性白名单重建；脚本（数据岛除外）、样式、iframe、对象、事件属性、`style` 全部丢弃；链接仅 `http(s)`/`mailto`；图片仅 `https`；表达式错误只显示原文或空值，不执行。
-  - 流式：`inlineUi.ts` 把文本切成正文与 html 围栏，围栏内容边流边渲染；持久消息由 Markdown 渲染器统一处理。
-- **能力差异**：地图、图片搜索、日历、可编辑表格、沙盒 HTML/JS（`HtmlView`）与 OpenUI 的完整组件集未实现；没有模型编写的 JavaScript。需要用户选择时用表单或 `data-ui-send` 按钮；数据用表格、指标或图表表达。安全承诺不变：永不执行或注入模型生成的代码，也永不注入原始 HTML 字符串。
+  - 组件：宿主 CSS 提供布局原语 `ui-col`、`ui-row`、`ui-box`、`ui-grid`（token 化 `data-gap`、`data-pad`、`data-cols`、`data-align`、`data-justify`、`data-flex`、`data-bg`、`data-border`、`data-radius`、`data-tone`、`data-size`、`data-weight`、`data-text-align`），以及 `ui-card`、`ui-callout`、`ui-badge`、`ui-metrics`、`ui-steps`、`ui-kv`、`ui-chips`、`ui-spacer`、`ui-figure`、`ui-caption`、`ui-carousel`、`ui-icon`、`ui-num` 等词汇；`table.ui-chart` 由 `InlineChart.tsx` 绘制 bar/line/area，并提供无障碍表格；原生 `details`、`progress`、`meter`、表单控件与图片（仅对话中出现过的 https 地址）都可用；SVG 支持基础形状/文本、`{{ }}` 属性表达式与宿主颜色 token。
+  - 安全：`RichHtml.tsx` 用 inert `DOMParser` 解析后按标签、class、属性白名单重建；脚本（数据岛除外）、样式、iframe、对象、事件属性、`style` 全部丢弃；链接仅 `http(s)`/`mailto`；图片仅 `https`；表达式错误只显示原文或空值，不执行。富视觉块用 `<template data-ui-rich>` 显式声明，内容经 `RichSandbox.tsx` 清洗后在禁用脚本的 same-origin iframe（独立 CSP、无表单/外链样式/嵌套帧、除 https 图片外无网络）中渲染，宿主文档仍不接收模型 HTML，模型 JS 永不执行。
+  - 流式：`inlineUi.ts` 把文本切成正文与 html 段——围栏块与顶层裸 HTML 块都边流边渲染，非 HTML 围栏（如 `js`）保持正文；持久消息由 Markdown 渲染器统一处理。
+- **能力差异**：地图、图片搜索、日历、可编辑表格与 OpenUI 的完整组件集未实现；沙盒富视觉块只支持无脚本的 HTML/CSS（`<template data-ui-rich>`，`RichSandbox.tsx`），没有模型编写的 JavaScript。需要用户选择时用表单或 `data-ui-send` 按钮；数据用表格、指标或图表表达。安全承诺不变：永不执行模型生成的代码；宿主文档永不接收模型 HTML。
 - **文档影响**：README（中英）、`AGENT.md`、`design/SPEC.md`、`20-domain/domain-model.md`。
 
 ### 2.18 动效与字体策略调整（2026-11-22）
@@ -273,7 +276,7 @@
   - 多 Sidekick、扇出上限、Sidekick 之间 `send_message` 定向通信；Sidekick 没有 `delegate`。
   - 人仍是唯一审批者；`shared` / `read_only` 工作模式，同一时刻只有一个 shared writer；`isolated_write` 后续再做。
   - 报告区分 completed / delivered / read，失败 / 取消 / 部分结果同样形成报告。
-- **当前状态**：设计已定，未实现；按 `40-runtime/multi-agent.md` §10 分期落地，headless 先行。
+- **当前状态**：后端已实现并通过 headless 集成测试（线程、子 Run、delegate/wait/send/cancel、模型 scale 上限、写租约）；桌面监督界面待接。
 - **文档影响**：`40-runtime/multi-agent.md`、ADR-0013、`40-runtime/agent-loop.md` §7、`00-overview/glossary.md`；后续实现时更新 `AGENT.md`。
 
 ### 2.21 文本辅助模型角色（标题 / 记忆整理）
@@ -286,7 +289,7 @@
   - 未绑定、能力不匹配或缺少外发授权时功能明确禁用，不回退到其他模型。
   - 标题在首条助手回复后生成，只覆盖默认标题，用户改名后不再自动覆盖。
   - 记忆整理按写入阈值 / 空闲 / 显式命令触发，提案过后台准入屏障；安全操作可自动应用，纠正 / 失效待确认，`forget` 永不自动。
-- **当前状态**：设计已定，未实现；先做角色配置、标题与记忆整理。
+- **当前状态**：后端已实现（`auxiliary.json`、`roles` CLI、标题生成、`memory maintain` 的 dry-run/apply 与安全操作）；桌面设置页与记忆整理历史待接。
 - **文档影响**：`40-runtime/auxiliary-models.md`、ADR-0014、`40-runtime/model-gateway.md` §8、`00-overview/glossary.md`；后续实现时更新 `AGENT.md` 与设置页文档。
 
 ### 2.22 结构化审批风险等级（2026-11-22）
@@ -309,7 +312,7 @@
   - 审批分流只在用户预授权的低风险类别内自动放行；高风险 / 不可逆 / 未知风险永远人工；失败 / 低置信度回到人。
   - 长工具输出由决策模型选择策略，真正的摘要由文本 `summarizer` 或确定性截断完成；完整输出保留在 Blob。
   - 事件、审计、撤销、外发授权与 headless 入口齐全。
-- **当前状态**：设计已定，未实现；先做审批分流与输出压缩两个点。
+- **当前状态**：后端已实现（`decision.json`、审批分流、长输出压缩策略、失败安全与审计）；桌面配置页待接。
 - **文档影响**：`40-runtime/decision-model.md`、ADR-0015、`40-runtime/policy-and-approval.md`、`40-runtime/model-gateway.md` §8、`00-overview/glossary.md`。
 
 ### 2.24 生图独立配置（用户选模型）
@@ -322,7 +325,7 @@
   - Agent 主动调用，不是后台任务；默认只给 Lead，是否给 Sidekick 由配置决定。
   - 本地内容寻址资产库；PNG / JPEG / WebP / GIF 可渲染，SVG 只下载不内联；校验 MIME / 尺寸 / 文件大小；提示词外发需 `EgressGrant`。
   - 独立图片模型目录记录能力（4K、蒙版编辑、参考图、GIF / SVG、速度档位），不硬编码未公开分辨率。
-- **当前状态**：设计已定，未实现。
+- **当前状态**：后端已实现（`image.json`、`image.generate` 端口、`image_generate` 工具、本地资产库与 headless 命令）；桌面配置页与图片渲染待接。
 - **文档影响**：`40-runtime/auxiliary-models.md` §6、ADR-0016、`00-overview/glossary.md`；后续实现时更新 `AGENT.md` 与设置页文档。
 
 ### 2.25 思考强度扩展（xhigh / max）
@@ -336,6 +339,49 @@
   - `src/generated/ThinkingEffort.ts` 由 `export-types` 重新生成。
 - **取舍**：不按模型能力隐藏档位；若某 provider 不认识新值，由 provider 返回错误，不在客户端静默降级。
 - **文档影响**：`AGENT.md`、`40-runtime/model-gateway.md`、`src/types.ts`、`src/components/ModelPicker.tsx`、`src/i18n.ts`。
+
+### 2.26 Janus 风格界面对齐（2026-11-22）
+
+- **原状**：正文是「头像 + 名字 + 时间」文档流；工具调用是带边框的折叠卡片；会话列表是两行卡片 + 左侧强调条；常驻灰色 Runbar 在 composer 上方；使用平台原生滚动条。
+- **为什么改**：用户以 janus-test 为参照，明确喜欢「单行 + 贴近指针的悬浮详情」关系、紧凑工具行、下拉菜单与 Custom Scrollbar；同时要求保留 phi 的强调色。
+- **当前实现**：
+  - 会话列表改为单行「标题 + 悬停删除」，悬停弹出 Alt 玻璃气泡（状态/消息数/时间/id），删除两步确认，运行中的会话禁止删除；新建按钮移到分区标题右侧。
+  - Alt 气泡：Portal + 跟随指针 + 贴边翻转 + 半透明/模糊/分层阴影；会话行、消息时间、上下文面板共用。
+  - 正文：用户右侧浅灰气泡；Agent 左侧 7px 状态点 + 全宽文档流；不再有头像/名字/时间行。
+  - 工具/思考合并为紧凑活动行；连续 ≥2 个低噪音活动压缩成 janus 式摘要（思考时长 + read/search/list 计数，含 `shell_exec` 里的 `cat/rg/ls/git status/git grep` 分类）；失败/写操作不压缩；活动组左侧 1px 竖轨。
+  - 模型菜单改为 janus Select 风格（80ms 上滑、选中加粗 + 浅灰底）；触发器保持无边框纯灰 hover。
+  - 自绘 3px 方形滚动条；原生滚动条隐藏，避免挤占布局宽度。
+  - i18n 增加 `tPlural`（one/other）与 `Intl.ListFormat` 连接，避免 “1 messages” 与 “Called 3 tools” 之类句子。
+- **移除**：常驻 Runbar 组件及其样式。运行状态由「发送按钮变为停止」承接，用量移入上下文面板。
+- **文档影响**：`docs/design/SPEC.md` §4.2 / §4.3 / §5.3 / §6.3 / §6.6 / §7.2 / §10；`src/i18n.ts`。
+
+### 2.27 上下文占用面板（2026-11-22）
+
+- **原状**：界面只在 Runbar 显示累计步数与 token；没有上下文窗口占用、组成、平均速度或缓存命中。
+- **为什么加**：用户希望像参照产品一样，在模型选择器旁用一个小圆环按需查看上下文组成、速度与缓存命中，并去掉 composer 上方的灰色块。
+- **当前实现**：
+  - `ModelCallIssued` 记录系统提示 / 工具定义 / 历史消息的字符数与 `contextWindow`；`ModelCallReturned` 记录调用耗时。
+  - Session 投影维护最近一次 prompt 的真实 token 数、组成字符数、调用耗时与输出 token，对外新增 `ContextUsageView`（`SessionView.contextUsage`）。
+  - Composer 右侧圆环显示最近一次 prompt / 模型窗口；点击/悬停打开 Alt 面板；「上下文窗口」可折叠；组成按字符比例把真实已用 token 分摊到三段，并明确标注估算；会话统计只显示轮次/步数、累计 token、平均速度、缓存命中率。
+  - 圆环颜色：正常 accent；≥80% warn；≥95% danger。
+- **取舍**：不在本地跑 tokenizer，组成只做字符比例估算；不显示峰值/最近速度与 TTFT，避免伪造不可得数据。
+- **文档影响**：`docs/design/SPEC.md` §5.3 / §6.6；README 用量说明；`src/generated/ContextUsageView.ts`。
+
+### 2.28 审批白名单与安全命令自动放行（2026-11-22）
+
+- **原状**：工作区内所有 `fs_write` 与全部 `shell_exec` 都进入审批；用户反馈审批过于频繁。
+- **为什么改**：用户要求「白名单直接放行，非白名单再交给辅助模型和审批卡片」。
+- **当前实现**：
+  - `fs_write` 在工作区内直接放行（旧内容仍会备份）；工作区外仍拒绝。
+  - `shell_exec` 先过危险模式拒绝表，再由保守的 shell 分类器判定：
+    - 只读命令（`ls/cat/head/tail/rg/grep/findstr/git status/git diff/...`）直接放行；
+    - 项目验证命令（`bun test`、`bun run test|build|lint|typecheck`、`cargo test|check|build|clippy|fmt`、`npm/pnpm/yarn test|run <验证脚本>` 等）直接放行；
+    - 其余命令返回 `Ask`，进入辅助模型判定或人工审批卡；重定向、命令替换、`%VAR%`、单个 `&` 等无法可靠解析的写法一律回到 `Ask`。
+  - 决策模型的 triage 工具表是用户显式预授权；未列出的工具不会外发判定。triage 默认关闭，需要配置决策模型与外发授权。
+  - 工具描述、系统提示、README 安全说明同步改为「安全动作自动、其余询问」。
+- **安全边界**：白名单是保守的**展示前分类**之外的另一套实现（Rust 侧），不复用前端的展示分类；任意命令仍以人工审批卡为最终边界；审批仍绑定 action digest。
+- **测试**：`policy.rs` 单元测试覆盖只读/验证/未知/重定向/危险命令；headless 32 个集成测试覆盖自动写入、审批放行/拒绝、triage 自动放行、取消与崩溃恢复、会话删除。
+- **文档影响**：`docs/40-runtime/policy-and-approval.md` §5.2；README / README.zh-CN；`tools.rs`、`context.rs`、`loop_plugin.rs`。
 
 ---
 

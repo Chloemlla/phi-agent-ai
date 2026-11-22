@@ -28,7 +28,6 @@
 .model-chip:hover:not(:disabled),
 .model-picker.open .model-chip {
   background: var(--bg-subtle);
-  border-color: var(--border-softer);
   color: var(--text-primary);
 }
 
@@ -66,8 +65,9 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--r-md);
   background: var(--bg-surface);
-  box-shadow: var(--shadow-md);
-  animation: pop var(--dur-fast) var(--ease);
+  box-shadow: var(--shadow-lg);
+  animation: select-list-in 80ms var(--ease) both;
+  transform-origin: bottom center;
 }
 
 .model-menu-head {
@@ -130,8 +130,9 @@
 }
 
 .model-row.current {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .model-row-name {
@@ -158,7 +159,7 @@
 }
 
 .model-row.current .model-row-effort {
-  color: var(--accent-ink);
+  color: var(--text-muted);
 }
 
 .model-submenu {
@@ -171,7 +172,9 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--r-md);
   background: var(--bg-surface);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
+  animation: select-list-in 80ms var(--ease) both;
+  transform-origin: top left;
 }
 
 .model-submenu.flip {
@@ -230,6 +233,17 @@
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--text-muted);
+}
+
+@keyframes select-list-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Coarse pointers: the submenu expands inline under the row. */

@@ -4,6 +4,7 @@
 //! `phi-contracts` depends on `phi-domain`; plugin implementations depend on
 //! both. Nothing here may reference a concrete plugin or a shell type.
 
+pub mod auxiliary;
 pub mod memory;
 pub mod ports;
 pub mod provider;
@@ -22,6 +23,9 @@ pub const SLOT_MODEL_INVOKE: &str = "model.invoke";
 pub const SLOT_MEMORY_STORE: &str = "memory.store";
 pub const SLOT_TOOL_PROVIDER: &str = "provider.tool";
 pub const SLOT_CONTEXT_CONTRIBUTOR: &str = "context.contributor";
+pub const SLOT_IMAGE_GENERATE: &str = "image.generate";
+pub const SLOT_DECISION_EVALUATE: &str = "decision.evaluate";
+pub const SLOT_AUXILIARY_INVOKE: &str = "auxiliary.invoke";
 
 /// ADR-0009 required slots for the official distribution.
 pub const REQUIRED_SLOTS: &[&str] = &[

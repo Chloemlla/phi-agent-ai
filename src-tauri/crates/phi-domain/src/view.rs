@@ -81,6 +81,31 @@ pub struct SessionView {
     pub runs: Vec<RunView>,
     #[serde(default)]
     pub agents: Vec<AgentView>,
+    /// Prompt size and session throughput for the composer's context meter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_usage: Option<ContextUsageView>,
+}
+
+/// Context and throughput readings for the current session.
+///
+/// `used_tokens` and `context_window` are real provider readings. The
+/// per-segment token split is estimated by the UI from the character counts,
+/// because no tokenizer runs locally; the DTO therefore exposes characters,
+/// not fabricated token counts.
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsageView {
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    pub used_tokens: u64,
+    pub system_chars: u64,
+    pub tools_chars: u64,
+    pub history_chars: u64,
+    pub turns: u64,
+    pub steps: u64,
+    pub total_tokens: u64,
+    pub average_tps: f64,
+    pub cache_hit: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]

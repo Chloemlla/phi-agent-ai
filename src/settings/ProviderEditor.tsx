@@ -5,7 +5,7 @@
 
 import { Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { describeModels } from "../bridge";
-import { t, tArgs } from "../i18n";
+import { t, tArgs, tPlural } from "../i18n";
 import { errorText } from "../errors";
 import { IconCheck, IconCircleAlert, IconTrash } from "../components/Icons";
 import {
@@ -288,10 +288,12 @@ export function ProviderEditor(props: {
                   </Show>
                   <span>
                     {result().ok
-                      ? tArgs("Connected in {ms} ms, {count} models available.", {
-                          ms: result().latencyMs,
-                          count: result().modelCount,
-                        })
+                      ? tPlural(
+                          "Connected in {ms} ms, {n} model available.",
+                          "Connected in {ms} ms, {n} models available.",
+                          result().modelCount,
+                          { ms: result().latencyMs },
+                        )
                       : tArgs("Connection failed: {error}", {
                           error: result().error ?? errorText(result()),
                         })}
