@@ -1,7 +1,7 @@
 # phi-agent 设计文档集
 
 > 本地优先、多端协同的 Agent 客户端 —— 架构与设计文档
-> 版本：v0.1（草稿，持续迭代） · 最后更新：2026-11-14
+> 版本：v0.1（草稿，持续迭代） · 最后更新：2026-11-20
 
 ---
 
@@ -79,7 +79,8 @@ docs/
 │   └── multi-frontend.md            # 多端前端与 UI 扩展
 ├── 70-quality/
 │   ├── quality-attributes.md        # 质量属性与取舍
-│   └── evaluation.md                # 评测进 CI
+│   ├── evaluation.md                # 评测进 CI
+│   └── frontend-review-2026-11-20.md # UI/UX 与前端工程审查；动效/字体决策
 ├── 80-roadmap/
 │   ├── evolution.md                 # MVP → v1 → 后续迭代（交付边界）
 │   └── scope-additions.md           # 范围增补记录（原设计之外新增的能力）
@@ -128,6 +129,7 @@ docs/
 | `design/SPEC.md` | 🌿 | 桌面 UI 视觉规格：tokens/布局/风险分级/动效 |
 | `70-quality/quality-attributes.md` | 🌿 | 质量属性场景与取舍 |
 | `70-quality/evaluation.md` | 🌿 | 评测进 CI |
+| `70-quality/frontend-review-2026-11-20.md` | 🌿 | UI/UX 与前端工程审查；reduced-motion/字体决策 |
 | `80-roadmap/evolution.md` | 🌿 | 交付边界与里程碑（MVP/v1/后续） |
 | `80-roadmap/scope-additions.md` | 🌿 | 范围增补记录（原设计之外新增/移除的能力与原因） |
 | `adr/0001`–`adr/0011` | 🌳 | 十一条关键决策（已接受） |

@@ -48,17 +48,6 @@
     "scale": 3
   },
   {
-    "patterns": ["gpt-6"],
-    "name": "GPT-6",
-    "display": "GPT-{version}",
-    "anchor": "gpt-",
-    "description": "GPT-6 family fallback for variants without dedicated catalogue metadata.",
-    "tags": ["reasoning", "vision"],
-    "contextWindow": 1050000,
-    "maxOutputTokens": 128000,
-    "scale": 3
-  },
-  {
     "patterns": ["claude-fable-5"],
     "name": "Claude Fable 5",
     "display": "Claude Fable {version}",
@@ -123,7 +112,7 @@
     "tags": ["text-only", "software-engineering", "agentic", "flagship"],
     "contextWindow": 1048576,
     "maxOutputTokens": 128000,
-    "scale": 4
+    "scale": 3
   },
   {
     "patterns": ["deepseek-v4"],
@@ -147,7 +136,7 @@
     "tags": ["open-weight", "frontier-coding", "3d-creation", "agentic", "long-context"],
     "contextWindow": 1048576,
     "maxOutputTokens": 1048576,
-    "scale": 5
+    "scale": 4
   },
   {
     "patterns": ["kimi-k3"],
@@ -194,17 +183,6 @@
     "tags": ["fast", "execution-engine", "agentic", "coding", "economic"],
     "contextWindow": 1048576,
     "maxOutputTokens": 65536,
-    "scale": 2
-  },
-  {
-    "patterns": ["gemini-4"],
-    "name": "Gemini 4",
-    "display": "Gemini {version}",
-    "anchor": "gemini-",
-    "description": "Gemini 4 family fallback for variants without dedicated catalogue metadata.",
-    "tags": ["reasoning", "multimodal"],
-    "contextWindow": 1048576,
-    "maxOutputTokens": 1048576,
     "scale": 3
   }
 ]
