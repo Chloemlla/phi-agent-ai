@@ -1208,4 +1208,188 @@ mod tests {
         // Repair must be idempotent across subsequent restarts.
         assert_eq!(plugin.repair_unpaired_tool_uses(&session.id).unwrap(), 0);
     }
+
+    #[test]
+    fn projects_agent_threads_and_write_lease() {
+        let dir = temp_dir("session-agents");
+        let bus = Arc::new(EventBus::new(
+            Arc::new(JsonlJournal::new(dir.join("events.jsonl"))),
+            Arc::new(SystemClock::new()),
+            Arc::new(UuidIds),
+            Arc::new(StderrLog),
+        ));
+        let plugin = Arc::new(SessionPlugin::new(
+            bus.clone(),
+            Arc::new(UuidIds),
+            Arc::new(FsBlobStore::new(dir.join("blobs"))),
+            "node-test".to_string(),
+        ));
+        bus.subscribe(plugin.clone());
+
+        let session = plugin.create_session("t").unwrap();
+        let turn = plugin.start_turn(&session.id).unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::AgentCreated {
+                agent_id: "agent-lead".to_string(),
+                session_id: session.id.clone(),
+                turn_id: turn.turn_id.clone(),
+                role: AgentRole::Lead,
+                parent_agent_id: None,
+                root_agent_id: "agent-lead".to_string(),
+                model: "lead-model".to_string(),
+                thinking: None,
+                thread_id: "main".to_string(),
+                work_mode: WorkMode::Shared,
+                report_to: None,
+                spawned_by_run_id: "run-root".to_string(),
+            },
+        )
+        .unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::RunScheduled {
+                run_id: "run-root".to_string(),
+                session_id: session.id.clone(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: Some("agent-lead".to_string()),
+                thread_id: Some("main".to_string()),
+                parent_run_id: None,
+            },
+        )
+        .unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::RunStarted {
+                run_id: "run-root".to_string(),
+            },
+        )
+        .unwrap();
+        plugin
+            .append_message_in_thread(
+                &session.id,
+                Some(&turn.turn_id),
+                "main",
+                Some("agent-lead"),
+                None,
+                Some(MessageKind::User),
+                Role::User,
+                vec![ContentBlock::text("lead task")],
+            )
+            .unwrap();
+
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::AgentCreated {
+                agent_id: "agent-child".to_string(),
+                session_id: session.id.clone(),
+                turn_id: turn.turn_id.clone(),
+                role: AgentRole::Subagent,
+                parent_agent_id: Some("agent-lead".to_string()),
+                root_agent_id: "agent-lead".to_string(),
+                model: "small-model".to_string(),
+                thinking: None,
+                thread_id: "agent:agent-child".to_string(),
+                work_mode: WorkMode::Shared,
+                report_to: Some("agent-lead".to_string()),
+                spawned_by_run_id: "run-root".to_string(),
+            },
+        )
+        .unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::RunScheduled {
+                run_id: "run-child".to_string(),
+                session_id: session.id.clone(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: Some("agent-child".to_string()),
+                thread_id: Some("agent:agent-child".to_string()),
+                parent_run_id: Some("run-root".to_string()),
+            },
+        )
+        .unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::RunStarted {
+                run_id: "run-child".to_string(),
+            },
+        )
+        .unwrap();
+        plugin
+            .append_message_in_thread(
+                &session.id,
+                Some(&turn.turn_id),
+                "agent:agent-child",
+                Some("agent-lead"),
+                Some("agent-child"),
+                Some(MessageKind::Brief),
+                Role::User,
+                vec![ContentBlock::text("child brief")],
+            )
+            .unwrap();
+        assert_eq!(
+            plugin.write_lease_holder(&session.id).as_deref(),
+            Some("agent-child")
+        );
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::ModelCallReturned {
+                call_id: "call-1".to_string(),
+                run_id: "run-child".to_string(),
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_read_tokens: 2,
+                cache_write_tokens: 1,
+                finish_reason: "end_turn".to_string(),
+            },
+        )
+        .unwrap();
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::RunSucceeded {
+                run_id: "run-child".to_string(),
+            },
+        )
+        .unwrap();
+
+        let view = plugin.get_session(&session.id).unwrap();
+        assert_eq!(view.messages.len(), 1, "main thread only");
+        assert_eq!(view.agents.len(), 2);
+        let child = view
+            .agents
+            .iter()
+            .find(|agent| agent.id == "agent-child")
+            .unwrap();
+        assert_eq!(child.status, AgentStatus::Succeeded);
+        assert_eq!(child.input_tokens, 10);
+        assert_eq!(child.output_tokens, 5);
+        assert_eq!(
+            plugin
+                .messages_for_thread(&session.id, "agent:agent-child")
+                .len(),
+            1
+        );
+        assert_eq!(plugin.write_lease_holder(&session.id), None);
+        assert_eq!(
+            plugin.active_root_run(&session.id).as_deref(),
+            Some("run-root")
+        );
+        bus.publish(
+            &session.id,
+            "test",
+            &DomainEvent::RunSucceeded {
+                run_id: "run-root".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(plugin.active_root_run(&session.id), None);
+    }
 }

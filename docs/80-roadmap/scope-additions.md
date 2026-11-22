@@ -43,6 +43,7 @@
 | 22 | 结构化审批风险等级 | 安全 + 界面 | 已实现（2026-11-22） | `src-tauri/crates/phi-contracts`、`src/status.ts` |
 | 23 | 决策模型（Jev 类型化判断） | 模型 + 运行时 + 安全 | 设计中（未实现） | `adr/0015`、`40-runtime/decision-model.md` |
 | 24 | 生图独立配置（用户选模型） | 模型 + 界面 | 设计中（未实现） | `adr/0016`、`40-runtime/auxiliary-models.md` §6 |
+| 25 | 思考强度扩展（xhigh / max） | 模型 + 界面 | 已实现（2026-11-22） | `phi-contracts`、`model_protocol.rs`、`ModelPicker.tsx` |
 | 22 | 结构化审批风险等级 | 协议 / 界面 | 已实现（2026-11-22） | `phi-contracts/src/ports.rs`、`phi-domain`、`phi-plugins`、`src/status.ts`、`src/types.ts` |
 
 ---
@@ -323,6 +324,18 @@
   - 独立图片模型目录记录能力（4K、蒙版编辑、参考图、GIF / SVG、速度档位），不硬编码未公开分辨率。
 - **当前状态**：设计已定，未实现。
 - **文档影响**：`40-runtime/auxiliary-models.md` §6、ADR-0016、`00-overview/glossary.md`；后续实现时更新 `AGENT.md` 与设置页文档。
+
+### 2.25 思考强度扩展（xhigh / max）
+
+- **原状**：`ThinkingEffort` 只有 `off` / `low` / `medium` / `high`；模型选择器、CLI 帮助与网关映射都只覆盖这四档。
+- **为什么改**（2026-11-22）：用户要求增加 `xhigh`（极高）与 `max`（最高），让高难任务可以显式要求更深推理。
+- **当前实现**：
+  - `ThinkingEffort` 增加 `XHigh` / `Max`，serde 值为 `xhigh` / `max`；`parse` 接受 `xhigh`、`extra-high`、`maximum` 等别名。
+  - Anthropic `output_config.effort` 与 OpenAI `reasoning_effort` / `reasoning.effort` 直接传递 `xhigh` / `max`；`off` 仍然省略思考字段。
+  - CLI `--thinking` 与帮助文本、模型选择器（桌面悬浮 / 触摸内联）同步；中文标签为「极高」「最高」。
+  - `src/generated/ThinkingEffort.ts` 由 `export-types` 重新生成。
+- **取舍**：不按模型能力隐藏档位；若某 provider 不认识新值，由 provider 返回错误，不在客户端静默降级。
+- **文档影响**：`AGENT.md`、`40-runtime/model-gateway.md`、`src/types.ts`、`src/components/ModelPicker.tsx`、`src/i18n.ts`。
 
 ---
 

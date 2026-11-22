@@ -660,7 +660,7 @@ impl Node {
             Some(value) if !value.trim().is_empty() => {
                 Some(ThinkingEffort::parse(value).ok_or_else(|| {
                     i18n::t_args(
-                        "Unknown thinking effort {effort}; expected off, low, medium or high",
+                        "Unknown thinking effort {effort}; expected off, low, medium, high, xhigh or max",
                         &[("effort", value.trim().to_string())],
                     )
                 })?)

@@ -149,13 +149,13 @@
 
 ### 5.2 推理强度（thinking effort）
 
-输入框的模型选择器允许为下一条消息指定模型与思考强度（`off` / `low` / `medium` / `high`）。网关按协议翻译：
+输入框的模型选择器允许为下一条消息指定模型与思考强度（`off` / `low` / `medium` / `high` / `xhigh` / `max`）。网关按协议翻译：
 
 | 协议 | 映射 |
 |---|---|
 | Anthropic Messages | `thinking: { type: "adaptive", display: "summarized" }` + `output_config: { effort }`；不发送 `temperature` |
-| OpenAI Chat Completions | 设置思考强度时发送 `reasoning_effort: low\|medium\|high` |
-| OpenAI Responses | 设置思考强度时发送 `reasoning: { effort: low\|medium\|high }` |
+| OpenAI Chat Completions | 设置思考强度时发送 `reasoning_effort: low\|medium\|high\|xhigh\|max` |
+| OpenAI Responses | 设置思考强度时发送 `reasoning: { effort: low\|medium\|high\|xhigh\|max }` |
 
 `off` 或未选择时不发送任何思考字段。当前维护的模型都接受思考强度；不识别该字段的兼容供应商会忽略它，不需要额外的模型能力标记。Anthropic 返回的 `thinking` / `redacted_thinking` 块会原样保存在助手消息中；重放请求只保留最近一条助手消息的思考块（更早的块对工具续写无用，且会随历史裁剪失效），签名缺失的块不会回传。旧版 `budget_tokens` 形态不再支持。
 

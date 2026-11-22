@@ -365,8 +365,8 @@ fn zh(msgid: &str) -> Option<&'static str> {
         "Unknown session: {id}" => "未知会话：{id}",
         "Node is in {mode} mode: {reason}" => "节点处于 {mode} 模式：{reason}",
         "Message is empty" => "消息为空",
-        "Unknown thinking effort {effort}; expected off, low, medium or high" => {
-            "未知思考强度 {effort}；可选 off、low、medium、high"
+        "Unknown thinking effort {effort}; expected off, low, medium, high, xhigh or max" => {
+            "未知思考强度 {effort}；可选 off、low、medium、high、xhigh 或 max"
         }
         "Set a workspace first" => "请先设置工作区",
         "Workspace does not exist; set it again" => "工作区不存在，请重新设置",
@@ -585,7 +585,7 @@ mod tests {
             "Memory record not found",
             "The candidate looks like a secret; sensitive values are not stored as memories",
             "memory forget requires --id, --scope, --project, --run or --all",
-            "Unknown thinking effort {effort}; expected off, low, medium or high",
+            "Unknown thinking effort {effort}; expected off, low, medium, high, xhigh or max",
             "Tool arguments are not valid JSON",
             "Tool {tool} was not executed: the model sent arguments that are not valid JSON. Parser error: {error}. Raw arguments (truncated): {raw}. Re-issue the tool call with valid JSON arguments.",
             "The previous response was cut off by the output token limit. Continue exactly where you stopped, without repeating what you already wrote.",

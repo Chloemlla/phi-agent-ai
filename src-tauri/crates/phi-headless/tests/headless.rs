@@ -779,6 +779,28 @@ fn run_forwards_model_and_thinking_to_the_provider() {
         "current Anthropic models reject temperature"
     );
 
+    for level in ["xhigh", "max"] {
+        let result = env.run(
+            "inspect the workspace",
+            &[
+                "--approval",
+                "deny",
+                "--model",
+                "test-model",
+                "--thinking",
+                level,
+            ],
+        );
+        assert_eq!(result["run"]["state"], "Succeeded", "{level}: {result}");
+        assert!(
+            provider
+                .requests()
+                .iter()
+                .any(|request| request["output_config"]["effort"] == level),
+            "the {level} effort must reach the provider"
+        );
+    }
+
     let output = env.command(&[
         "run",
         "--message",

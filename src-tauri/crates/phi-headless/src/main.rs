@@ -1391,7 +1391,7 @@ Usage:
 
 Commands:
   run --message TEXT [--session ID] [--provider ID]
-      [--model ID] [--thinking off|low|medium|high]
+      [--model ID] [--thinking off|low|medium|high|xhigh|max]
       [--approval deny|allow|prompt] [--no-stream] [--title TEXT]
   sessions list
   sessions show <id>

@@ -3,4 +3,4 @@ import type { ContentBlock } from "./ContentBlock";
 import type { MessageKind } from "./MessageKind";
 import type { Role } from "./Role";
 
-export type MessageView = { id: string, turnId: string | null, role: Role, ts: string, blocks: Array<ContentBlock>, threadId?: string | null, agentId?: string | null, kind?: MessageKind | null, };
+export type MessageView = { id: string, turnId: string | null, role: Role, ts: string, blocks: Array<ContentBlock>, threadId?: string | null, agentId?: string | null, toAgentId?: string | null, kind?: MessageKind | null, };

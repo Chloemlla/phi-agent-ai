@@ -14,6 +14,10 @@ import { IconCheck, IconChevronDown } from "./Icons";
 
 function thinkingLabel(level: ThinkingLevel): string {
   switch (level) {
+    case "max":
+      return t("Maximum");
+    case "xhigh":
+      return t("Extra high");
     case "high":
       return t("High");
     case "medium":

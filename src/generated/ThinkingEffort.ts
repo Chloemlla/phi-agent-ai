@@ -7,4 +7,4 @@
  * budget, while the OpenAI protocols take a named effort. `Off` and `None`
  * both mean "do not ask for reasoning".
  */
-export type ThinkingEffort = "off" | "low" | "medium" | "high";
+export type ThinkingEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max";

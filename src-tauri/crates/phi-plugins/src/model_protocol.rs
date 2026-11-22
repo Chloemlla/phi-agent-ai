@@ -2093,6 +2093,30 @@ mod tests {
     }
 
     #[test]
+    fn xhigh_and_max_pass_through_each_protocol() {
+        for effort in [ThinkingEffort::XHigh, ThinkingEffort::Max] {
+            let expected = effort.as_str();
+
+            let mut anthropic = profile(Protocol::AnthropicMessages);
+            anthropic.model = "claude-sonnet-5-5".into();
+            let mut req = request();
+            req.thinking = Some(effort);
+            let plan = build_http(&anthropic, &req, false).unwrap();
+            assert_eq!(plan.body["output_config"]["effort"], expected);
+
+            let mut chat = profile(Protocol::OpenAiChat);
+            chat.model = "gpt-6-astra".into();
+            let plan = build_http(&chat, &req, false).unwrap();
+            assert_eq!(plan.body["reasoning_effort"], expected);
+
+            let mut responses = profile(Protocol::OpenAiResponses);
+            responses.model = "gpt-6-sol".into();
+            let plan = build_http(&responses, &req, false).unwrap();
+            assert_eq!(plan.body["reasoning"]["effort"], expected);
+        }
+    }
+
+    #[test]
     fn malformed_chat_arguments_keep_text_and_emit_a_block() {
         let value = json!({
             "choices": [{

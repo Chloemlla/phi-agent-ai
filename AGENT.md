@@ -120,7 +120,7 @@ match on family patterns plus required variant markers, so an unrecorded point
 release such as `gpt-6.5-luna` keeps its real version and variant. `ModelSpec.scale`
 ranks capability from 1 (small, fast) to 5 (frontier) and caps delegation: an
 agent may never call a model larger than itself. A per-message `thinking` effort
-(`off`/`low`/`medium`/`high`) maps to Anthropic's adaptive thinking plus
+(`off`/`low`/`medium`/`high`/`xhigh`/`max`) maps to Anthropic's adaptive thinking plus
 `output_config.effort`, OpenAI Chat's `reasoning_effort`, or Responses'
 `reasoning.effort`; `off`/`None` omits the thinking fields — every current model
 accepts them. Legacy Anthropic `budget_tokens` shapes are not supported.

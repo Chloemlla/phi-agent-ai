@@ -112,6 +112,9 @@ pub enum ThinkingEffort {
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
 }
 
 impl ThinkingEffort {
@@ -125,6 +128,10 @@ impl ThinkingEffort {
             "low" | "minimal" => Some(ThinkingEffort::Low),
             "medium" | "med" => Some(ThinkingEffort::Medium),
             "high" => Some(ThinkingEffort::High),
+            "xhigh" | "x-high" | "extra-high" | "extra_high" | "extra high" => {
+                Some(ThinkingEffort::XHigh)
+            }
+            "max" | "maximum" | "highest" => Some(ThinkingEffort::Max),
             _ => None,
         }
     }
@@ -135,6 +142,8 @@ impl ThinkingEffort {
             ThinkingEffort::Low => "low",
             ThinkingEffort::Medium => "medium",
             ThinkingEffort::High => "high",
+            ThinkingEffort::XHigh => "xhigh",
+            ThinkingEffort::Max => "max",
         }
     }
 }
@@ -472,11 +481,27 @@ mod tests {
             Some(ThinkingEffort::Medium)
         );
         assert_eq!(ThinkingEffort::parse("high"), Some(ThinkingEffort::High));
+        assert_eq!(ThinkingEffort::parse("XHIGH"), Some(ThinkingEffort::XHigh));
+        assert_eq!(
+            ThinkingEffort::parse("extra-high"),
+            Some(ThinkingEffort::XHigh)
+        );
+        assert_eq!(ThinkingEffort::parse("maximum"), Some(ThinkingEffort::Max));
         assert_eq!(ThinkingEffort::parse("extreme"), None);
         assert_eq!(ThinkingEffort::High.as_str(), "high");
+        assert_eq!(ThinkingEffort::XHigh.as_str(), "xhigh");
+        assert_eq!(ThinkingEffort::Max.as_str(), "max");
         assert_eq!(
             serde_json::to_string(&ThinkingEffort::Medium).unwrap(),
             "\"medium\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingEffort::XHigh).unwrap(),
+            "\"xhigh\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingEffort::Max).unwrap(),
+            "\"max\""
         );
     }
 }

@@ -40,10 +40,17 @@ export function isMobilePlatform(platform: string | null | undefined): boolean {
 /** Mirrors the Rust `ThinkingEffort` wire values. */
 export type ThinkingLevel = ThinkingEffort;
 
-export const THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
+export const THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return value === "off" || value === "low" || value === "medium" || value === "high";
+  return (
+    value === "off" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  );
 }
 
 /** The model the composer will call and how hard it should think. */

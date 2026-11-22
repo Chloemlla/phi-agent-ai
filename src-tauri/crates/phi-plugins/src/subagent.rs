@@ -121,7 +121,7 @@ impl SubagentToolsPlugin {
                 Some(thinking) => Some(thinking),
                 None => {
                     return Self::bad(i18n::t_args(
-                        "Unknown thinking effort {effort}; expected off, low, medium or high",
+                        "Unknown thinking effort {effort}; expected off, low, medium, high, xhigh or max",
                         &[("effort", value.to_string())],
                     ));
                 }
@@ -653,7 +653,7 @@ impl ToolPort for SubagentToolsPlugin {
                 "Create a subagent for a separable piece of work. The subagent runs in its own message thread; you receive a report, not its full trajectory. Choose a model whose scale is no larger than yours. Subagents cannot delegate further. Use wait=true to block for the first report, or wait_for_agents to collect several.",
                 json!({
                     "model": { "type": "string", "description": "Model id from the available roster" },
-                    "thinking": { "type": "string", "enum": ["off", "low", "medium", "high"] },
+                    "thinking": { "type": "string", "enum": ["off", "low", "medium", "high", "xhigh", "max"] },
                     "work_mode": { "type": "string", "enum": ["read_only", "shared"], "description": "read_only (default) hides write tools; shared takes the workspace write lease" },
                     "wait": { "type": "boolean", "description": "Block until the subagent's first report" },
                     "brief": {
