@@ -13,6 +13,8 @@ import {
 import { t, tArgs, tPlural, lang } from "../i18n";
 import { errorText } from "../errors";
 import { IconCheck, IconSearch, IconTrash } from "../components/Icons";
+import { notify } from "../ui/notifications";
+import { Select } from "../ui/Select";
 import type { MemoryRecord, MemoryStats } from "../types";
 
 function scopeLabel(scope: MemoryRecord["scope"]): string {
@@ -73,7 +75,6 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   const [scope, setScope] = createSignal<"user" | "project">("project");
   const [loading, setLoading] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
   const [notice, setNotice] = createSignal("");
   const [pendingDelete, setPendingDelete] = createSignal<string | null>(null);
   const [armedAt, setArmedAt] = createSignal(0);
@@ -139,7 +140,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
     try {
       await load();
     } catch (e) {
-      setError(errorText(e));
+      notify(errorText(e), { tone: "danger" });
     } finally {
       setLoading(false);
     }
@@ -156,11 +157,10 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       return;
     }
     setBusy(true);
-    setError("");
     try {
       await runSearch(text);
     } catch (e) {
-      setError(errorText(e));
+      notify(errorText(e), { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -178,7 +178,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       setTruncated(false);
       await load();
     } catch (e) {
-      setError(errorText(e));
+      notify(errorText(e), { tone: "danger" });
     }
   }
 
@@ -188,7 +188,6 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
     const text = fact().trim();
     if (!text || busy()) return;
     setBusy(true);
-    setError("");
     setNotice("");
     try {
       const outcome = await addMemoryCommand(text, scope());
@@ -197,13 +196,13 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       } else if (outcome.status === "duplicate") {
         setNotice(t("This fact is already stored."));
       } else {
-        setError(outcome.message);
+        notify(outcome.message, { tone: "danger" });
       }
       if (outcome.status !== "rejected") setFact("");
       await reload();
       await props.onRefresh();
     } catch (e) {
-      setError(errorText(e));
+      notify(errorText(e), { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -212,7 +211,6 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   async function forget(memory: MemoryRecord) {
     if (pendingDelete() !== memory.id) {
       armDelete(memory.id);
-      setError("");
       setNotice(t("Click delete again to confirm permanent deletion."));
       return;
     }
@@ -221,7 +219,6 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
     }
     disarmDelete();
     setBusy(true);
-    setError("");
     setNotice("");
     try {
       const report = await forgetMemories([memory.id]);
@@ -234,7 +231,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       await reload();
       await props.onRefresh();
     } catch (e) {
-      setError(errorText(e));
+      notify(errorText(e), { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -275,15 +272,17 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
             aria-label={t("Add a stable fact the agent should remember")}
             maxLength={2000}
           />
-          <select
-            class="settings-input memory-scope"
-            value={scope()}
-            aria-label={t("Scope")}
-            onChange={(event) => setScope(event.currentTarget.value as "user" | "project")}
-          >
-            <option value="project">{t("Project")}</option>
-            <option value="user">{t("User")}</option>
-          </select>
+          <div class="memory-scope">
+            <Select
+              aria-label={t("Scope")}
+              value={scope()}
+              options={[
+                { value: "project", label: t("Project") },
+                { value: "user", label: t("User") },
+              ]}
+              onChange={(value) => setScope(value as "user" | "project")}
+            />
+          </div>
           <button class="btn primary" type="submit" disabled={busy() || !fact().trim()}>
             {t("Add")}
           </button>
@@ -309,11 +308,6 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
         </form>
       </section>
 
-      <Show when={error()}>
-        <div class="banner danger" role="alert">
-          {error()}
-        </div>
-      </Show>
       <Show when={notice()}>
         <div class="settings-note" role="status">
           <IconCheck size={14} />
@@ -328,7 +322,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       <Show when={loading()}>
         <p class="hint">{t("Loading…")}</p>
       </Show>
-      <Show when={!loading() && !error() && memories().length === 0}>
+      <Show when={!loading() && memories().length === 0}>
         <p class="hint">
           {filtered()
             ? t("No memories match this search.")

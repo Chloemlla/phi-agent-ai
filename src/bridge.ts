@@ -45,6 +45,10 @@ export function deleteSession(sessionId: string): Promise<boolean> {
   return invoke<boolean>("delete_session", { sessionId });
 }
 
+export function renameSession(sessionId: string, title: string): Promise<void> {
+  return invoke<void>("rename_session", { sessionId, title });
+}
+
 export function getSession(sessionId: string): Promise<SessionDetail> {
   return invoke<SessionDetail>("get_session", { sessionId });
 }

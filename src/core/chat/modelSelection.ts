@@ -7,7 +7,7 @@ import {
   type ModelSelection,
   type ProviderView,
   type ThinkingLevel,
-} from "../types";
+} from "../../types";
 
 const STORAGE_PREFIX = "phi.model.";
 

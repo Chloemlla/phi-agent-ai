@@ -6,18 +6,18 @@
 
 .memory-scope {
   flex: none;
-  min-width: 120px;
-  max-width: 160px;
+  width: 150px;
 }
 
 .memory-list {
   list-style: none;
   margin: var(--sp-4) 0 0;
-  padding: 0;
+  padding: 0 var(--sp-4);
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border-softer);
-  border-bottom: 1px solid var(--border-softer);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
 }
 
 .memory-item {
@@ -41,8 +41,8 @@
 }
 
 .memory-fact {
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: var(--text-md);
+  line-height: 1.6;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
@@ -52,7 +52,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--sp-2);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
@@ -62,7 +62,7 @@
   background: var(--bg-subtle);
   border: 1px solid var(--border-soft);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 11.5px;
 }
 
 .memory-badge.scope {
@@ -88,8 +88,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--r-sm);
   color: var(--text-muted);
 }

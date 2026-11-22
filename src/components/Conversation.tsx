@@ -1,7 +1,6 @@
 // Conversation transcript: a document flow of user bubbles, agent prose and
-// compact activity rows. Consecutive reasoning/read/search/list calls compress
-// into one summary; writes and failures stay individual. A thin rail connects
-// an activity cluster without boxing each row.
+// compact activity summaries. Consecutive reasoning and tool steps compress
+// into one line; failures count in the summary and open it automatically.
 
 import { Index, Show, createEffect, createMemo, createSignal, type Accessor } from "solid-js";
 import { formatFullTime, lastAssistantText, streamMatchesDurable } from "../format";
@@ -18,7 +17,6 @@ import {
   isCompressibleActivity,
   type ActivityItemRow,
   type GroupRowData,
-  type Rail,
   type ResultRowData,
   type ThinkingRowData,
   type ToolResultInfo,
@@ -164,10 +162,6 @@ function isActivityItemRow(row: TranscriptRow): row is ActivityItemRow {
   return row.kind === "thinking" || row.kind === "tool" || row.kind === "result";
 }
 
-function isActivityRow(row: TranscriptRow): row is ActivityRow {
-  return isActivityItemRow(row) || row.kind === "group";
-}
-
 // Approval objects are rebuilt by every projection refresh; keep one row and
 // update its accessor so the card keeps local state (busy buttons, focus).
 function approvalRow(approval: PendingApproval): ApprovalRowData {
@@ -279,18 +273,21 @@ function StreamingMessage(props: {
     <article class="message message--assistant message--streaming">
       <span class="message-dot live" aria-hidden="true" />
       <div class="message-body">
-        {/* Plain text while streaming: reparsing Markdown on every token
-            recreates blocks and loses code-copy state. An `html` fence is
-            rendered live because its content is self-contained, then the
-            durable message renders the whole reply once. Index keeps existing
-            segments mounted while the tail grows. */}
+        {/* Live Markdown: text segments use the same parser as durable
+            messages, so headings, lists and code appear while they stream.
+            Blocks are rebuilt as the tail grows; inline `html` segments stay
+            self-contained and keep their own rich renderer. */}
         <Index each={props.segments()}>
           {(segment) => (
             <Show
               when={segment().kind === "html"}
               fallback={
                 <Show when={segmentText(segment()).trim()}>
-                  <div class="streaming-text">{segmentText(segment())}</div>
+                  <Markdown
+                    text={segmentText(segment())}
+                    onOpenUrl={props.onOpenUrl}
+                    onSend={props.onSend}
+                  />
                 </Show>
               }
             >
@@ -442,7 +439,6 @@ export function Conversation(props: {
     const detail = props.detail;
     if (!detail) return [];
     const messages = detail.session.messages;
-    const results = toolResults();
 
     const toolUseIds = new Set<string>();
     for (const message of messages) {
@@ -502,11 +498,10 @@ export function Conversation(props: {
     // keeps a group's identity while its members are unchanged so an open
     // group keeps its DOM (and scroll position) across projection refreshes.
     const compressed: TranscriptRow[] = [];
-    const resultFor = (toolUseId: string) => results.get(toolUseId);
     let index = 0;
     while (index < raw.length) {
       const row = raw[index];
-      if (!isActivityItemRow(row) || !isCompressibleActivity(row, resultFor)) {
+      if (!isActivityItemRow(row) || !isCompressibleActivity(row)) {
         compressed.push(row);
         index += 1;
         continue;
@@ -514,17 +509,21 @@ export function Conversation(props: {
       let end = index + 1;
       while (end < raw.length) {
         const next = raw[end];
-        if (!isActivityItemRow(next) || !isCompressibleActivity(next, resultFor)) break;
+        if (!isActivityItemRow(next) || !isCompressibleActivity(next)) break;
         end += 1;
       }
       const items = raw.slice(index, end) as ActivityItemRow[];
       if (items.length >= 2) {
-        const key = `group:${items.map((item) => item.key).join("|")}`;
-        let group = groupCache.get(key);
-        if (!group) {
-          group = { key, kind: "group", items };
-          groupCache.set(key, group);
-        }
+        // Key by the first step, not the whole membership: a live group keeps
+        // its disclosure state when another step appends to it.
+        const key = `group:${items[0]?.key ?? index}`;
+        const cached = groupCache.get(key);
+        const changed =
+          !cached ||
+          cached.items.length !== items.length ||
+          cached.items[cached.items.length - 1]?.key !== items[items.length - 1]?.key;
+        const group = changed ? { key, kind: "group" as const, items } : cached;
+        if (changed) groupCache.set(key, group);
         compressed.push(group);
       } else {
         compressed.push(row);
@@ -552,37 +551,6 @@ export function Conversation(props: {
     return compressed;
   });
 
-  // The rail joins consecutive activity rows. A single row draws no line;
-  // the first and last rows stop at the status dot so the line never dangles.
-  const rails = createMemo(() => {
-    const map = new Map<string, Rail>();
-    const list = rows();
-    let index = 0;
-    while (index < list.length) {
-      if (!isActivityRow(list[index])) {
-        index += 1;
-        continue;
-      }
-      let end = index;
-      while (end < list.length && isActivityRow(list[end])) end += 1;
-      const length = end - index;
-      for (let cursor = index; cursor < end; cursor += 1) {
-        const row = list[cursor];
-        const rail: Rail =
-          length === 1
-            ? "only"
-            : cursor === index
-              ? "start"
-              : cursor === end - 1
-                ? "end"
-                : "middle";
-        map.set(row.key, rail);
-      }
-      index = end;
-    }
-    return map;
-  });
-
   // Pinning follows the coalesced live text, which is also the DOM cadence.
   const revision = () => `${coalescedText().length}:${props.streamEnded ? 1 : 0}`;
 
@@ -595,29 +563,21 @@ export function Conversation(props: {
       case "redacted":
         return <RedactedRow />;
       case "thinking":
-        return (
-          <ThinkingRowView
-            row={row}
-            rail={() => rails().get(row.key) ?? "none"}
-            onOpenUrl={props.onOpenUrl}
-          />
-        );
+        return <ThinkingRowView row={row} onOpenUrl={props.onOpenUrl} />;
       case "tool":
         return (
           <ToolRowView
             row={row}
-            rail={() => rails().get(row.key) ?? "none"}
             result={() => toolResults().get(row.toolUseId)}
             runActive={runActive}
           />
         );
       case "result":
-        return <ResultRowView row={row} rail={() => rails().get(row.key) ?? "none"} />;
+        return <ResultRowView row={row} />;
       case "group":
         return (
           <GroupRowView
             row={row}
-            rail={() => rails().get(row.key) ?? "none"}
             resultFor={(toolUseId) => toolResults().get(toolUseId)}
             runActive={runActive}
             onOpenUrl={props.onOpenUrl}

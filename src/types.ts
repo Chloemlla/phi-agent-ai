@@ -34,10 +34,6 @@ export type {
 /** Host platform reported by the node. */
 export type Platform = "windows" | "macos" | "linux" | "android" | "ios";
 
-export function isMobilePlatform(platform: string | null | undefined): boolean {
-  return platform === "android" || platform === "ios";
-}
-
 /** Mirrors the Rust `ThinkingEffort` wire values. */
 export type ThinkingLevel = ThinkingEffort;
 

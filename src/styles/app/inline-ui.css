@@ -878,7 +878,20 @@
 
 .inline-ui input[type="range"] {
   width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   accent-color: var(--accent);
+}
+
+.inline-ui input[type="range"]:hover,
+.inline-ui input[type="range"]:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .inline-ui input[type="checkbox"],

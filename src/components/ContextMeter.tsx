@@ -173,7 +173,6 @@ export function ContextMeter(props: { usage: ContextUsageView | null }) {
                 </span>
               </li>
             </ul>
-            <p class="context-note">{t("Estimated from character share.")}</p>
           </div>
         </div>
 
@@ -205,14 +204,7 @@ export function ContextMeter(props: { usage: ContextUsageView | null }) {
   );
 
   return (
-    <Alt
-      content={panel}
-      class="alt-bubble--context"
-      clickToOpen
-      interactive
-      delay={120}
-      offsetX={-14}
-    >
+    <Alt content={panel} class="alt-bubble--context" clickToOpen interactive delay={120}>
       <button
         type="button"
         class="context-ring"

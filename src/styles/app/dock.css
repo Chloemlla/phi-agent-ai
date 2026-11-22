@@ -6,21 +6,23 @@
 }
 
 .dock {
-  max-width: 720px;
+  max-width: 760px;
   margin: 0 auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-xl);
   background: var(--bg-surface);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-sm);
   overflow: visible;
   transition:
-    border-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
+    border-color var(--dur-med) var(--ease),
+    box-shadow var(--dur-med) var(--ease);
 }
 
+/* Focus is communicated by elevation, not a colored outline. The textarea
+   itself keeps the global :focus-visible ring for keyboard users. */
 .dock:focus-within {
-  border-color: var(--text-faint);
-  box-shadow: 0 0 0 1px var(--text-faint);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-composer);
 }
 
 /* Spinner used by settings and other async buttons. */
@@ -37,31 +39,42 @@
 .composer {
   display: flex;
   flex-direction: column;
-  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
 }
 
 .composer textarea {
   width: 100%;
-  min-height: 56px;
+  min-height: 62px;
   max-height: 180px;
-  padding: 12px 14px 4px;
+  padding: 14px 16px 4px;
   border: none;
   border-radius: 0;
   background: transparent;
-  font-size: 14px;
-  line-height: 1.6;
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  line-height: 1.65;
   color: var(--text-primary);
   resize: none;
 }
 
+.composer textarea:hover,
 .composer textarea:focus,
 .composer textarea:focus-visible {
-  box-shadow: none;
   border: none;
+  box-shadow: none;
+  outline: none;
+}
+
+/* Keyboard focus stays visible on the composer shell: the textarea itself is
+   borderless, so the ring belongs to the surface that owns the corners. */
+.dock:has(.composer textarea:focus-visible) {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 1px;
 }
 
 .composer textarea:disabled {
   color: var(--text-muted);
+  background: transparent;
 }
 
 .composer-actions {
@@ -89,16 +102,17 @@
 
 .composer-hint {
   margin: 0;
-  padding: 0 14px 6px;
-  font-size: 12px;
-  line-height: 1.5;
+  padding: 0 16px 6px;
+  font-size: var(--text-sm);
+  line-height: 1.55;
   color: var(--text-muted);
 }
 
 .send {
-  height: 32px;
-  padding: 0 14px;
+  height: 34px;
+  padding: 0 15px;
   gap: 6px;
+  border-radius: var(--r-sm);
 }
 
 .btn.stop {
@@ -111,4 +125,14 @@
   border-color: transparent;
   background: var(--danger-soft-hover);
   color: var(--danger-ink);
+}
+
+@media (max-width: 760px) {
+  .dock-wrap {
+    padding: 0 var(--sp-3) calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .composer-actions {
+    gap: 4px;
+  }
 }

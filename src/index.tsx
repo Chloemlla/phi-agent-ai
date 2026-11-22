@@ -16,7 +16,7 @@ import "@fontsource/cascadia-code/latin-600.css";
 
 import { ErrorBoundary } from "solid-js";
 import { render } from "solid-js/web";
-import App from "./App";
+import App from "./app/App";
 import { setLang, t } from "./i18n";
 
 // Mirror the browser language before bootstrap so the first paint (loading

@@ -27,7 +27,7 @@ function exampleAfter(heading: string): string {
   const start = prompt.indexOf(heading);
   if (start === -1) throw new Error(`missing prompt section: ${heading}`);
   const block = prompt.slice(start);
-  const fence = block.match(/```html\n([\s\S]*?)```/);
+  const fence = block.match(/```html\r?\n([\s\S]*?)```/);
   if (!fence) throw new Error(`missing html example after: ${heading}`);
   return fence[1];
 }

@@ -4,8 +4,8 @@
 // `html` blocks and top-level HTML blocks become inline interface blocks,
 // rebuilt from an allowlist by `RichHtml`.
 
-import { For, Show, createSignal, onCleanup, type JSX } from "solid-js";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
+import { platform } from "../platform";
 import { t } from "../i18n";
 import { IconCheck, IconCopy } from "./Icons";
 import { RichHtml } from "./RichHtml";
@@ -16,7 +16,7 @@ function openExternal(url: string, onOpenUrl?: (url: string) => void) {
     onOpenUrl(url);
     return;
   }
-  void openUrl(url).catch(() => undefined);
+  void platform.openExternal(url).catch(() => undefined);
 }
 
 async function writeClipboard(text: string): Promise<boolean> {
@@ -262,7 +262,9 @@ export function Markdown(props: {
   onOpenUrl?: (url: string) => void;
   onSend?: (text: string) => void;
 }) {
-  const blocks = () => parseBlocks(props.text.replace(/\r\n?/g, "\n").split("\n"));
+  // Streaming reuses this component, so the parse must follow `props.text`.
+  // Durable messages parse once and never change.
+  const blocks = createMemo(() => parseBlocks(props.text.replace(/\r\n?/g, "\n").split("\n")));
   return (
     <div class="md">
       <BlockList blocks={blocks()} onOpenUrl={props.onOpenUrl} onSend={props.onSend} />

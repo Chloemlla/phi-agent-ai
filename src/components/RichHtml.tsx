@@ -20,7 +20,7 @@ import { For, Show, createEffect, createMemo, untrack, type JSX } from "solid-js
 import { createStore } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import { t } from "../i18n";
-import { pushToast } from "../toast";
+import { notify } from "../ui/notifications";
 import { createCoalesced } from "./inlineUi";
 import { InlineChart, readChartTable } from "./InlineChart";
 import { RichSandbox } from "./RichSandbox";
@@ -379,9 +379,9 @@ async function copyText(text: string) {
   if (!value) return;
   try {
     await navigator.clipboard.writeText(value);
-    pushToast("ok", t("Copied"));
+    notify(t("Copied"), { tone: "success" });
   } catch (error) {
-    pushToast("danger", String(error));
+    notify(String(error), { tone: "danger" });
   }
 }
 

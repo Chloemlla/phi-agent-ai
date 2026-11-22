@@ -90,7 +90,6 @@ export function ProviderModelsSection(props: {
           }}
         >
           <input
-            class="mono"
             value={props.manualModel}
             onInput={(event) => props.onManualModelChange(event.currentTarget.value)}
             placeholder={t("Add model by id")}
@@ -124,7 +123,6 @@ export function ProviderModelsSection(props: {
               {(header, index) => (
                 <div class="map-row">
                   <input
-                    class="mono"
                     value={header().key}
                     onInput={(event) => {
                       const next = props.headers.map((row, i) =>
@@ -137,7 +135,6 @@ export function ProviderModelsSection(props: {
                     spellcheck={false}
                   />
                   <input
-                    class="mono"
                     value={header().value}
                     onInput={(event) => {
                       const next = props.headers.map((row, i) =>

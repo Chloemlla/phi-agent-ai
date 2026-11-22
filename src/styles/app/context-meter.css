@@ -37,7 +37,7 @@
   position: relative;
   z-index: 1;
   color: var(--text-secondary);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -81,7 +81,7 @@
 
 .context-panel-title {
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -89,7 +89,7 @@
 
 .context-panel-head .context-panel-title {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -99,13 +99,13 @@
   align-items: baseline;
   gap: 6px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .context-panel-percent {
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: 12.5px;
 }
 
 .context-chevron {
@@ -193,7 +193,7 @@
   align-items: center;
   gap: 7px;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .context-legend-label {
@@ -205,13 +205,13 @@
 
 .context-legend-value {
   color: var(--text-secondary);
-  font-size: 10.5px;
+  font-size: 12.5px;
   white-space: nowrap;
 }
 
 .context-legend-percent {
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -219,7 +219,7 @@
 .context-note {
   margin: 5px 0 0;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: 12.5px;
   line-height: 1.4;
 }
 
@@ -244,12 +244,12 @@
 
 .context-stats dt {
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .context-stats dd {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 10.5px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }

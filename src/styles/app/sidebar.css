@@ -1,51 +1,57 @@
-/* ─────────────────────────── sidebar ─────────────────────────── */
+/* ─────────────────────────── session sidebar ─────────────────────────── */
 
 .sidebar {
   flex: none;
-  width: 264px;
+  width: 272px;
   height: 100%;
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-soft);
-  transition: margin-left var(--dur-slow) var(--ease);
+  transition: margin-left var(--dur-slow) var(--ease-layout);
 }
 
 .sidebar.collapsed {
-  margin-left: -264px;
+  margin-left: -272px;
 }
 
 .sidebar-inner {
-  width: 264px;
+  width: 272px;
   height: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  padding: var(--sp-3);
+  padding: var(--sp-3) 0 var(--sp-2);
   min-height: 0;
 }
 
 .side-head {
   display: flex;
-  min-height: 28px;
+  min-height: 30px;
   flex: none;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
-  padding-left: var(--sp-2);
+  padding: 0 10px 0 16px;
 }
 
 .side-label {
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 
-.side-new {
-  width: 26px;
-  height: 26px;
-  margin-right: -2px;
+.side-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.side-new,
+.side-collapse {
+  width: 28px;
+  height: 28px;
 }
 
 .side-new:disabled {
@@ -53,7 +59,8 @@
 }
 
 /* The custom scrollbar mirrors this host; native chrome is suppressed so the
-   bar never takes layout width. */
+   bar never takes layout width. The asymmetric inset (less on the left, more
+   on the right) leaves the scrollbar its own lane and is deliberate. */
 .side-scroll-shell {
   position: relative;
   flex: 1;
@@ -68,7 +75,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-right: 8px;
+  padding: 0 14px 0 6px;
   scrollbar-width: none;
 }
 
@@ -103,31 +110,58 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 32px;
+  min-height: 38px;
   align-items: center;
-  padding: 5px 4px 5px 10px;
+  gap: var(--sp-2);
+  padding: 7px 4px 7px 9px;
   border-radius: var(--r-sm);
   text-align: left;
+}
+
+.session-state-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 99px;
+  background: var(--border-strong);
+}
+
+.session-state-dot[data-tone="live"] {
+  background: var(--accent);
+  animation: pulse 1.8s var(--ease) infinite;
+}
+
+.session-state-dot[data-tone="ok"] {
+  background: var(--ok);
+}
+
+.session-state-dot[data-tone="warn"] {
+  background: var(--warn);
+}
+
+.session-state-dot[data-tone="danger"] {
+  border-radius: 2px;
+  background: var(--danger);
 }
 
 .session-title {
   min-width: 0;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* Secondary action: quiet until the row receives attention. */
-.session-delete {
+.session-more {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   flex: none;
-  margin-right: 3px;
+  margin-right: 4px;
   place-items: center;
   border-radius: var(--r-sm);
   color: var(--text-muted);
@@ -138,28 +172,29 @@
     color var(--dur-fast) var(--ease);
 }
 
-.session-row:hover .session-delete,
-.session-row:focus-within .session-delete,
-.session-delete:focus-visible {
+.session-row:hover .session-more,
+.session-row:focus-within .session-more,
+.session-more:focus-visible {
   opacity: 1;
 }
 
-.session-delete:hover:not(:disabled),
-.session-delete.confirm {
-  background: var(--danger-soft);
-  color: var(--danger-ink);
-  opacity: 1;
+.session-more:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  color: var(--text-primary);
 }
 
-.session-delete:disabled {
-  opacity: 0.35;
+.session-more:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-@media (pointer: coarse) {
-  .session-delete {
-    opacity: 1;
-  }
+.session-rename {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  margin: 3px 6px 3px 4px;
+  padding: 4px 8px;
+  font-size: var(--text-md);
 }
 
 /* ---- hover bubble content ---- */
@@ -168,14 +203,14 @@
   min-width: 210px;
   max-width: 320px;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
 .alt-session-title {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
@@ -185,7 +220,7 @@
   align-items: center;
   gap: 6px;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
 }
 
 .alt-session-row svg {
@@ -195,14 +230,14 @@
 
 .alt-session-row code {
   color: var(--text-muted);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .alt-session-exact {
   margin-left: auto;
   padding-left: var(--sp-2);
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -227,34 +262,52 @@
   background: var(--warn);
 }
 
-/* Failure is squared so the state is not signalled by colour alone. */
 .alt-session-dot[data-tone="danger"] {
   border-radius: 1.5px;
   background: var(--danger);
 }
 
+/* Footer holds the single persistent settings entry. */
 .sidebar-foot {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-2) 0;
+  padding: var(--sp-2) 8px 0;
   border-top: 1px solid var(--border-softer);
-  font-size: 11px;
+}
+
+.sidebar-settings {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.sidebar-settings svg {
+  flex: none;
   color: var(--text-muted);
 }
 
-.foot-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.sidebar-settings:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
 }
 
-.foot-row .mono {
-  font-size: 10.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.sidebar-settings.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.sidebar-settings.active svg {
+  color: var(--accent-ink);
 }
 
 .sidebar-backdrop {
@@ -262,38 +315,59 @@
   inset: var(--titlebar-h) 0 0 0;
   z-index: 25;
   background: var(--overlay);
-  animation: fade var(--dur-fast) var(--ease);
+  animation: fade var(--dur-fast) var(--ease) both;
 }
 
-/* Drawer mode: narrow desktop and every mobile platform. */
-.app.drawer-mode .sidebar,
-.sidebar.drawer {
+/* Drawer mode: narrow desktop windows and every mobile shell. */
+.sidebar.modal,
+.app.drawer-mode .sidebar {
   position: fixed;
   top: var(--titlebar-h);
   bottom: 0;
   left: 0;
   z-index: 30;
-  width: min(320px, 86vw);
+  width: min(320px, 88vw);
   height: auto;
   margin-left: 0;
   background: var(--bg-surface);
   transform: translateX(-100%);
-  transition: transform var(--dur-med) var(--ease);
-  box-shadow: 8px 0 24px rgba(28, 34, 40, 0.14);
+  visibility: hidden;
+  transition:
+    transform var(--dur-slow) var(--ease-layout),
+    visibility 0s linear var(--dur-slow);
+  box-shadow: 8px 0 28px rgba(28, 34, 40, 0.15);
 }
 
-.app.drawer-mode .sidebar.open,
-.sidebar.drawer.open {
+.sidebar.modal.open,
+.app.drawer-mode .sidebar.open {
   transform: none;
+  visibility: visible;
+  transition: transform var(--dur-slow) var(--ease-layout);
 }
 
-.app.drawer-mode .sidebar.collapsed,
-.sidebar.drawer.collapsed {
+.sidebar.modal.collapsed,
+.app.drawer-mode .sidebar.collapsed {
   margin-left: 0;
 }
 
-.app.drawer-mode .sidebar-inner,
-.sidebar.drawer .sidebar-inner {
+.sidebar.modal .sidebar-inner,
+.app.drawer-mode .sidebar-inner {
   width: 100%;
   padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+}
+
+@media (pointer: coarse) {
+  .session-more {
+    opacity: 1;
+    width: 40px;
+    height: 40px;
+  }
+
+  .session-select {
+    min-height: 44px;
+  }
+
+  .sidebar-settings {
+    min-height: 44px;
+  }
 }

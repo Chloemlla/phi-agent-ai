@@ -1,32 +1,54 @@
-/* Settings page: flat provider forms, hairline lists and responsive navigation. */
+/* Settings: desktop rail card and mobile drill-down shell. The two views are
+   separate by design; only the section panes and form styles are shared. */
 
-.settings-page {
+.settings-canvas {
   flex: 1;
+  min-width: 0;
   min-height: 0;
-  display: flex;
+  height: 100%;
+  overflow: hidden;
+  padding: var(--sp-4);
   background: var(--bg-app);
 }
 
-.settings-nav {
-  width: 224px;
-  flex: none;
+.settings-shell {
+  display: flex;
+  width: min(100%, 1120px);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-rail {
+  width: 236px;
+  flex: 0 0 236px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: var(--sp-3);
-  background: var(--bg-sidebar);
+  overflow-y: auto;
   border-right: 1px solid var(--border-soft);
+  background: var(--bg-surface);
 }
 
 .settings-back {
-  display: flex;
+  display: inline-flex;
+  width: fit-content;
+  min-height: 36px;
   align-items: center;
   gap: var(--sp-2);
-  padding: 8px 10px;
-  margin-bottom: var(--sp-3);
-  border-radius: var(--r-md);
-  font-size: 13px;
+  margin-bottom: var(--sp-2);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
   color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 500;
   text-align: left;
   transition:
     background var(--dur-fast) var(--ease),
@@ -34,19 +56,45 @@
 }
 
 .settings-back:hover {
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   color: var(--text-primary);
 }
 
+.settings-rail-title {
+  margin: 2px 10px 10px;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.settings-group-label {
+  margin: 14px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.settings-group-label:first-of-type {
+  margin-top: 4px;
+}
+
+/* Hover is a flat translucent fill, never a border. */
 .settings-nav-item {
   display: flex;
+  width: 100%;
+  min-height: 38px;
   align-items: center;
   gap: var(--sp-2);
-  padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--r-md);
-  font-size: 13px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
   color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 500;
   text-align: left;
   white-space: nowrap;
   transition:
@@ -54,23 +102,24 @@
     color var(--dur-fast) var(--ease);
 }
 
+.settings-nav-item svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
 .settings-nav-item:hover {
-  background: var(--bg-subtle);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   color: var(--text-primary);
 }
 
 .settings-nav-item.active {
-  background: var(--bg-surface);
-  border-color: var(--border-soft);
-  color: var(--text-primary);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
-.settings-nav-foot {
-  margin-top: auto;
-  padding: 10px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-muted);
+.settings-nav-item.active svg {
+  color: var(--accent-ink);
 }
 
 .settings-content {
@@ -78,23 +127,29 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  /* Bottom spacing lives on the inner element so a sticky editor footer can
-     pin to the true bottom of the scrollport. */
-  padding: var(--sp-6) var(--sp-6) 0;
+  padding: var(--sp-5) var(--sp-6);
 }
 
 .settings-content-inner {
-  max-width: 1040px;
+  max-width: 900px;
   margin: 0 auto;
   padding-bottom: calc(var(--sp-7) + env(safe-area-inset-bottom, 0px));
 }
 
-.settings-content-foot {
+.settings-pane[hidden],
+.settings-panes[hidden] {
   display: none;
 }
 
-.settings-pane.hidden {
-  display: none;
+.settings-route-loading,
+.settings-pane-loading {
+  display: flex;
+  min-height: 140px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--text-md);
 }
 
 .settings-page-head {
@@ -107,15 +162,16 @@
 
 .settings-page-head h1 {
   margin: 0 0 var(--sp-1);
-  font-size: 15px;
+  font-size: var(--text-xl);
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 
 .settings-subtitle {
   margin: 0;
-  max-width: 620px;
-  font-size: 13px;
+  max-width: 640px;
+  font-size: var(--text-md);
   line-height: 1.6;
   color: var(--text-muted);
 }
@@ -123,12 +179,12 @@
 .settings-section {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
 }
 
 .settings-section h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-lg);
   font-weight: 600;
 }
 
@@ -141,34 +197,301 @@
 
 .settings-input {
   flex: 1;
-  min-width: 180px;
+  min-width: 200px;
   max-width: 560px;
 }
 
-/* Keep every settings control in the same 34-40px band. */
-.settings-page .btn {
+.settings-select {
+  width: 220px;
+  flex: none;
+}
+
+/* Keep every settings control in the same 36-44px band. */
+.settings-shell .btn,
+.mobile-settings .btn {
   height: 36px;
 }
 
-.settings-page .icon-btn {
-  width: 34px;
-  height: 34px;
-}
-
-.settings-page input:not([type="checkbox"]),
-.settings-page select {
-  min-height: 36px;
+.settings-shell .icon-btn,
+.mobile-settings .icon-btn {
+  width: 36px;
+  height: 36px;
 }
 
 .settings-note {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--ok-ink);
 }
 
 .settings-note svg {
   flex: none;
+}
+
+/* ─────────────────────────── mobile drill-down ─────────────────────────── */
+
+.mobile-settings {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+.mobile-settings-index,
+.mobile-settings-detail {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.mobile-settings-detail[hidden] {
+  display: none;
+}
+
+.mobile-settings-index {
+  animation: settings-index-in 180ms var(--ease-enter) both;
+}
+
+.mobile-settings-detail {
+  animation: settings-detail-in 200ms var(--ease-enter) both;
+}
+
+.mobile-settings-head {
+  flex: none;
+  display: flex;
+  min-height: calc(52px + env(safe-area-inset-top, 0px));
+  align-items: center;
+  gap: var(--sp-2);
+  padding: env(safe-area-inset-top, 0px) 10px 10px;
+  border-bottom: 1px solid var(--border-softer);
+  background: var(--bg-app);
+}
+
+.mobile-settings-head h1 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.mobile-settings-crumb {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-settings-title {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-settings-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-3) var(--sp-3) calc(var(--sp-5) + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-settings-group {
+  margin-bottom: var(--sp-5);
+}
+
+.mobile-settings-group-label {
+  margin: 0 0 var(--sp-2);
+  padding: 0 var(--sp-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mobile-settings-card {
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.mobile-settings-row {
+  display: flex;
+  width: 100%;
+  min-height: 66px;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-softer);
+  background: transparent;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.mobile-settings-row:last-child {
+  border-bottom: none;
+}
+
+.mobile-settings-row:hover,
+.mobile-settings-row:active {
+  background: var(--bg-subtle);
+}
+
+.mobile-settings-icon {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.mobile-settings-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mobile-settings-label {
+  color: var(--text-primary);
+  font-size: var(--text-body);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.mobile-settings-description {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.mobile-settings-chevron {
+  flex: none;
+  color: var(--text-faint);
+}
+
+@keyframes settings-index-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes settings-detail-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Narrow desktop windows keep the desktop information architecture but trade
+   the rail labels for icons before anything becomes cramped. */
+@media (max-width: 900px) {
+  .settings-canvas {
+    padding: var(--sp-3);
+  }
+
+  .settings-rail {
+    width: 204px;
+    flex-basis: 204px;
+  }
+
+  .settings-content {
+    padding: var(--sp-4) var(--sp-5);
+  }
+}
+
+@media (max-width: 680px) {
+  .settings-canvas {
+    padding: 0;
+  }
+
+  .settings-shell {
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+
+  .settings-rail {
+    width: 64px;
+    flex-basis: 64px;
+    align-items: center;
+    padding: var(--sp-2);
+  }
+
+  .settings-rail-title,
+  .settings-group-label,
+  .settings-nav-item span,
+  .settings-back span {
+    display: none;
+  }
+
+  .settings-back,
+  .settings-nav-item {
+    width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .settings-content {
+    padding: var(--sp-3);
+  }
+
+  .settings-page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (pointer: coarse) {
+  .settings-shell .btn,
+  .settings-shell .icon-btn,
+  .settings-shell .settings-back,
+  .settings-shell .settings-nav-item,
+  .mobile-settings .btn {
+    min-height: 44px;
+  }
+
+  .mobile-settings .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .mobile-settings-row {
+    min-height: 72px;
+  }
+
+  .settings-shell input:not([type="checkbox"]),
+  .settings-shell select {
+    min-height: 44px;
+  }
 }

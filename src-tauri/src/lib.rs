@@ -26,6 +26,7 @@ pub fn run() {
             api::set_workspace,
             api::create_session,
             api::delete_session,
+            api::rename_session,
             api::get_session,
             api::send_message,
             api::approve,

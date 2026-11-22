@@ -336,7 +336,6 @@ export function ModelSelectionStep(props: {
             <div class="picker-manual">
               <p class="hint">{t("Add model IDs manually")}</p>
               <textarea
-                class="mono"
                 rows={2}
                 value={manual()}
                 onInput={(event) => setManual(event.currentTarget.value)}

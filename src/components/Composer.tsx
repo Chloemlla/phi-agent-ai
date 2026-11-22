@@ -1,21 +1,15 @@
 // Composer: the primary surface. The run bar above it shows live usage; the
 // composer itself stays focused on the task input and the model choice.
 
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, onMount } from "solid-js";
 import { t } from "../i18n";
+import { coarsePointer } from "../layout/environment";
 import type { ContextUsageView, ModelSelection, ProviderView } from "../types";
 import { ContextMeter } from "./ContextMeter";
 import { IconArrowUp, IconStop } from "./Icons";
 import { ModelPicker } from "./ModelPicker";
 
 const MAX_COMPOSER_HEIGHT = 180;
-
-/** Touch keyboards have no Shift+Enter, so Enter must insert a newline there. */
-function coarsePointerQuery(): MediaQueryList | null {
-  return typeof window !== "undefined" && typeof window.matchMedia === "function"
-    ? window.matchMedia("(pointer: coarse)")
-    : null;
-}
 
 export function Composer(props: {
   value: string;
@@ -32,20 +26,6 @@ export function Composer(props: {
   onStop: () => void;
 }) {
   let textareaRef: HTMLTextAreaElement | undefined;
-  // 2-in-1 devices can switch between touch and a trackpad, so keep this live
-  // instead of sampling matchMedia once during render.
-  const [coarsePointer, setCoarsePointer] = createSignal(coarsePointerQuery()?.matches ?? false);
-
-  onMount(() => {
-    const query = coarsePointerQuery();
-    if (!query) return;
-    setCoarsePointer(query.matches);
-    const onChange = (event: MediaQueryListEvent) => {
-      setCoarsePointer(event.matches);
-    };
-    query.addEventListener("change", onChange);
-    onCleanup(() => query.removeEventListener("change", onChange));
-  });
 
   function resize() {
     const element = textareaRef;
@@ -110,12 +90,13 @@ export function Composer(props: {
             when={props.running}
             fallback={
               <button
+                type="button"
                 class="btn primary send"
                 onClick={props.onSend}
                 disabled={props.disabled || !props.value.trim()}
               >
                 {t("Send")}
-                <IconArrowUp size={14} />
+                <IconArrowUp size={15} />
               </button>
             }
           >

@@ -339,6 +339,38 @@ export function ProviderEditor(props: {
           />
         </Show>
 
+        <Show when={!props.isNew}>
+          <section class="editor-danger">
+            <Show
+              when={confirmDelete()}
+              fallback={
+                <button type="button" class="btn danger" disabled={props.busy} onClick={armDelete}>
+                  <IconTrash size={14} />
+                  {t("Delete provider")}
+                </button>
+              }
+            >
+              <p class="editor-danger-question">
+                {tArgs("Delete provider {name}? This cannot be undone.", {
+                  name: props.view?.name ?? props.draft.name ?? "",
+                })}
+              </p>
+              <div class="editor-foot-group">
+                <button
+                  type="button"
+                  class="btn danger"
+                  disabled={props.busy}
+                  onClick={handleDeleteConfirm}
+                >
+                  {t("Confirm delete")}
+                </button>
+                <button type="button" class="btn" disabled={props.busy} onClick={disarmDelete}>
+                  {t("Cancel")}
+                </button>
+              </div>
+            </Show>
+          </section>
+        </Show>
         <div class="editor-foot">
           <div class="editor-foot-group">
             <Show
@@ -372,39 +404,6 @@ export function ProviderEditor(props: {
             </Show>
           </div>
         </div>
-
-        <Show when={!props.isNew}>
-          <section class="editor-danger">
-            <Show
-              when={confirmDelete()}
-              fallback={
-                <button type="button" class="btn danger" disabled={props.busy} onClick={armDelete}>
-                  <IconTrash size={14} />
-                  {t("Delete provider")}
-                </button>
-              }
-            >
-              <p class="editor-danger-question">
-                {tArgs("Delete provider {name}? This cannot be undone.", {
-                  name: props.view?.name ?? props.draft.name ?? "",
-                })}
-              </p>
-              <div class="editor-foot-group">
-                <button
-                  type="button"
-                  class="btn danger"
-                  disabled={props.busy}
-                  onClick={handleDeleteConfirm}
-                >
-                  {t("Confirm delete")}
-                </button>
-                <button type="button" class="btn" disabled={props.busy} onClick={disarmDelete}>
-                  {t("Cancel")}
-                </button>
-              </div>
-            </Show>
-          </section>
-        </Show>
       </Show>
     </div>
   );

@@ -13,12 +13,33 @@ body {
   background: var(--bg-app);
   color: var(--text-primary);
   font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* CJK glyphs carry more internal whitespace and a larger visual footprint at
+   the same nominal size; give them a little more leading and tracking. */
+:lang(zh),
+:lang(zh-CN) {
+  line-height: var(--leading-cjk);
+  letter-spacing: 0.01em;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+p {
+  overflow-wrap: anywhere;
 }
 
 ::selection {
@@ -32,19 +53,28 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border: 3px solid transparent;
+  border: 2px solid transparent;
   border-radius: 99px;
   background-clip: content-box;
 }
 
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}
+
+:where(a, button, summary, [role="button"], [tabindex]) {
+  -webkit-tap-highlight-color: transparent;
+}
+
 :focus-visible {
-  outline: 2px solid var(--accent-ink);
+  outline: 2px solid var(--text-primary);
   outline-offset: 2px;
 }
 
@@ -58,23 +88,32 @@ button {
 }
 
 button:disabled {
-  cursor: default;
+  cursor: not-allowed;
 }
 
 input,
 textarea,
 select {
-  font: inherit;
-  font-size: 13px;
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  line-height: 1.45;
   color: var(--text-primary);
   background-color: var(--bg-surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-soft);
   border-radius: var(--r-sm);
-  padding: 6px 9px;
-  min-height: 32px;
+  padding: 8px 11px;
+  min-height: 36px;
   transition:
     border-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
+    box-shadow var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+input:hover:not(:disabled),
+textarea:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-hover);
 }
 
 input::placeholder,
@@ -84,8 +123,8 @@ textarea::placeholder {
 }
 
 input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   min-height: 0;
   padding: 0;
   margin: 0;
@@ -99,17 +138,13 @@ input[type="checkbox"] {
 select {
   appearance: none;
   -webkit-appearance: none;
-  padding-right: 30px;
+  padding-right: 32px;
   line-height: 1.2;
   cursor: pointer;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2378828d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 9px center;
+  background-position: right 10px center;
   background-size: 12px;
-}
-
-select:hover:not(:disabled) {
-  border-color: var(--text-faint);
 }
 
 select:disabled {
@@ -121,15 +156,44 @@ input:focus,
 textarea:focus,
 select:focus {
   outline: none;
-  border-color: var(--accent-ink);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-focus);
 }
 
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: none;
-  border-color: var(--accent-ink);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  outline: 2px solid var(--text-primary);
+  outline-offset: 1px;
+}
+
+/* Range inputs are controls, not text fields: no border, padding, hover
+   elevation or focus shadow. The browser thumb/fill carries the affordance. */
+input[type="range"] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+input[type="range"]:hover,
+input[type="range"]:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+input:disabled,
+textarea:disabled {
+  color: var(--text-muted);
+  background: var(--bg-subtle);
 }
 
 .mono,

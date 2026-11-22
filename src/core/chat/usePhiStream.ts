@@ -1,8 +1,8 @@
 // Live model stream state and the durable-event subscriptions that drive it.
 
 import { createEffect, createSignal, type Accessor } from "solid-js";
-import { onModelStream, onPhiEvent } from "../bridge";
-import type { Run } from "../types";
+import { onModelStream, onPhiEvent } from "../../bridge";
+import type { Run } from "../../types";
 import type { PendingCall } from "./sessionStream";
 
 const TERMINAL_EVENTS = new Set(["RunSucceeded", "RunFailed", "RunAborted"]);

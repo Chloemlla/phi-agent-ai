@@ -1,6 +1,6 @@
 // Pure helpers for the live stream and the durable transcript.
 
-import type { SessionDetail } from "../types";
+import type { SessionDetail } from "../../types";
 
 /// One in-flight model call's streamed text. The backend journals one
 /// assistant message per call, so the live view must track calls separately;

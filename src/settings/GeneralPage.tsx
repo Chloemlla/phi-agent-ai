@@ -1,11 +1,14 @@
 // General settings: workspace boundary and interface language.
 
 import { Show, createSignal } from "solid-js";
-import { open } from "@tauri-apps/plugin-dialog";
 import { setLanguage as setNodeLanguage, setWorkspace as setNodeWorkspace } from "../bridge";
 import { setLang, t } from "../i18n";
 import { errorText } from "../errors";
 import { IconCheck, IconFolderOpen } from "../components/Icons";
+import { notify } from "../ui/notifications";
+import { Select } from "../ui/Select";
+
+import { platform } from "../platform";
 
 export function GeneralPage(props: {
   workspace: string;
@@ -15,25 +18,18 @@ export function GeneralPage(props: {
   const [workspace, setWorkspace] = createSignal(props.workspace);
   const [language, setLanguage] = createSignal(props.language === "zh-CN" ? "zh-CN" : "en");
   const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal<"workspace" | "language" | null>(null);
 
   async function chooseWorkspace() {
-    setError("");
     try {
-      const picked = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: workspace() || undefined,
-      });
-      if (typeof picked === "string" && picked) setWorkspace(picked);
-    } catch (e) {
-      setError(errorText(e));
+      const picked = await platform.openDirectory(workspace() || undefined);
+      if (picked) setWorkspace(picked);
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
     }
   }
 
   async function saveWorkspace() {
-    setError("");
     setBusy(true);
     try {
       const savedPath = await setNodeWorkspace(workspace());
@@ -41,15 +37,14 @@ export function GeneralPage(props: {
       await props.onRefresh().catch(() => undefined);
       setSaved("workspace");
       window.setTimeout(() => setSaved(null), 1800);
-    } catch (e) {
-      setError(errorText(e));
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
     } finally {
       setBusy(false);
     }
   }
 
   async function saveLanguage() {
-    setError("");
     setBusy(true);
     try {
       const savedLanguage = await setNodeLanguage(language());
@@ -57,8 +52,8 @@ export function GeneralPage(props: {
       await props.onRefresh().catch(() => undefined);
       setSaved("language");
       window.setTimeout(() => setSaved(null), 1800);
-    } catch (e) {
-      setError(errorText(e));
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -75,18 +70,12 @@ export function GeneralPage(props: {
         </div>
       </div>
 
-      <Show when={error()}>
-        <div class="banner danger" role="alert">
-          {error()}
-        </div>
-      </Show>
-
       <section class="settings-card">
         <h3>{t("Workspace")}</h3>
         <p class="hint">{t("The folder the agent may read and edit.")}</p>
         <div class="settings-actions">
           <input
-            class="mono settings-input"
+            class="settings-input"
             value={workspace()}
             onInput={(event) => setWorkspace(event.currentTarget.value)}
             placeholder={t("Absolute workspace path")}
@@ -117,15 +106,17 @@ export function GeneralPage(props: {
         <h3>{t("Interface language")}</h3>
         <p class="hint">{t("Changes apply to this node and to every shell connected to it.")}</p>
         <div class="settings-actions">
-          <select
-            class="settings-input"
-            value={language()}
-            aria-label={t("Interface language")}
-            onChange={(event) => setLanguage(event.currentTarget.value)}
-          >
-            <option value="en">{t("English")}</option>
-            <option value="zh-CN">{t("Chinese (Simplified)")}</option>
-          </select>
+          <div class="settings-select">
+            <Select
+              aria-label={t("Interface language")}
+              value={language()}
+              options={[
+                { value: "en", label: t("English") },
+                { value: "zh-CN", label: t("Chinese (Simplified)") },
+              ]}
+              onChange={setLanguage}
+            />
+          </div>
           <button class="btn primary" disabled={busy()} onClick={() => void saveLanguage()}>
             {t("Save")}
           </button>

@@ -44,6 +44,15 @@ pub fn delete_session(
 }
 
 #[tauri::command]
+pub fn rename_session(
+    state: State<'_, AppStateHandle>,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    state.0.rename_session(&session_id, &title)
+}
+
+#[tauri::command]
 pub fn get_session(
     state: State<'_, AppStateHandle>,
     session_id: String,

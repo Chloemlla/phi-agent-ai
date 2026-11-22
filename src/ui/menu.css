@@ -1,0 +1,139 @@
+/* Anchored action menu styled after GitHub's account menu: quiet header,
+   separator, generous full-width rows, soft hover fill. */
+
+.ui-menu {
+  position: fixed;
+  z-index: 130;
+  width: 224px;
+  padding: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  transition: opacity 90ms var(--ease);
+}
+
+.ui-menu[data-ready="true"] {
+  opacity: 1;
+}
+
+.ui-menu-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.ui-menu-avatar {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.ui-menu-header-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ui-menu-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-menu-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-menu-separator {
+  height: 1px;
+  margin: 6px -6px;
+  background: var(--border-softer);
+}
+
+.ui-menu-item {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms var(--ease);
+}
+
+.ui-menu-item:hover,
+.ui-menu-item:focus-visible {
+  background: var(--bg-subtle);
+}
+
+.ui-menu-item:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: -2px;
+}
+
+.ui-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-menu-item--danger {
+  color: var(--danger-ink);
+}
+
+.ui-menu-item--danger:hover,
+.ui-menu-item--danger:focus-visible {
+  background: var(--danger-soft);
+}
+
+.ui-menu-icon {
+  display: inline-grid;
+  width: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.ui-menu-item--danger .ui-menu-icon {
+  color: var(--danger);
+}
+
+.ui-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (pointer: coarse) {
+  .ui-menu-item {
+    min-height: 44px;
+  }
+}

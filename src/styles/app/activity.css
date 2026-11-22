@@ -1,8 +1,8 @@
 /* ─────────────────────────── activity rows ─────────────────────────── */
 
-/* One rail joins a run of thinking/tool rows. The line sits at the centre of
-   the 14px status slot; first/last rows stop at the dot centre (10px) so the
-   line never dangles past the cluster. */
+/* Each row is a quiet, self-contained line. The status glyph and chevron are
+   optically centred on the first text line; completed runs rely on grouping
+   (not a vertical rail) to read as one cluster. */
 .activity-row {
   position: relative;
   min-width: 0;
@@ -12,29 +12,6 @@
 
 .activity-row:hover {
   background: var(--bg-subtle);
-}
-
-.activity-row::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 7px;
-  width: 1.5px;
-  background: var(--accent-border);
-}
-
-.activity-row[data-rail="none"]::before,
-.activity-row[data-rail="only"]::before {
-  display: none;
-}
-
-.activity-row[data-rail="start"]::before {
-  top: 10px;
-}
-
-.activity-row[data-rail="end"]::before {
-  bottom: calc(100% - 10px);
 }
 
 .activity-trigger {
@@ -55,7 +32,7 @@
   width: 14px;
   height: 14px;
   flex: none;
-  margin-top: 3px;
+  margin-top: 5px;
   place-items: center;
 }
 
@@ -64,7 +41,6 @@
   height: 7px;
   border-radius: 50%;
   background: var(--text-faint);
-  box-shadow: 0 0 0 3px var(--bg-app);
 }
 
 .status-dot[data-tone="ok"] {
@@ -88,19 +64,19 @@
 
 .activity-label {
   min-width: 0;
-  padding-top: 1px;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: var(--text-body);
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
 .activity-badge {
   flex: none;
-  padding-top: 2px;
+  padding-top: 3px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.6;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -114,7 +90,7 @@
   flex: none;
   align-self: flex-start;
   margin-left: auto;
-  padding-top: 3px;
+  padding-top: 6px;
   color: var(--text-muted);
   transition: transform var(--dur-fast) var(--ease);
 }
@@ -185,7 +161,7 @@
 
 .detail-label {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -202,8 +178,8 @@
   background: var(--bg-subtle);
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.55;
+  font-size: 12.5px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   user-select: text;
@@ -217,7 +193,7 @@
 
 .detail-note {
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 /* Copy is a secondary action: quiet until the detail is inspected. */

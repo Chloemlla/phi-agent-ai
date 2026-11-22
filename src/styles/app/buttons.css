@@ -5,13 +5,13 @@
   align-items: center;
   justify-content: center;
   gap: var(--sp-1);
-  height: 32px;
-  padding: 0 13px;
+  height: 34px;
+  padding: 0 14px;
   border: 1px solid var(--border-soft);
   border-radius: var(--r-sm);
   background: var(--bg-surface);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -64,7 +64,7 @@
 .btn.small {
   height: 25px;
   padding: 0 9px;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .btn.block {

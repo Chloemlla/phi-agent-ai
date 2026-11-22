@@ -2,7 +2,7 @@
 // against an allowlist here, and dynamic values stay behind getters so the
 // browser never sees an unchecked URL or text.
 
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { platform } from "../../platform";
 import { applyAssignments, evaluate, interpolate } from "../uiExpression";
 import {
   BIND_NAME,
@@ -391,7 +391,7 @@ function openExternal(url: string, onOpenUrl?: (url: string) => void) {
     onOpenUrl(url);
     return;
   }
-  void openUrl(url).catch(() => undefined);
+  void platform.openExternal(url).catch(() => undefined);
 }
 
 export function cleanText(value: string | null | undefined): string {

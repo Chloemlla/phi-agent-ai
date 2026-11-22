@@ -1,7 +1,7 @@
-// Rich hover/focus bubble. The bubble is portal-rendered and follows the
-// pointer, preferring the cursor's top-right corner. Near a viewport edge it
-// flips using the measured bubble size, so rows at the bottom of a list keep
-// tracking the pointer instead of snapping to a fixed clamp height.
+// Rich hover/focus bubble. The bubble is portal-rendered and anchored to the
+// trigger, not the pointer: a tooltip that chases the cursor flickers and
+// teleports near viewport edges. The first paint stays invisible until the
+// measured size has been applied, so the bubble never jumps into place.
 //
 // `clickToOpen` turns the bubble into a pinnable panel: a click anchors it to
 // the trigger, keeps it interactive, and a second click, an outside press or
@@ -13,10 +13,6 @@ import { Portal } from "solid-js/web";
 interface AltProps {
   /** Bubble content shown on hover, focus or click. */
   content: JSX.Element;
-  /** Horizontal offset from the anchor point. */
-  offsetX?: number;
-  /** Vertical offset from the anchor point (negative is upward). */
-  offsetY?: number;
   /** Hover delay in ms before showing the bubble. */
   delay?: number;
   /** Optional class on the bubble wrapper. */
@@ -29,19 +25,21 @@ interface AltProps {
   children: JSX.Element;
 }
 
+const GAP = 10;
+const MARGIN = 8;
+const ESTIMATED_WIDTH = 300;
+const ESTIMATED_HEIGHT = 160;
+
 export function Alt(props: AltProps) {
   const [open, setOpen] = createSignal(false);
+  const [ready, setReady] = createSignal(false);
   const [pinned, setPinned] = createSignal(false);
   const [coords, setCoords] = createSignal<{ top: number; left: number } | null>(null);
   let triggerRef: HTMLSpanElement | undefined;
   let bubbleRef: HTMLDivElement | undefined;
-  const offsetX = () => props.offsetX ?? 10;
-  const offsetY = () => props.offsetY ?? -10;
   const delay = () => props.delay ?? 80;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
-  let pointer = { x: 0, y: 0 };
-  let usingPointer = false;
 
   function clearTimers() {
     if (timer) clearTimeout(timer);
@@ -50,75 +48,55 @@ export function Alt(props: AltProps) {
     hideTimer = undefined;
   }
 
-  function placeAt(x: number, y: number) {
-    const margin = 6;
-    // Prefer the measured size once painted; fall back to estimates.
-    const size = bubbleRef?.getBoundingClientRect();
-    const width = size?.width && size.width > 0 ? size.width : 300;
-    const height = size?.height && size.height > 0 ? size.height : 160;
-
-    let left = x + offsetX();
-    let top = y + offsetY() - height;
-
-    // If the top-right placement would clip the right edge, flip left.
-    if (left + width > window.innerWidth - margin) {
-      left = x - width - 6;
-    }
-    // If it would clip the top edge, flip below the anchor.
-    if (top < margin) {
-      top = y + 14;
-    }
-    // Final clamp — keep following the pointer, never pin to a fixed band.
-    if (left < margin) left = margin;
-    if (left + width > window.innerWidth - margin) {
-      left = Math.max(margin, window.innerWidth - width - margin);
-    }
-    if (top < margin) top = margin;
-    if (top + height > window.innerHeight - margin) {
-      top = Math.max(margin, window.innerHeight - height - margin);
-    }
-    setCoords({ top, left });
-  }
-
-  const placeAtPointer = () => placeAt(pointer.x, pointer.y);
-
   function placeAtTrigger() {
     const trigger = triggerRef;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    placeAt(rect.left + 20, rect.top + 8);
+    const size = bubbleRef?.getBoundingClientRect();
+    const width = size?.width && size.width > 0 ? size.width : ESTIMATED_WIDTH;
+    const height = size?.height && size.height > 0 ? size.height : ESTIMATED_HEIGHT;
+
+    let left = rect.right + GAP;
+    if (left + width > window.innerWidth - MARGIN) {
+      left = rect.left - width - GAP;
+    }
+    left = Math.max(MARGIN, Math.min(left, window.innerWidth - width - MARGIN));
+
+    let top = rect.top;
+    if (top + height > window.innerHeight - MARGIN) {
+      top = window.innerHeight - height - MARGIN;
+    }
+    top = Math.max(MARGIN, top);
+
+    setCoords({ top, left });
   }
 
-  /** Pinned bubbles anchor to the trigger; hover bubbles follow the pointer. */
-  function position() {
-    if (pinned() || !usingPointer) placeAtTrigger();
-    else placeAtPointer();
+  function reveal() {
+    placeAtTrigger();
+    if (open()) {
+      setReady(true);
+      return;
+    }
+    setOpen(true);
+    setReady(false);
+    // Measure the real bubble after it enters the DOM, then reveal it at the
+    // final position on the next frame.
+    requestAnimationFrame(() => {
+      placeAtTrigger();
+      requestAnimationFrame(() => setReady(true));
+    });
   }
 
   function show() {
     if (timer) clearTimeout(timer);
     if (hideTimer) clearTimeout(hideTimer);
-    timer = setTimeout(() => {
-      if (pinned()) {
-        placeAtTrigger();
-        setOpen(true);
-        return;
-      }
-      if (usingPointer) placeAtPointer();
-      else placeAtTrigger();
-      setOpen(true);
-      // Re-measure after the first paint so the real bubble size drives
-      // placement on the next frame.
-      requestAnimationFrame(() => {
-        if (open()) position();
-      });
-    }, delay());
+    timer = setTimeout(reveal, delay());
   }
 
   function close() {
     clearTimers();
     setPinned(false);
-    usingPointer = false;
+    setReady(false);
     setOpen(false);
   }
 
@@ -141,18 +119,10 @@ export function Alt(props: AltProps) {
     close();
   }
 
-  const onPointerMove = (event: PointerEvent) => {
-    usingPointer = true;
-    pointer = { x: event.clientX, y: event.clientY };
-    if (open() && !pinned()) placeAtPointer();
-  };
-
-  const onPointerEnter = (event: PointerEvent) => {
+  const onPointerEnter = () => {
     if (pinned()) return;
-    usingPointer = true;
-    pointer = { x: event.clientX, y: event.clientY };
-    if (open()) placeAtPointer();
-    else show();
+    if (!open()) show();
+    else clearTimers();
   };
 
   const onPointerLeave = () => {
@@ -162,9 +132,7 @@ export function Alt(props: AltProps) {
 
   const onFocusIn = () => {
     if (pinned()) return;
-    usingPointer = false;
     if (!open()) show();
-    else placeAtTrigger();
   };
 
   const onFocusOut = (event: FocusEvent) => {
@@ -183,13 +151,8 @@ export function Alt(props: AltProps) {
       return;
     }
     clearTimers();
-    usingPointer = false;
     setPinned(true);
-    placeAtTrigger();
-    setOpen(true);
-    requestAnimationFrame(() => {
-      if (pinned()) placeAtTrigger();
-    });
+    reveal();
   };
 
   onMount(() => {
@@ -197,13 +160,11 @@ export function Alt(props: AltProps) {
     if (!element) return;
     element.addEventListener("pointerenter", onPointerEnter);
     element.addEventListener("pointerleave", onPointerLeave);
-    element.addEventListener("pointermove", onPointerMove);
     element.addEventListener("focusin", onFocusIn);
     element.addEventListener("focusout", onFocusOut);
     onCleanup(() => {
       element.removeEventListener("pointerenter", onPointerEnter);
       element.removeEventListener("pointerleave", onPointerLeave);
-      element.removeEventListener("pointermove", onPointerMove);
       element.removeEventListener("focusin", onFocusIn);
       element.removeEventListener("focusout", onFocusOut);
     });
@@ -224,7 +185,7 @@ export function Alt(props: AltProps) {
 
   createEffect(() => {
     if (!open()) return;
-    const onScrollOrResize = () => position();
+    const onScrollOrResize = () => placeAtTrigger();
     // WCAG 1.4.13: hover/focus content must be dismissible without moving away.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -240,9 +201,7 @@ export function Alt(props: AltProps) {
     });
   });
 
-  onCleanup(() => {
-    clearTimers();
-  });
+  onCleanup(clearTimers);
 
   // Only clickable Alt instances (the context ring) attach a click handler.
   // The interactive element is the child button; the wrapper merely observes
@@ -252,28 +211,31 @@ export function Alt(props: AltProps) {
   return (
     <span class="alt-trigger" ref={triggerRef} {...clickProps()}>
       {props.children}
-      <Show when={open() && coords()} keyed>
-        {(box) => (
-          <Portal>
-            <div
-              ref={bubbleRef}
-              class={`alt-bubble ${props.class ?? ""}`}
-              classList={{ "alt-bubble--interactive": !!props.interactive || pinned() }}
-              style={{ position: "fixed", top: `${box.top}px`, left: `${box.left}px` }}
-              role="tooltip"
-              onPointerEnter={() => {
-                if (hideTimer) clearTimeout(hideTimer);
-              }}
-              onPointerLeave={hide}
-              onFocusIn={() => {
-                if (hideTimer) clearTimeout(hideTimer);
-              }}
-              onFocusOut={hide}
-            >
-              {props.content}
-            </div>
-          </Portal>
-        )}
+      <Show when={open()}>
+        <Portal>
+          <div
+            ref={bubbleRef}
+            class={`alt-bubble ${props.class ?? ""}`}
+            classList={{ "alt-bubble--interactive": !!props.interactive || pinned() }}
+            data-ready={ready() ? "true" : undefined}
+            style={{
+              position: "fixed",
+              top: `${coords()?.top ?? 0}px`,
+              left: `${coords()?.left ?? 0}px`,
+            }}
+            role="tooltip"
+            onPointerEnter={() => {
+              if (hideTimer) clearTimeout(hideTimer);
+            }}
+            onPointerLeave={hide}
+            onFocusIn={() => {
+              if (hideTimer) clearTimeout(hideTimer);
+            }}
+            onFocusOut={hide}
+          >
+            {props.content}
+          </div>
+        </Portal>
       </Show>
     </span>
   );

@@ -1,26 +1,33 @@
-// Session rail. Rows stay single-line: title plus a quiet delete action that
-// appears on hover or keyboard focus. Hovering a row opens a glass bubble with
-// the details that no longer fit in the row (state, message count, time, id).
-// On narrow windows the same element becomes a drawer.
+// Session rail. Rows carry a status dot, the title and a quiet overflow menu
+// (rename, delete) that appears on hover or keyboard focus. Hovering a row
+// opens a glass bubble with the details that no longer fit. On narrow windows
+// and mobile shells the same element becomes a modal drawer.
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
+import { useChat } from "../core/chat/ChatProvider";
 import { formatFullTime, formatRelative } from "../format";
 import { t, tArgs } from "../i18n";
-import { modeTone, stateLabel } from "../status";
+import { stateLabel } from "../status";
 import type { SessionSummary } from "../types";
 import { Alt } from "./Alt";
 import { EmptyState } from "./EmptyState";
 import {
   IconCheck,
+  IconChevronLeft,
   IconCircleAlert,
   IconClock,
+  IconClose,
+  IconEllipsis,
   IconHash,
   IconMessageSquare,
+  IconPencil,
   IconPlus,
+  IconSettings,
   IconSpinner,
   IconTrash,
 } from "./Icons";
 import { SideScrollbar } from "./SideScrollbar";
+import { FloatingMenu } from "../ui/Menu";
 
 type SessionStatus = {
   tone: "live" | "ok" | "warn" | "danger" | "idle";
@@ -106,54 +113,48 @@ function SessionBubble(props: {
   );
 }
 
-export function Sidebar(props: {
-  sessions: SessionSummary[];
-  currentId: string | null;
+interface SidebarProps {
   open: boolean;
   modal: boolean;
-  mode: string;
-  nodeId: string;
-  now: number;
-  creating?: boolean;
-  deletingId?: string | null;
-  onNew: () => void;
-  onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
-}) {
+  settingsOpen: boolean;
+  onToggle: () => void;
+  onOpenSettings: () => void;
+  onNavigate: () => void;
+}
+
+export function Sidebar(props: SidebarProps) {
+  const chat = useChat();
   let rootRef: HTMLElement | undefined;
   const [listEl, setListEl] = createSignal<HTMLElement | null>(null);
-  const [pendingDelete, setPendingDelete] = createSignal<string | null>(null);
-  let pendingTimer: number | undefined;
+  const [menu, setMenu] = createSignal<{ session: SessionSummary; anchor: HTMLElement } | null>(
+    null,
+  );
+  const [editingId, setEditingId] = createSignal<string | null>(null);
+  const [editValue, setEditValue] = createSignal("");
+  let renameInput: HTMLInputElement | undefined;
 
-  function clearPendingTimer() {
-    if (pendingTimer !== undefined) {
-      window.clearTimeout(pendingTimer);
-      pendingTimer = undefined;
-    }
+  const sessions = () => chat.boot()?.sessions ?? [];
+
+  function startRename(session: SessionSummary) {
+    setMenu(null);
+    setEditingId(session.id);
+    setEditValue(session.title || "");
+    queueMicrotask(() => {
+      renameInput?.focus();
+      renameInput?.select();
+    });
   }
 
-  function requestDelete(session: SessionSummary) {
-    if (props.deletingId === session.id) return;
-    if (pendingDelete() === session.id) {
-      clearPendingTimer();
-      setPendingDelete(null);
-      props.onDelete(session.id);
-      return;
-    }
-    clearPendingTimer();
-    setPendingDelete(session.id);
-    pendingTimer = window.setTimeout(() => {
-      setPendingDelete(null);
-      pendingTimer = undefined;
-    }, 3000);
+  function commitRename(session: SessionSummary) {
+    if (editingId() !== session.id) return;
+    const value = editValue().trim();
+    setEditingId(null);
+    if (value && value !== session.title) void chat.renameSession(session.id, value);
   }
 
-  createEffect(() => {
-    if (props.deletingId) {
-      clearPendingTimer();
-      setPendingDelete(null);
-    }
-  });
+  function cancelRename() {
+    setEditingId(null);
+  }
 
   // On phones/tablets the rail is a modal drawer: focus enters it, stays
   // inside, and returns to the trigger when it closes.
@@ -186,10 +187,11 @@ export function Sidebar(props: {
     root.addEventListener("keydown", onKeyDown);
     onCleanup(() => {
       root.removeEventListener("keydown", onKeyDown);
-      clearPendingTimer();
       previous?.focus?.();
     });
   });
+
+  const collapseLabel = () => (props.modal ? t("Close sidebar") : t("Collapse sidebar"));
 
   return (
     <aside
@@ -197,7 +199,8 @@ export function Sidebar(props: {
       classList={{
         sidebar: true,
         open: props.open,
-        collapsed: !props.open,
+        collapsed: !props.open && !props.modal,
+        modal: props.modal,
       }}
       aria-label={t("Sessions")}
       aria-hidden={props.open ? undefined : "true"}
@@ -206,91 +209,131 @@ export function Sidebar(props: {
       <div class="sidebar-inner">
         <div class="side-head">
           <span class="side-label">{t("Sessions")}</span>
-          <button
-            type="button"
-            class="icon-btn side-new"
-            title={props.creating ? t("Creating session…") : t("New session")}
-            aria-label={props.creating ? t("Creating session…") : t("New session")}
-            disabled={props.creating}
-            onClick={props.onNew}
-          >
-            <Show when={props.creating} fallback={<IconPlus size={15} />}>
-              <IconSpinner size={15} class="spin" />
-            </Show>
-          </button>
+          <div class="side-head-actions">
+            <button
+              type="button"
+              class="icon-btn side-new"
+              title={chat.creatingSession() ? t("Creating session…") : t("New session")}
+              aria-label={chat.creatingSession() ? t("Creating session…") : t("New session")}
+              disabled={chat.creatingSession()}
+              onClick={() => {
+                props.onNavigate();
+                void chat.newSession();
+              }}
+            >
+              <Show when={chat.creatingSession()} fallback={<IconPlus size={16} />}>
+                <IconSpinner size={16} class="spin" />
+              </Show>
+            </button>
+            <button
+              type="button"
+              class="icon-btn side-collapse"
+              title={collapseLabel()}
+              aria-label={collapseLabel()}
+              onClick={() => props.onToggle()}
+            >
+              <Show when={props.modal} fallback={<IconChevronLeft size={16} />}>
+                <IconClose size={16} />
+              </Show>
+            </button>
+          </div>
         </div>
 
         <div class="side-scroll-shell">
           <div class="session-list" ref={setListEl}>
-            <Show when={props.sessions.length === 0}>
+            <Show when={sessions().length === 0}>
               <EmptyState
                 icon={<IconMessageSquare size={20} />}
                 title={t("No sessions")}
                 description={t("Create a session to start a task.")}
               />
             </Show>
-            <For each={props.sessions}>
+            <For each={sessions()}>
               {(session) => {
                 const status = createMemo(() => statusOf(session));
-                const active = () => session.id === props.currentId;
-                const deleting = () => props.deletingId === session.id;
-                const confirming = () => pendingDelete() === session.id;
-                const busy = () => {
-                  const state = session.lastRunState;
-                  return (
-                    state === "Scheduled" || state === "Running" || state === "WaitingApproval"
-                  );
-                };
+                const active = () => session.id === chat.currentId();
+                const deleting = () => chat.deletingSession() === session.id;
+                const editing = () => editingId() === session.id;
+                const title = () => session.title || t("New session");
+
                 return (
                   <div
                     class="session-row"
                     classList={{
                       active: active(),
                       deleting: deleting(),
-                      confirm: confirming(),
+                      editing: editing(),
                     }}
                   >
-                    <Alt
-                      content={
-                        <SessionBubble session={session} now={() => props.now} status={status} />
+                    <Show
+                      when={editing()}
+                      fallback={
+                        <>
+                          <Alt
+                            content={
+                              <SessionBubble
+                                session={session}
+                                now={() => chat.now()}
+                                status={status}
+                              />
+                            }
+                            class="alt-bubble--session"
+                            delay={200}
+                          >
+                            <button
+                              type="button"
+                              class="session-select"
+                              aria-current={active() ? "true" : undefined}
+                              onClick={() => {
+                                props.onNavigate();
+                                void chat.selectSession(session.id);
+                              }}
+                            >
+                              <span
+                                class="session-state-dot"
+                                data-tone={status().tone}
+                                title={status().label}
+                                aria-hidden="true"
+                              />
+                              <span class="session-title">{title()}</span>
+                            </button>
+                          </Alt>
+                          <button
+                            type="button"
+                            class="session-more"
+                            title={t("Session actions")}
+                            aria-label={tArgs("Session actions for {title}", { title: title() })}
+                            aria-haspopup="menu"
+                            onClick={(event) => {
+                              const anchor = event.currentTarget;
+                              setMenu({ session, anchor });
+                            }}
+                          >
+                            <Show when={deleting()} fallback={<IconEllipsis size={16} />}>
+                              <IconSpinner size={15} class="spin" />
+                            </Show>
+                          </button>
+                        </>
                       }
-                      class="alt-bubble--session"
-                      delay={200}
-                      offsetX={12}
                     >
-                      <button
-                        type="button"
-                        class="session-select"
-                        aria-current={active() ? "true" : undefined}
-                        onClick={() => props.onSelect(session.id)}
-                      >
-                        <span class="session-title">{session.title || t("New session")}</span>
-                      </button>
-                    </Alt>
-                    <button
-                      type="button"
-                      class="session-delete"
-                      classList={{ confirm: confirming() }}
-                      title={
-                        busy()
-                          ? t("Cancel the active run before deleting this session.")
-                          : confirming()
-                            ? t("Click again to delete")
-                            : t("Delete session")
-                      }
-                      aria-label={tArgs("Delete session {title}", {
-                        title: session.title || t("New session"),
-                      })}
-                      disabled={deleting() || busy()}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        requestDelete(session);
-                      }}
-                    >
-                      <Show when={deleting()} fallback={<IconTrash size={14} />}>
-                        <IconSpinner size={14} class="spin" />
-                      </Show>
-                    </button>
+                      <input
+                        ref={(element) => (renameInput = element)}
+                        class="session-rename"
+                        value={editValue()}
+                        aria-label={t("Rename session")}
+                        onInput={(event) => setEditValue(event.currentTarget.value)}
+                        onBlur={() => commitRename(session)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelRename();
+                          }
+                        }}
+                      />
+                    </Show>
                   </div>
                 );
               }}
@@ -299,23 +342,58 @@ export function Sidebar(props: {
           <SideScrollbar host={listEl} />
         </div>
 
-        <div class="sidebar-foot" title={props.nodeId}>
-          <Show when={props.nodeId}>
-            <div class="foot-row">
-              <span class="mono">{tArgs("Node {id}", { id: props.nodeId.slice(0, 18) })}</span>
-            </div>
-            <div class="foot-row">
-              <span
-                classList={{
-                  dot: true,
-                  [`tone-${modeTone(props.mode)}`]: true,
-                }}
-              />
-              <span>{tArgs("Mode {mode}", { mode: stateLabel(props.mode) })}</span>
-            </div>
-          </Show>
+        <div class="sidebar-foot">
+          <button
+            type="button"
+            class="sidebar-settings"
+            classList={{ active: props.settingsOpen }}
+            aria-current={props.settingsOpen ? "page" : undefined}
+            onClick={() => {
+              props.onNavigate();
+              props.onOpenSettings();
+            }}
+          >
+            <IconSettings size={16} />
+            <span>{t("Settings")}</span>
+          </button>
         </div>
       </div>
+
+      <Show when={menu()}>
+        {(current) => (
+          <FloatingMenu
+            anchor={current().anchor}
+            label={t("Session actions")}
+            header={{
+              title: current().session.title || t("New session"),
+              subtitle: t("Session"),
+              icon: <IconMessageSquare size={15} />,
+            }}
+            items={[
+              {
+                label: t("Rename"),
+                icon: <IconPencil size={15} />,
+                onSelect: () => startRename(current().session),
+              },
+              {
+                label: t("Delete session"),
+                icon: <IconTrash size={15} />,
+                danger: true,
+                disabled:
+                  chat.deletingSession() === current().session.id ||
+                  ["Scheduled", "Running", "WaitingApproval"].includes(
+                    current().session.lastRunState ?? "",
+                  ),
+                onSelect: () => {
+                  props.onNavigate();
+                  void chat.deleteSession(current().session.id);
+                },
+              },
+            ]}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </Show>
     </aside>
   );
 }

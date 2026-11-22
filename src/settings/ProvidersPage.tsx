@@ -1,5 +1,6 @@
-// Providers page: list + editor orchestration. All persistence goes through
-// the node's provider commands; the page never writes files directly.
+// Providers page: a list of providers, and a separate editor surface reached
+// by adding or opening one. Persistence goes through the node's provider
+// commands; the page never writes files directly.
 //
 // A new provider is a two-step wizard. Step 1 saves the connection fields
 // without a model so the node can preview the live model list; step 2 saves
@@ -17,8 +18,8 @@ import {
 } from "../bridge";
 import { t, tPlural } from "../i18n";
 import { errorText } from "../errors";
-import { pushToast } from "../toast";
-import { IconArrowLeft, IconCircleAlert, IconPlus } from "../components/Icons";
+import { IconArrowLeft, IconChevron, IconCircleAlert, IconPlus } from "../components/Icons";
+import { notify } from "../ui/notifications";
 import { ProviderEditor, protocolLabel } from "./ProviderEditor";
 import {
   cloneModel,
@@ -28,6 +29,8 @@ import {
   type ProviderTestView,
   type ProviderView,
 } from "./types";
+
+type ProviderMode = "list" | "new" | "edit";
 
 function viewToDraft(view: ProviderView): ProviderInput {
   return {
@@ -153,22 +156,18 @@ export function ProvidersPage(props: {
   onRefresh: () => Promise<void>;
 }) {
   const [providers, setProviders] = createSignal<ProviderView[]>([]);
+  const [mode, setMode] = createSignal<ProviderMode>("list");
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [draft, setDraft] = createSignal<ProviderInput | null>(null);
-  const [isNew, setIsNew] = createSignal(false);
   const [createdInWizard, setCreatedInWizard] = createSignal(false);
   const [newToken, setNewToken] = createSignal(0);
   const [loading, setLoading] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
-  const [notice, setNotice] = createSignal("");
+  const [loadError, setLoadError] = createSignal("");
   const [testResult, setTestResult] = createSignal<ProviderTestView | null>(null);
-  const [narrow, setNarrow] = createSignal(
-    typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches,
-  );
-  const [detailOpen, setDetailOpen] = createSignal(false);
-  const [pendingSwitch, setPendingSwitch] = createSignal<ProviderView | "new" | null>(null);
+  const [pendingExit, setPendingExit] = createSignal(false);
 
+  const isNew = () => mode() === "new";
   const selectedView = () => providers().find((provider) => provider.id === selectedId()) ?? null;
 
   /// Draft differs from the selected saved provider, or a new form has content.
@@ -184,20 +183,6 @@ export function ProvidersPage(props: {
   }
 
   createEffect(() => props.onDirtyChange?.(isDirty()));
-
-  const visibleProviders = () => {
-    if (!isNew()) return providers();
-    const draftId = draft()?.id;
-    return draftId ? providers().filter((provider) => provider.id !== draftId) : providers();
-  };
-
-  function selectView(view: ProviderView) {
-    setPendingSwitch(null);
-    setSelectedId(view.id);
-    setIsNew(false);
-    setCreatedInWizard(false);
-    setDraft(viewToDraft(view));
-  }
 
   async function refreshList(): Promise<ProviderView[]> {
     const list = await listProviders();
@@ -217,58 +202,24 @@ export function ProvidersPage(props: {
     });
   }
 
-  async function load(preferredId?: string) {
-    const list = await refreshList();
-    if (isNew() && !preferredId) return;
-    const targetId = preferredId ?? selectedId();
-    if (targetId) {
-      const view = list.find((provider) => provider.id === targetId);
-      if (view) {
-        selectView(view);
-        return;
-      }
-    }
-    const fallback = list.find((provider) => provider.active) ?? list[0];
-    if (fallback) {
-      selectView(fallback);
-    } else {
-      setSelectedId(null);
-      setDraft(null);
-      setIsNew(false);
-      setCreatedInWizard(false);
-    }
-  }
-
   onMount(async () => {
     try {
-      await load();
-    } catch (e) {
-      setError(errorText(e));
+      await refreshList();
+      setLoadError("");
+    } catch (error) {
+      // The list surfaces a contextual retry; a toast would duplicate it.
+      setLoadError(errorText(error));
     } finally {
       setLoading(false);
     }
   });
 
-  onMount(() => {
-    const query = window.matchMedia("(max-width: 760px)");
-    const update = () => {
-      const matches = query.matches;
-      // Crossing into the narrow layout with a draft must keep that editor
-      // visible instead of falling back to the list and re-seeding it.
-      if (matches && !narrow() && draft()) setDetailOpen(true);
-      setNarrow(matches);
-    };
-    query.addEventListener("change", update);
-    onCleanup(() => query.removeEventListener("change", update));
-  });
-
-  // Android hardware back while Settings is open: close the provider detail
-  // first so App can close Settings only on the second press.
+  // Android hardware back: leave the editor before leaving the section.
   onMount(() => {
     const handleBack = (event: Event) => {
-      if (!props.active || !narrow() || !detailOpen()) return;
+      if (!props.active || mode() === "list") return;
       event.preventDefault();
-      void closeDetail();
+      requestExit();
     };
     window.addEventListener("phi:settings-back", handleBack);
     onCleanup(() => window.removeEventListener("phi:settings-back", handleBack));
@@ -283,124 +234,72 @@ export function ProvidersPage(props: {
     }
   });
 
-  /// Guard switching away from an edited provider. The draft is only replaced
-  /// after the user explicitly discards it.
-  function requestNew() {
-    if (isDirty()) {
-      setDetailOpen(true);
-      setPendingSwitch("new");
-      return;
-    }
-    void startNew();
-  }
-
-  function requestOpen(view: ProviderView) {
-    if (!isNew() && view.id === selectedId()) {
-      setPendingSwitch(null);
-      setDetailOpen(true);
-      return;
-    }
-    if (isDirty()) {
-      setDetailOpen(true);
-      setPendingSwitch(view);
-      return;
-    }
-    void openProvider(view);
-  }
-
-  function discardPending() {
-    const action = pendingSwitch();
-    setPendingSwitch(null);
-    if (action === "new") {
-      void startNew();
-    } else if (action) {
-      void openProvider(action);
-    }
-  }
-
-  /// Mobile Back. A wizard has a persisted connection (and possibly a
-  /// zero-model provider), so closing it must also clean that up.
-  async function closeDetail() {
-    setPendingSwitch(null);
-    if (isNew()) {
-      await cancelNew();
-      return;
-    }
-    setDetailOpen(false);
-  }
-
-  async function startNew() {
-    setPendingSwitch(null);
-    setDetailOpen(true);
-    const staleId = isNew() && createdInWizard() ? draft()?.id : undefined;
-    if (staleId) {
-      try {
-        await removeProvider(staleId);
-      } catch {
-        // A leftover empty draft is harmless; continue with a fresh form.
-      }
-    }
-    setSelectedId(null);
-    setIsNew(true);
-    setCreatedInWizard(false);
-    setNewToken((token) => token + 1);
-    setDraft(emptyDraft());
+  function resetSurface() {
     setTestResult(null);
-    setError("");
-    setNotice("");
-    if (staleId) {
-      try {
-        await refreshList();
-      } catch {
-        // The list refreshes again on the next navigation.
-      }
+    setPendingExit(false);
+  }
+
+  function exitToList() {
+    const cleanupId = isNew() && createdInWizard() ? (draft()?.id ?? selectedId()) : null;
+    setMode("list");
+    setSelectedId(null);
+    setDraft(null);
+    setCreatedInWizard(false);
+    resetSurface();
+    if (cleanupId) {
+      void refreshList().catch(() => undefined);
     }
   }
 
-  async function openProvider(view: ProviderView) {
-    setPendingSwitch(null);
-    setDetailOpen(true);
+  async function requestExit() {
+    if (isDirty()) {
+      setPendingExit(true);
+      return;
+    }
     if (isNew() && createdInWizard()) {
-      const staleId = draft()?.id;
-      if (staleId && staleId !== view.id) {
+      const id = draft()?.id ?? selectedId();
+      if (id) {
         try {
-          await removeProvider(staleId);
-          await refreshList();
+          await removeProvider(id);
         } catch {
-          // Keep going: the user asked for a different provider.
+          // A leftover empty draft is harmless; the list refresh hides it.
         }
       }
     }
-    setTestResult(null);
-    setError("");
-    setNotice("");
-    const fresh = providers().find((provider) => provider.id === view.id) ?? view;
-    selectView(fresh);
+    exitToList();
   }
 
-  async function cancelNew() {
-    setPendingSwitch(null);
-    setDetailOpen(false);
-    const cleanupId = createdInWizard() ? (draft()?.id ?? selectedId()) : null;
-    setIsNew(false);
-    setCreatedInWizard(false);
-    setSelectedId(null);
-    setDraft(null);
-    setTestResult(null);
-    setError("");
-    setNotice("");
-    if (cleanupId) {
-      try {
-        await removeProvider(cleanupId);
-      } catch {
-        // If removal fails, the draft simply stays in the provider list.
+  async function discardAndExit() {
+    if (isNew() && createdInWizard()) {
+      const id = draft()?.id ?? selectedId();
+      if (id) {
+        try {
+          await removeProvider(id);
+        } catch {
+          // Keep going: the user asked to leave.
+        }
       }
     }
-    try {
-      await load();
-    } catch (e) {
-      setError(errorText(e));
-    }
+    exitToList();
+  }
+
+  async function startNew() {
+    setPendingExit(false);
+    setSelectedId(null);
+    setMode("new");
+    setCreatedInWizard(false);
+    setNewToken((token) => token + 1);
+    setDraft(emptyDraft());
+    resetSurface();
+  }
+
+  function openProvider(view: ProviderView) {
+    setPendingExit(false);
+    const fresh = providers().find((provider) => provider.id === view.id) ?? view;
+    setSelectedId(fresh.id);
+    setMode("edit");
+    setDraft(viewToDraft(fresh));
+    resetSurface();
   }
 
   /// Persist connection fields only. The node accepts a provider without a
@@ -408,13 +307,10 @@ export function ProvidersPage(props: {
   async function persistConnection(): Promise<ProviderView | null> {
     const current = draft();
     if (!current) return null;
-    setError("");
-    setNotice("");
     try {
       const input = buildConnection(current, selectedView(), true);
       const saved = await saveProvider(input);
       if (!current.id) setCreatedInWizard(true);
-      setPendingSwitch(null);
       upsertProvider(saved);
       setSelectedId(saved.id);
       // The secret is now stored; never keep the typed value in the draft.
@@ -422,10 +318,8 @@ export function ProvidersPage(props: {
       await refreshList();
       await props.onRefresh().catch(() => undefined);
       return saved;
-    } catch (e) {
-      const message = errorText(e);
-      setError(message);
-      pushToast("danger", message);
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
       return null;
     }
   }
@@ -442,8 +336,6 @@ export function ProvidersPage(props: {
   async function persistEdit(): Promise<ProviderView | null> {
     const current = draft();
     if (!current) return null;
-    setError("");
-    setNotice("");
     try {
       const input = buildConnection(current, selectedView(), true);
       if (!input.id) {
@@ -460,19 +352,14 @@ export function ProvidersPage(props: {
       const saved = await saveProvider(input);
       upsertProvider(saved);
       setSelectedId(saved.id);
-      setIsNew(false);
-      setCreatedInWizard(false);
-      setPendingSwitch(null);
       setDraft(viewToDraft(saved));
       setTestResult(null);
       await refreshList();
       await props.onRefresh().catch(() => undefined);
-      setNotice(t("Provider saved."));
+      notify(t("Provider saved."), { tone: "success" });
       return saved;
-    } catch (e) {
-      const message = errorText(e);
-      setError(message);
-      pushToast("danger", message);
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
       return null;
     }
   }
@@ -490,12 +377,10 @@ export function ProvidersPage(props: {
     const current = draft();
     const id = current?.id ?? selectedId();
     if (!current || !id) {
-      setError(t("Save the provider before adding models."));
+      notify(t("Save the provider before adding models."), { tone: "warning" });
       return false;
     }
     const wasNew = isNew();
-    setError("");
-    setNotice("");
     try {
       const wanted = selected.map((model) => ({
         ...cloneModel(model),
@@ -534,23 +419,25 @@ export function ProvidersPage(props: {
       }
       upsertProvider(saved);
       setSelectedId(saved.id);
-      setIsNew(false);
-      setCreatedInWizard(false);
-      setPendingSwitch(null);
       setDraft(viewToDraft(saved));
+      setCreatedInWizard(false);
       setTestResult(null);
       await refreshList();
       await props.onRefresh().catch(() => undefined);
-      setNotice(
+      notify(
         wasNew
           ? tPlural("Added {n} model.", "Added {n} models.", wanted.length)
           : t("Provider saved."),
+        { tone: "success" },
       );
+      if (wasNew) {
+        setMode("list");
+        setSelectedId(null);
+        setDraft(null);
+      }
       return true;
-    } catch (e) {
-      const message = errorText(e);
-      setError(message);
-      pushToast("danger", message);
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
       return false;
     }
   }
@@ -572,12 +459,12 @@ export function ProvidersPage(props: {
       const result = await testProvider(saved.id);
       setTestResult(result);
       if (!result.ok) {
-        pushToast("danger", result.error || t("Something went wrong."));
+        notify(result.error || t("Something went wrong."), { tone: "danger" });
       }
-    } catch (e) {
-      const message = errorText(e);
+    } catch (error) {
+      const message = errorText(error);
       setTestResult({ ok: false, latencyMs: 0, modelCount: 0, error: message });
-      pushToast("danger", message);
+      notify(message, { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -587,16 +474,13 @@ export function ProvidersPage(props: {
     const id = selectedId() ?? draft()?.id;
     if (!id) return;
     setBusy(true);
-    setError("");
     try {
       await setActiveProvider(id);
       await refreshList();
       await props.onRefresh().catch(() => undefined);
-      setNotice(t("Provider is now active."));
-    } catch (e) {
-      const message = errorText(e);
-      setError(message);
-      pushToast("danger", message);
+      notify(t("Provider is now active."), { tone: "success" });
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -606,23 +490,14 @@ export function ProvidersPage(props: {
     const view = selectedView();
     if (!view) return;
     setBusy(true);
-    setError("");
     try {
       await removeProvider(view.id);
-      setPendingSwitch(null);
-      setDetailOpen(false);
-      setSelectedId(null);
-      setDraft(null);
-      setIsNew(false);
-      setCreatedInWizard(false);
-      setTestResult(null);
-      await load();
+      exitToList();
+      await refreshList();
       await props.onRefresh().catch(() => undefined);
-      setNotice(t("Provider deleted."));
-    } catch (e) {
-      const message = errorText(e);
-      setError(message);
-      pushToast("danger", message);
+      notify(t("Provider deleted."), { tone: "success" });
+    } catch (error) {
+      notify(errorText(error), { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -630,122 +505,32 @@ export function ProvidersPage(props: {
 
   return (
     <div class="providers-page">
-      <div class="settings-page-head">
-        <div>
-          <h1>{t("Model providers")}</h1>
-          <p class="settings-subtitle">
-            {t(
-              "Configure endpoints, credentials and the models each provider offers. One provider is active at a time.",
-            )}
-          </p>
-        </div>
-        <Show when={!narrow() || !detailOpen()}>
-          <button class="btn primary" onClick={requestNew}>
-            <IconPlus size={15} />
-            {t("Add provider")}
-          </button>
-        </Show>
-      </div>
-
-      <Show when={error() && !draft()}>
-        <div class="inline-error page-error">
-          <IconCircleAlert size={14} />
-          <span>{error()}</span>
-        </div>
-      </Show>
-
-      <Show when={!loading()} fallback={<div class="loading">{t("Loading…")}</div>}>
-        <div
-          class="providers-layout"
-          classList={{
-            "detail-open": narrow() && (detailOpen() || visibleProviders().length === 0),
-          }}
-        >
-          <div class="providers-list">
-            <Show
-              when={visibleProviders().length > 0}
-              fallback={
-                <Show when={!isNew()}>
-                  <p class="providers-list-empty hint">{t("No providers yet.")}</p>
-                </Show>
-              }
+      <Show
+        when={mode() === "list"}
+        fallback={
+          <div class="provider-editor-view">
+            <button
+              type="button"
+              class="settings-back provider-back"
+              onClick={() => void requestExit()}
             >
-              <For each={visibleProviders()}>
-                {(provider) => (
-                  <button
-                    classList={{
-                      "provider-item": true,
-                      active: !isNew() && provider.id === selectedId(),
-                    }}
-                    aria-current={!isNew() && provider.id === selectedId() ? "true" : undefined}
-                    onClick={() => requestOpen(provider)}
-                  >
-                    <span class="provider-item-head">
-                      <span class="provider-name" title={provider.name}>
-                        {provider.name}
-                      </span>
-                      <Show when={provider.active}>
-                        <span class="provider-active">{t("Active")}</span>
-                      </Show>
-                    </span>
-                    <span class="provider-meta">
-                      <span>{protocolLabel(provider.protocol)}</span>
-                      <span class="provider-sep">·</span>
-                      <span>{tPlural("{n} model", "{n} models", provider.models.length)}</span>
-                      <span class="provider-sep">·</span>
-                      <span>
-                        {provider.auth === "none"
-                          ? t("No authentication")
-                          : provider.hasKey
-                            ? t("Key configured")
-                            : t("No key")}
-                      </span>
-                    </span>
-                  </button>
-                )}
-              </For>
-            </Show>
-          </div>
-
-          <div class="provider-detail">
-            <Show when={narrow() && detailOpen() && !isNew()}>
-              <button
-                type="button"
-                class="settings-back provider-back"
-                onClick={() => void closeDetail()}
-              >
-                <IconArrowLeft size={15} />
-                {t("Back")}
-              </button>
-            </Show>
-            <Show when={pendingSwitch()}>
+              <IconArrowLeft size={16} />
+              {t("Back")}
+            </button>
+            <Show when={pendingExit()}>
               <div class="draft-guard" role="alert">
                 <span>{t("Discard unsaved changes?")}</span>
                 <div class="draft-guard-actions">
-                  <button class="btn danger" onClick={discardPending}>
+                  <button type="button" class="btn danger" onClick={() => void discardAndExit()}>
                     {t("Discard")}
                   </button>
-                  <button class="btn" onClick={() => setPendingSwitch(null)}>
+                  <button type="button" class="btn" onClick={() => setPendingExit(false)}>
                     {t("Cancel")}
                   </button>
                 </div>
               </div>
             </Show>
-            <Show
-              when={draft()}
-              fallback={
-                <div class="providers-empty">
-                  <p class="empty-lead">{t("No providers yet")}</p>
-                  <p class="hint">
-                    {t("Add a provider to call a model. The agent cannot run without one.")}
-                  </p>
-                  <button class="btn primary" onClick={requestNew}>
-                    <IconPlus size={15} />
-                    {t("Add provider")}
-                  </button>
-                </div>
-              }
-            >
+            <Show when={draft()} fallback={<div class="loading">{t("Loading…")}</div>}>
               {(current) => (
                 <ProviderEditor
                   selectionKey={isNew() ? `new-${newToken()}` : (selectedId() ?? "none")}
@@ -754,8 +539,8 @@ export function ProvidersPage(props: {
                   isNew={isNew()}
                   busy={busy()}
                   dirty={isDirty()}
-                  error={error()}
-                  notice={notice()}
+                  error=""
+                  notice=""
                   testResult={testResult()}
                   onChange={setDraft}
                   onPersistDraft={handleContinue}
@@ -764,12 +549,106 @@ export function ProvidersPage(props: {
                   onTest={() => void handleTest()}
                   onDelete={() => void handleDelete()}
                   onActivate={() => void handleActivate()}
-                  onCancelNew={() => void cancelNew()}
+                  onCancelNew={() => void discardAndExit()}
                 />
               )}
             </Show>
           </div>
+        }
+      >
+        <div class="settings-page-head">
+          <div>
+            <h1>{t("Model providers")}</h1>
+            <p class="settings-subtitle">
+              {t(
+                "Configure endpoints, credentials and the models each provider offers. One provider is active at a time.",
+              )}
+            </p>
+          </div>
+          <Show when={providers().length > 0}>
+            <button class="btn primary" type="button" onClick={() => void startNew()}>
+              <IconPlus size={15} />
+              {t("Add provider")}
+            </button>
+          </Show>
         </div>
+
+        <Show when={loadError()}>
+          <div class="inline-error page-error">
+            <IconCircleAlert size={14} />
+            <span>{loadError()}</span>
+            <button
+              type="button"
+              class="btn"
+              onClick={() => {
+                setLoading(true);
+                void refreshList()
+                  .then(() => setLoadError(""))
+                  .catch((error) => setLoadError(errorText(error)))
+                  .finally(() => setLoading(false));
+              }}
+            >
+              {t("Retry")}
+            </button>
+          </div>
+        </Show>
+
+        <Show when={!loading()} fallback={<div class="loading">{t("Loading…")}</div>}>
+          <Show
+            when={providers().length > 0}
+            fallback={
+              <div class="providers-empty">
+                <p class="empty-lead">{t("No providers yet")}</p>
+                <p class="hint">
+                  {t("Add a provider to call a model. The agent cannot run without one.")}
+                </p>
+                <button class="btn primary" type="button" onClick={() => void startNew()}>
+                  <IconPlus size={15} />
+                  {t("Add provider")}
+                </button>
+              </div>
+            }
+          >
+            <ul class="provider-list">
+              <For each={providers()}>
+                {(provider) => (
+                  <li>
+                    <button
+                      type="button"
+                      class="provider-card"
+                      onClick={() => openProvider(provider)}
+                    >
+                      <span class="provider-card-main">
+                        <span class="provider-card-title">
+                          <span class="provider-name" title={provider.name}>
+                            {provider.name}
+                          </span>
+                          <Show when={provider.active}>
+                            <span class="provider-active">{t("Active")}</span>
+                          </Show>
+                        </span>
+                        <span class="provider-meta">
+                          <span>{protocolLabel(provider.protocol)}</span>
+                          <span class="provider-sep">·</span>
+                          <span>{tPlural("{n} model", "{n} models", provider.models.length)}</span>
+                          <span class="provider-sep">·</span>
+                          <span>
+                            {provider.auth === "none"
+                              ? t("No authentication")
+                              : provider.hasKey
+                                ? t("Key configured")
+                                : t("No key")}
+                          </span>
+                        </span>
+                      </span>
+                      <IconChevron size={17} class="provider-card-chevron" />
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </Show>
       </Show>
     </div>
   );

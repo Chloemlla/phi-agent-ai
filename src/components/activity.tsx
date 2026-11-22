@@ -1,19 +1,15 @@
 // Activity rows for the transcript: thinking, tool calls, unpaired tool
-// results, and the compressed summary of consecutive low-noise calls.
+// results, and the one-line summary of a consecutive activity run.
 //
-// The summary mirrors the reference project: a run of reasoning plus read,
-// search and list calls becomes one line such as
-// "Thought for 49s, searched for 3 patterns, read 6 files, and listed 2
-// directories". Writes, failures and unknown commands stay as individual rows.
+// The summary counts each step, names the live step while a run is active, and
+// opens itself when a step failed. The full timeline stays available behind the
+// disclosure, so failures are visible without keeping every successful step.
 
-import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
-import { formatList, sentenceCase, thoughtTitle } from "../format";
-import { t, tArgs, tPlural } from "../i18n";
+import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js";
+import { thoughtTitle } from "../format";
+import { t, tArgs } from "../i18n";
 import { IconChevron, IconSpinner } from "./Icons";
 import { CopyButton, Markdown } from "./Markdown";
-import { analyzeToolActivity, type ToolActivityKind } from "./toolActivity";
-
-export type Rail = "none" | "start" | "middle" | "end" | "only";
 
 export type ToolResultInfo = {
   content: string;
@@ -85,36 +81,27 @@ export function toolTitle(name: string): string {
   }
 }
 
-function activityPhrase(kind: ToolActivityKind, count: number, live: boolean): string {
-  switch (kind) {
-    case "read":
-      return live
-        ? tPlural("Reading {n} file", "Reading {n} files", count)
-        : tPlural("Read {n} file", "Read {n} files", count);
-    case "search":
-      return live
-        ? tPlural("Searching for {n} pattern", "Searching for {n} patterns", count)
-        : tPlural("Searched for {n} pattern", "Searched for {n} patterns", count);
-    case "list":
-      return live
-        ? tPlural("Listing {n} directory", "Listing {n} directories", count)
-        : tPlural("Listed {n} directory", "Listed {n} directories", count);
-  }
-}
+type GroupSummary = {
+  title: string;
+  running: boolean;
+  failed: number;
+};
 
-/** Title and status for a compressed activity group. */
+/** One line for a whole run of thinking, tool calls and failures. */
 function summarizeGroup(
   items: readonly ActivityItemRow[],
   resultFor: (toolUseId: string) => ToolResultInfo | undefined,
   runActive: boolean,
-): { title: string; running: boolean } {
+): GroupSummary {
   let thoughtMs = 0;
   let hasThought = false;
   let running = false;
-  const counts: Record<ToolActivityKind, { count: number; live: boolean }> = {
-    read: { count: 0, live: false },
-    search: { count: 0, live: false },
-    list: { count: 0, live: false },
+  let failed = 0;
+  let liveTitle = "";
+  const counts = new Map<string, number>();
+
+  const addCount = (label: string) => {
+    counts.set(label, (counts.get(label) ?? 0) + 1);
   };
 
   for (const item of items) {
@@ -123,42 +110,65 @@ function summarizeGroup(
       thoughtMs += item.durationMs;
       continue;
     }
-    if (item.kind !== "tool") continue;
-    const result = resultFor(item.toolUseId);
-    const live = !result && runActive;
-    if (live) running = true;
-    const activity = analyzeToolActivity(item.name, item.input) ?? [];
-    for (const entry of activity) {
-      counts[entry.kind].count += entry.count;
-      counts[entry.kind].live ||= live;
+    if (item.kind === "result") {
+      addCount(t("Tool result"));
+      if (item.isError) failed += 1;
+      continue;
     }
+    if (item.kind !== "tool") continue;
+
+    const label = toolTitle(item.name);
+    addCount(label);
+    const result = resultFor(item.toolUseId);
+    if (result?.isError) failed += 1;
+    if (!result && runActive) {
+      running = true;
+      liveTitle = label;
+    }
+  }
+
+  if (running) {
+    return { title: liveTitle || t("Thinking"), running: true, failed };
   }
 
   const parts: string[] = [];
   if (hasThought) parts.push(thoughtTitle(thoughtMs, false));
-  for (const kind of ["read", "search", "list"] as ToolActivityKind[]) {
-    const entry = counts[kind];
-    if (entry.count > 0) parts.push(activityPhrase(kind, entry.count, entry.live));
+  for (const [label, count] of counts) {
+    parts.push(tArgs("{label} ×{n}", { label, n: count }));
   }
 
-  const title = parts.length > 0 ? sentenceCase(formatList(parts)) : t("Tool calls");
-  return { title, running };
+  return {
+    title: parts.length > 0 ? parts.join(" · ") : t("Tool calls"),
+    running: false,
+    failed,
+  };
 }
 
 export function ActivityRow(props: {
   rowKey: string;
-  rail: () => Rail;
   tone: "ok" | "danger" | "muted" | "live";
   spinning?: boolean;
   label: string;
   badge?: string;
+  /** Open the row when it first appears, unless the user has already chosen. */
+  defaultOpen?: boolean;
   detail: JSX.Element;
   nested?: boolean;
 }) {
-  const [open, setOpen] = createSignal(disclosureOpen.get(props.rowKey) ?? false);
+  const [open, setOpen] = createSignal(
+    disclosureOpen.get(props.rowKey) ?? props.defaultOpen ?? false,
+  );
   // Keep a never-opened detail out of the DOM; once opened it stays mounted so
   // the close transition has content to animate.
   const [mounted, setMounted] = createSignal(open());
+
+  // A failure that appears while the run is still going should surface itself,
+  // but never override a choice the user already made for this group.
+  createEffect(() => {
+    if (!props.defaultOpen || disclosureOpen.has(props.rowKey) || open()) return;
+    setMounted(true);
+    setOpen(true);
+  });
 
   function toggle() {
     const next = !open();
@@ -171,7 +181,6 @@ export function ActivityRow(props: {
     <div
       class="activity-row"
       classList={{ "activity-row--open": open(), "activity-row--nested": props.nested }}
-      data-rail={props.nested ? "none" : props.rail()}
     >
       <button type="button" class="activity-trigger" aria-expanded={open()} onClick={toggle}>
         <span class="activity-status" data-tone={props.tone} aria-hidden="true">
@@ -202,14 +211,12 @@ export function ActivityRow(props: {
 
 export function ThinkingRowView(props: {
   row: ThinkingRowData;
-  rail: () => Rail;
   nested?: boolean;
   onOpenUrl?: (url: string) => void;
 }) {
   return (
     <ActivityRow
       rowKey={props.row.key}
-      rail={props.rail}
       tone="muted"
       label={thoughtTitle(props.row.durationMs, false)}
       nested={props.nested}
@@ -224,7 +231,6 @@ export function ThinkingRowView(props: {
 
 export function ToolRowView(props: {
   row: ToolRowData;
-  rail: () => Rail;
   result: () => ToolResultInfo | undefined;
   runActive: () => boolean;
   nested?: boolean;
@@ -279,7 +285,6 @@ export function ToolRowView(props: {
   return (
     <ActivityRow
       rowKey={props.row.key}
-      rail={props.rail}
       tone={tone()}
       spinning={status() === "running"}
       label={toolTitle(props.row.name)}
@@ -290,7 +295,7 @@ export function ToolRowView(props: {
   );
 }
 
-export function ResultRowView(props: { row: ResultRowData; rail: () => Rail; nested?: boolean }) {
+export function ResultRowView(props: { row: ResultRowData; nested?: boolean }) {
   const label = () => {
     const name = props.row.name;
     if (props.row.isError) {
@@ -302,7 +307,6 @@ export function ResultRowView(props: { row: ResultRowData; rail: () => Rail; nes
   return (
     <ActivityRow
       rowKey={props.row.key}
-      rail={props.rail}
       tone={props.row.isError ? "danger" : "ok"}
       label={label()}
       nested={props.nested}
@@ -325,7 +329,6 @@ export function ResultRowView(props: { row: ResultRowData; rail: () => Rail; nes
 
 export function GroupRowView(props: {
   row: GroupRowData;
-  rail: () => Rail;
   resultFor: (toolUseId: string) => ToolResultInfo | undefined;
   runActive: () => boolean;
   onOpenUrl?: (url: string) => void;
@@ -337,17 +340,23 @@ export function GroupRowView(props: {
   return (
     <ActivityRow
       rowKey={props.row.key}
-      rail={props.rail}
-      tone={summary().running ? "live" : "ok"}
+      tone={summary().failed > 0 ? "danger" : summary().running ? "live" : "ok"}
       spinning={summary().running}
       label={summary().title}
+      badge={
+        summary().failed > 0
+          ? tArgs("{n} failed", { n: summary().failed })
+          : summary().running
+            ? t("Running…")
+            : undefined
+      }
+      defaultOpen={summary().failed > 0}
       detail={
         <div class="activity-group-detail">
           <For each={props.row.items}>
             {(item) => (
               <ActivityItemView
                 item={item}
-                rail={() => "none"}
                 resultFor={props.resultFor}
                 runActive={props.runActive}
                 nested
@@ -363,7 +372,6 @@ export function GroupRowView(props: {
 
 export function ActivityItemView(props: {
   item: ActivityItemRow;
-  rail: () => Rail;
   resultFor: (toolUseId: string) => ToolResultInfo | undefined;
   runActive: () => boolean;
   nested?: boolean;
@@ -372,36 +380,25 @@ export function ActivityItemView(props: {
   const item = props.item;
   switch (item.kind) {
     case "thinking":
-      return (
-        <ThinkingRowView
-          row={item}
-          rail={props.rail}
-          nested={props.nested}
-          onOpenUrl={props.onOpenUrl}
-        />
-      );
+      return <ThinkingRowView row={item} nested={props.nested} onOpenUrl={props.onOpenUrl} />;
     case "tool":
       return (
         <ToolRowView
           row={item}
-          rail={props.rail}
           result={() => props.resultFor(item.toolUseId)}
           runActive={props.runActive}
           nested={props.nested}
         />
       );
     case "result":
-      return <ResultRowView row={item} rail={props.rail} nested={props.nested} />;
+      return <ResultRowView row={item} nested={props.nested} />;
   }
 }
 
-/** Compressible means: reasoning, or a read/search/list call that succeeded. */
-export function isCompressibleActivity(
-  item: ActivityItemRow,
-  resultFor: (toolUseId: string) => ToolResultInfo | undefined,
-): boolean {
-  if (item.kind === "thinking") return true;
-  if (item.kind !== "tool") return false;
-  if (resultFor(item.toolUseId)?.isError) return false;
-  return analyzeToolActivity(item.name, item.input) !== null;
+/** A run of activity becomes one summary row. */
+export function isCompressibleActivity(item: ActivityItemRow): boolean {
+  // A run of thinking and tool steps is one unit, regardless of tool kind or
+  // outcome. Failures stay inside the group so its summary can count them and
+  // open itself; hiding a failure behind an untouched group would be worse.
+  return item.kind === "thinking" || item.kind === "tool" || item.kind === "result";
 }

@@ -652,6 +652,14 @@ impl Node {
         self.session_port()?.delete_session(session_id)
     }
 
+    /// Rename a session from the user surface. The projection records the
+    /// title source as `user`, so an automatic title never overwrites it.
+    pub fn rename_session(&self, session_id: &str, title: &str) -> Result<(), String> {
+        self.require_writable()?;
+        self.session_port()?
+            .rename_session(session_id, title, "user")
+    }
+
     pub fn get_session(&self, session_id: &str) -> Result<SessionDetail, String> {
         let session = self.session_view(session_id).ok_or_else(|| {
             i18n::t_args("Unknown session: {id}", &[("id", session_id.to_string())])

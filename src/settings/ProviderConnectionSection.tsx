@@ -1,10 +1,11 @@
 // Connection section of the provider editor: identity, credentials and the
 // request format. Validation state is owned by the editor and passed in.
 
-import { For, Show } from "solid-js";
+import { Show } from "solid-js";
 import { t, tArgs } from "../i18n";
 import { IconEye, IconEyeOff } from "../components/Icons";
-import { PROTOCOLS, type ProviderInput, type ProviderView } from "./types";
+import { Select } from "../ui/Select";
+import { PROTOCOLS, type Protocol, type ProviderInput, type ProviderView } from "./types";
 import { protocolLabel, type FieldErrors } from "./providerForm";
 
 export function ProviderConnectionSection(props: {
@@ -124,7 +125,6 @@ export function ProviderConnectionSection(props: {
         <label class="field">
           <span>{t("Base URL")}</span>
           <input
-            class="mono"
             value={props.draft.baseUrl ?? ""}
             onInput={(event) => props.onUpdate({ baseUrl: event.currentTarget.value })}
             placeholder="https://api.example.com/v1"
@@ -141,17 +141,18 @@ export function ProviderConnectionSection(props: {
           </Show>
         </label>
 
-        <label class="field">
+        <div class="field">
           <span>{t("Request format")}</span>
-          <select
+          <Select
+            aria-label={t("Request format")}
             value={props.draft.protocol ?? "openai_chat"}
-            onChange={(event) => props.onUpdate({ protocol: event.currentTarget.value })}
-          >
-            <For each={PROTOCOLS}>
-              {(protocol) => <option value={protocol}>{protocolLabel(protocol)}</option>}
-            </For>
-          </select>
-        </label>
+            options={PROTOCOLS.map((protocol) => ({
+              value: protocol,
+              label: protocolLabel(protocol),
+            }))}
+            onChange={(value) => props.onUpdate({ protocol: value as Protocol })}
+          />
+        </div>
       </div>
     </section>
   );
