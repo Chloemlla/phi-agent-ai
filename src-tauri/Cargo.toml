@@ -44,6 +44,7 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["sync", "time", "process", "macros", "rt-multi-thread", "io-util"] }
 tokio-util = "0.7"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 
 [lib]
@@ -62,6 +63,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 serde_json = { workspace = true }
 phi-kernel = { path = "crates/phi-kernel" }

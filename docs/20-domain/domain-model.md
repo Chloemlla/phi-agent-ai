@@ -1,6 +1,6 @@
 # 领域模型
 
-> 状态：🌱 · 最后更新：2026-11-08
+> 状态：🌱 · 最后更新：2026-11-22
 > 上游：`20-domain/context-map.md`（上下文划分）、`00-overview/glossary.md`（术语）、ADR-0002（事件溯源）
 > 本文是 `context-map.md` §4 的细化：**实体、值对象、不变量、状态机、事件。**
 
@@ -17,7 +17,7 @@
 | MemoryRecord / Episode | ✅ | SQLite + BM25，准入、脱敏、forget |
 | ProviderProfile / ModelSpec | ✅ | `providers.json`；模型目录是可选数据 |
 | UiView | — | 声明式视图树协议已移除；界面改为回复正文中的内联 HTML（见 `80-roadmap/scope-additions.md` §2.17） |
-| Task | 🧭 | 当前只有隐式 `TaskCreated` 与 `taskId` 占位，没有 Task 聚合状态 |
+| Matter | 🧭 | 设计为可选长期目标 / 理解容器；尚未实现（ADR-0012） |
 | AgentDefinition / LoopStrategy | 🧭 | 当前是单一 ReAct 循环与固定系统提示 |
 | Checkpoint | 🧭 | 当前恢复 = journal replay + interrupted 标记 + unpaired tool_use 修复 |
 | PolicyRule | 🧭 | 当前是默认策略函数，不是规则引擎 |
@@ -71,7 +71,7 @@
 └──────────────┘ └──────────────┘
 ```
 
-**聚合划分原则**：生命周期一致、且需要强一致的东西放同一聚合。Run 单独成聚合（而非塞进 Session），是因为它**长生命周期、可恢复、可换端**——这三种需求都指向「独立的事件流 + 检查点」。**Task 是数据上恒在的顶层聚合**：关联 Session、拥有 `0..*` Run；界面上可隐式（惰性创建），但**每个 Run 必须有 `taskId`**（ADR-0008 修订）。
+**聚合划分原则**：生命周期一致、且需要强一致的东西放同一聚合。Run 单独成聚合（而非塞进 Session），是因为它**长生命周期、可恢复、可换端**——这三种需求都指向「独立的事件流 + 检查点」。**Matter 是可选的长期目标聚合**：关联 Session 与 Run，但不拥有执行状态；`Run.matterId` 可为空（ADR-0012）。
 
 **换端与同步的单位是 Session**（ADR-0011）：一条 Session 日志只有一个写者；换端 = 转移 `ownerNodeId` 并复制整条会话日志。Run 不单独转移。
 
@@ -84,7 +84,7 @@
 | 值对象 | 构成 | 不变量 |
 |---|---|---|
 | `NodeId` | 节点唯一标识 | 稳定不变；生成后不可改 |
-| `TaskId` / `SessionId` / `RunId` / `StepId` / `ToolInvocationId` | 类型化 ID | 各自类型不可互换（newtype） |
+| `MatterId` / `SessionId` / `RunId` / `StepId` / `ToolInvocationId` | 类型化 ID | 各自类型不可互换（newtype） |
 | `Scope` | **归属**（`user / project / agent / run` 的组合）+ **可见范围** | 归属 ≠ 授权；可见性由宿主按 `Principal` 校验（见 §7.4） |
 | `Principal` | 用户 + 项目 + Agent + Run 的组合归属 | **由宿主附加**，调用方不可伪造 |
 | `ActionDigest` | 执行主体 + 目标节点 + 工作区/资源身份 + `toolId@version` + 规范化参数 + 命令相关项 | 参数或目标变化 → 审批失效（`I-6-5`） |
@@ -101,43 +101,42 @@
 
 ---
 
-## 3. 聚合 ②：会话、任务与运行（核心）
+## 3. 聚合 ②：会话、事项与运行（核心）
 
-### 3.0 Task（顶层目标，聚合根）
+### 3.0 Matter（事项，长期目标）
 
-**是什么**：一个**命名的目标**。它可跨越多个会话、持续较长时间、被指派给某台设备/某个人、并由多个 Run（甚至多个 Agent）协作完成。它是**协作 / 指派 / 换端 / 看板**的单位。
+> **2026-11-22**：Task 已按 [ADR-0012](../adr/0012-matter-instead-of-task.md) 删除，不保留兼容；这里定义替代它的 Matter。
+
+**是什么**：一个**长期目标 / 理解容器**。它可跨越多个会话、项目、日程和时间延续；保存的是理解和关联（自由正文、引用），不是执行实时状态；Run 结束不会自动把 Matter 标成完成。它是超级 Agent 的注意力 / 看板单位。
 
 | 字段 | 说明 |
 |---|---|
-| `id: TaskId` | |
+| `id: MatterId` | |
 | `title` | 目标描述 |
-| `state` | `Open / Running / Blocked / Done / Archived` |
-| `parentTaskId` | 可选：任务树（多 Agent / 子任务的父） |
-| `assignee` | 可选：被指派到的节点 / 人（多端 / 团队用） |
-| `scope` | 绑定的 project/agent 作用域 |
-| `sessionIds` | 关联的会话（0..*） |
-| `implicit` | 是否由系统惰性创建的隐藏 Task（用户未命名） |
-| `createdAt` | |
+| `understanding` | 自由正文；不是事实表或用户画像 |
+| `state` | `Open / Active / Paused / Done / Archived` |
+| `links` | 关联的 Session、Agent、Run、文件、日程、记忆引用 |
+| `source` | `user / superagent / import` |
+| `createdAt`, `updatedAt` | |
 
 **与 Session / Run 的关系**：
 
 ```
-   Task（目标，可跨会话、可指派）
+   Matter（可选，长期目标）
      ├── 关联 0..* Session（交互上下文）
-     └── 拥有 0..* Run（一次执行；可先建目标、后执行）
-   Run 必须携带 taskId（无显式 Task 时，由首个 Run 惰性创建一个隐藏 Task）
+     └── 关联 0..* Run（一次执行；Run.matterId 可选）
+   Matter 不拥有执行状态；Run 不强制属于 Matter
 ```
 
 **不变量**：
-- `I-3-0-1` **每个 Run 恰好属于一个 Task**；`Run.taskId` 必填，`RunScheduled` 事件携带 `taskId`。
-- `I-3-0-2` Task 可**比其任何单个 Session 活得更久**（跨会话）。
-- `I-3-0-3` 任务树深度设上限（防多 Agent 递归失控）。
-- `I-3-0-4` `Archived` 的 Task 不可再指派或新增 Run（但可读）。
-- `I-3-0-5` **不使用全局默认 Task**。隐式 Task 是「一事一建」：在**首个 Run 被调度时**惰性创建（纯聊天、纯问答不创建）；模型**不得静默合并**两个 Task。
+- `I-3-0-1` Matter 是**可选**聚合；`Run.matterId` 可为空，不强制每个 Run 属于 Matter。
+- `I-3-0-2` Matter 可**比其任何单个 Session 活得更久**（跨会话）。
+- `I-3-0-3` Run 终态**不自动改变** Matter 状态；只有用户或超级 Agent 显式完成 / 归档。
+- `I-3-0-4` `Archived` 的 Matter 不可再关联新 Run（但可读）。
+- `I-3-0-5` **不使用全局默认 Matter**，也不为每次 Run 惰性创建；纯问答不产生 Matter。
+- `I-3-0-6` `understanding` 是自由叙事；后台维护可以合并、拆分、纠正，但必须保留来源与修订。
 
-**状态机**：`Open → Running ⇄ Blocked → Done → Archived`
-
-**「可选」的含义**：数据上恒在（`I-3-0-1`），界面上可隐式——用户**不必**先命名、建卡片、操作任务界面。跨会话 / 要指派 / 要协作时才显式建 Task。
+**状态机**：`Open → Active ⇄ Paused → Done → Archived`（`Done` 可重新打开为 `Active`）。
 
 ---
 
@@ -180,7 +179,7 @@
 |---|---|
 | `id: RunId` | |
 | `sessionId`, `turnId` | 归属 |
-| `taskId: TaskId` | **必填**（`I-3-0-1`）；无显式 Task 时指向惰性创建的隐藏 Task |
+| `matterId?: MatterId` | 可选：所属事项（ADR-0012）；不强制每个 Run 属于 Matter |
 | `parentRunId?` | 可选：父 Run；构成**执行树**（子 Run 不新建用户轮次） |
 | `agentDefRef` | 引用某个 AgentDefinition 的版本 |
 | `pinnedVersions` | 本次运行固定的工具/技能/循环插件版本（恢复时据此校验，见 `I-3-7`） |
@@ -494,7 +493,7 @@ Requested ──policy──▶ Denied（终态）
 - `I-9-1` v1 会话单写者；attach 者不写会话状态。
 - `I-9-2` Handoff 是**原子**转移：接受前旧节点仍是写者，完成后新节点成为写者，旧节点转只读。
 - `I-9-3` Handoff 必须携带检查点，且检查点对应的事件序号一致（否则拒绝）。
-- `I-9-4` **交接单位是整个 Session**（ADR-0011）：其进行中的 Run 与全部子 Run 随它一起转移；Run 与 Task 不单独转移所有权。「指派 Task」是组织与协作，不等于搬迁其关联的所有 Session。
+- `I-9-4` **交接单位是整个 Session**（ADR-0011）：其进行中的 Run 与全部子 Run 随它一起转移；Run 与 Matter 不单独转移所有权。「指派 Matter」是组织与协作，不等于搬迁其关联的所有 Session。
 
 ---
 
@@ -502,7 +501,7 @@ Requested ──policy──▶ Denied（终态）
 
 | 实体 | 状态 | 终态 |
 |---|---|---|
-| Task | Open / Running / Blocked / Done / Archived | Done, Archived |
+| Matter | Open / Active / Paused / Done / Archived | Done, Archived |
 | Session | Active / Archived | 无（可重激活） |
 | Turn | Open / Closed / Aborted | Closed, Aborted |
 | **Run** | Scheduled / Running / WaitingApproval / Succeeded / Failed / Aborted (+HandedOff、AwaitingReconciliation 正交) | Succeeded/Failed/Aborted |
@@ -535,12 +534,11 @@ Requested ──policy──▶ Denied（终态）
 
 > 分上下文列出。payload 细节待各子系统文档；这里定「发生什么」。
 
-### 任务（②）
-- `TaskCreated { taskId, title, parentTaskId? }`
-- `TaskAssigned { taskId, assignee }`
-- `TaskLinkedToSession { taskId, sessionId }`
-- `TaskStarted { taskId }` / `TaskBlocked { taskId, reason }` / `TaskUnblocked { taskId }`
-- `TaskCompleted { taskId }` / `TaskArchived { taskId }`
+### 事项（②）
+- `MatterCreated { matterId, title, source }`
+- `MatterUpdated { matterId, title?, understanding? }`
+- `MatterLinked { matterId, kind, refId }`
+- `MatterCompleted { matterId, reason? }` / `MatterArchived { matterId }`
 
 ### 会话/运行（②）
 - `SessionStarted { sessionId, ownerNodeId, scopeBindings }`
@@ -548,9 +546,8 @@ Requested ──policy──▶ Denied（终态）
 - `SessionOwnershipTransferred { sessionId, fromNode, toNode }` ← **换端单位是 Session**（ADR-0011）
 - `TurnStarted { turnId, sessionId, index, userInputRef }` ← 携带**用户输入引用**（大对象走 Blob）
 - `TurnCompleted { turnId, terminalRunId }`
-- `RunScheduled { runId, sessionId, turnId, taskId, parentRunId?, agentDefRef, pinnedVersions }`
+- `RunScheduled { runId, sessionId, turnId, matterId?, parentRunId?, agentId, threadId, agentDefRef, pinnedVersions }`
 - `RunStarted { runId }`
-- `RunImplicitTaskCreated { taskId, runId }` ← 惰性创建隐藏 Task（`I-3-0-5`）
 - `StepStarted { runId, stepId, index, phase }`
 - `StepCompleted { runId, stepId }`
 - `RunWaitingApproval { runId, approvalId }`
@@ -559,10 +556,16 @@ Requested ──policy──▶ Denied（终态）
 - `RunCheckpointed { runId, checkpointRef }`
 - `RunSucceeded { runId }` / `RunFailed { runId, error }` / `RunAborted { runId, reason }`
 
+### 多 Agent（②）
+- `AgentCreated { agentId, sessionId, turnId, role, parentAgentId?, rootAgentId, model, thinking?, threadId, workMode, reportTo?, spawnedByRunId }`
+- `AgentStatusChanged { agentId, status, note? }`
+- `AgentReported { agentId, runId, outcome, reportMessageId, deliveredTo }`
+- `WorkspaceWriteLease { sessionId, agentId, state, reason? }`
+
 ### 消息与内容（②·持久化事实）
 > 补「重建会话所需的事实存在哪里」（原事件目录的缺口）。大对象一律走 Blob，事件只带引用。
 
-- `MessageAppended { sessionId, turnId, messageId, role, contentRef }` ← 用户/助手消息的**权威记录**
+- `MessageAppended { sessionId, turnId?, messageId, role, contentRef, threadId, agentId?, toAgentId?, kind }` ← 用户/助手消息的**权威记录**
 - `ModelOutputRecorded { callId, runId, contentRef }` ← 一次模型产出的完整内容
 - `ContextSnapshotRecorded { runId, stepId, contextRef, tokenCount }` ← 该步**实际送进模型的上下文**（可回放/可审计）
 - `BudgetReserved { runId, reserved }` / `BudgetSettled { runId, consumed, released }` ← 调用前预留、调用后结算（`#10`；🧭 目标态，v1 未产生）

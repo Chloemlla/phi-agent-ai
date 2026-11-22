@@ -136,28 +136,24 @@
 ### 3.1 DEC-01 废除 `prefers-reduced-motion`
 
 - **决定人/时间**：用户，2026-11-20。
+- **状态**：已实施（2026-11-22）。
 - **决定**：移除 `prefers-reduced-motion: reduce` 分支，不再在系统要求减少动效时关闭 pulse/spin/rise 等动画。
 - **理由**：用户判断动画性能开销几乎可以忽略，保留动效可以提升体验。
-- **影响**：`src/App.css` 中唯一的 `@media (prefers-reduced-motion: reduce)` 块删除；动画在所有系统设置下保持启用。`docs/design/SPEC.md` §7.4 / §8 当前仍要求支持 reduced-motion，需在实施时同步修改。
+- **实施**：删除 `src/App.css` 中唯一的 `@media (prefers-reduced-motion: reduce)` 块；动画在所有系统设置下保持启用。
+- **影响**：`docs/design/SPEC.md` §7.4 / §8 已同步改为"不提供 reduced-motion 降级"。
 - **已知取舍**：对前庭敏感/晕动症用户失去系统级的动效关闭能力。记录为已接受的取舍，不在本次实施中保留降级分支。
-- **验收**：`src/` 不再出现 `prefers-reduced-motion`；SPEC 对应条款更新；动效在减少动效的系统设置下仍正常播放。
+- **验收**：`src/` 不再出现 `prefers-reduced-motion`；SPEC 对应条款已更新；动效在减少动效的系统设置下仍正常播放。
 
-### 3.2 DEC-02 字体精简（待实施）
+### 3.2 DEC-02 字体精简
 
 - **用户观察**：字体用得太多，体积膨胀。
-- **现状**（2026-11-20）：
-  - 三个字族：Figtree（UI 拉丁）、Noto Sans SC（中文）、Cascadia Code（数据/等宽）。
-  - 字重：Figtree 400/500/600/700；Noto Sans SC 400/500/600/700；Cascadia Code 400/600。
-  - `dist/assets` 约 12MB，其中 Noto Sans SC 约 11MB（4 个字重 × 101 个 unicode-range 子集），Cascadia Code 约 336KB，Figtree 约 80KB；CSS 约 453KB。
+- **状态**：已实施（2026-11-22）。
+- **现状（实施前）**：三个字族 Figtree / Noto Sans SC / Cascadia Code；字重 Figtree 400/500/600/700、Noto 400/500/600/700、Cascadia 400/600；`dist/assets` 约 12MB，其中 Noto Sans SC 约 11MB（4 个字重 × 101 个 `unicode-range` 子集），Cascadia Code 约 336KB，Figtree 约 80KB；CSS 约 453KB。
 - **判断**：体积主要来自 **Noto Sans SC 的字重 × 子集数量**，不是字族数量。Cascadia/Figtree 合计不到 0.5MB，先裁 Noto 收益最大。
-- **建议方向**（按收益排序）：
-  1. Noto Sans SC 从 4 个字重减到 2–3 个（例如保留 400/600，把 `<strong>` 改为 600）；或改用 `chinese-simplified-400.css` 等单子集文件，避免每个字重打包 101 个 face。目标把字体资产压到 4–5MB。
-  2. Cascadia Code 只保留 400（工具名当前用 600，可降到 400 或用合成粗体）；10 个子集里只保留 latin/latin-ext。
-  3. Figtree 保持 400/500/600 即可，700 可交给 `<strong>` 映射到 600；该字族本身很小，收益有限。
-  4. 如果最终目标就是"两个字族"：可去掉 Cascadia Code，等宽区使用系统栈（`ui-monospace, SFMono-Regular, Consolas, monospace`），但只省约 336KB，且跨平台数据区字形会不一致；不建议作为第一优先。
-- **权衡**：`unicode-range` 分片降低首屏加载量但增加包体；单子集文件降低包体但首次加载中文要拉完整子集。桌面/Android 都是本地资产，建议以包体优先，移动端收益更大。
-- **验收指标**：字体资产 < 5MB；`@font-face` 数量显著下降；CSS < 200KB；中文和等宽数字的视觉不回退。
-- **文档影响**：`docs/design/SPEC.md` §2.1/§2.2 的字重与打包约定需同步。
+- **实施（2026-11-22）**：Figtree 改为 `latin-*` 4 个字重；Noto Sans SC 改为 `chinese-simplified-{400,500,600}` 三个单子集；Cascadia Code 改为 `latin-{400,600}`。结果：`dist/assets` 约 3.7MB，字体约 3.4MB、11 个 woff2（含 Figtree 两个斜体），CSS 约 61KB。
+- **权衡**：`unicode-range` 分片降低首屏加载量但增加包体；单子集文件降低包体但首次加载中文要拉完整子集。桌面/Android 都是本地资产，本次以包体优先；`chinese-simplified` 单子集只覆盖简体，繁体/生僻字会回退到系统 CJK 字体。
+- **验收指标**：字体资产 < 5MB；`@font-face` 数量显著下降；CSS < 200KB；中文和等宽数字的视觉不回退。已达到。
+- **文档影响**：`docs/design/SPEC.md` §2.1/§2.2 的字重与打包约定已同步；`--font-mono` 增加 Noto Sans SC 作为中文回退。
 
 ---
 
@@ -176,6 +172,36 @@
 ## 5. 文档影响
 
 - 本文件登记在 `docs/README.md`。
-- DEC-01 实施时同步 `docs/design/SPEC.md` §7.4/§8。
-- DEC-02 实施时同步 `docs/design/SPEC.md` §2.1/§2.2。
+- DEC-01 已同步 `docs/design/SPEC.md` §7.4/§8。
+- DEC-02 已同步 `docs/design/SPEC.md` §2.1/§2.2。
 - 若后续把"移除 reduced-motion"视为范围移除，可在 `docs/80-roadmap/scope-additions.md` 追加一行引用本节；本文件先保留完整决策上下文。
+
+---
+
+## 6. 实施记录（2026-11-22）
+
+第一批：
+
+- **动效**：删除 `src/App.css` 的 `prefers-reduced-motion` 分支；同步 `docs/design/SPEC.md` §7.4/§8。
+- **字体**：Figtree 收为 latin 4 字重，Noto Sans SC 收为 `chinese-simplified` 400/500/600，Cascadia Code 收为 latin 400/600；`--font-mono` 增加 Noto Sans SC 中文回退。结果见 DEC-02。
+- **强调色**：恢复天蓝 `--accent` / hover / active / soft / softer / border / bright（对应 `22b506a`）；为满足对比度，`--accent-ink` 取 `#2565C7`、`--on-accent` 取 `#0B1F33`，焦点环改用 `--accent-ink`。
+- **移动端**：设置页导航换行；供应商页 drill-down；设置页安全区；触摸设备输入 16px；Composer 触摸 Enter 换行 + 可见禁用原因；Runbar 保留标签；coarse 折叠标题 40px。
+- **性能**：`reuseMessages` 按 message id 复用不可变消息；`toolNames` 改 `createMemo`。
+- **可访问性/文案**：设置页错误/状态加 `role`；输入补 `aria-label`；记忆时间跟随 app 语言；搜索截断提示；`errorText` 收敛；死 CSS/重复规则清理。
+- **第二批**：
+  - 设置页 Back 会清理 wizard 残留；跨断点保留草稿；删除按钮移出 sticky footer 并改为内联二次确认；切换供应商/新建时增加未保存草稿守卫，离开设置页（Back/标题栏/Android 返回）也会拦截并确认；保存/测试/删除失败会弹 danger toast；记忆删除武装时图标改为对勾；恢复上次 section；Memory/General 首次访问才挂载；移动端字号与触控命中区提升。
+  - 聊天：窄屏/移动端保留模式状态；审批出现时通过 sr-only live region 播报数量；Composer 粗指针检测改为响应式；中文微标签提升到 11px；触摸命中区提升到 44px；中文 strong 使用真实 600 字重。
+  - 后端：新增结构化 `risk_level` 字段（`ApprovalSpec` / `ApprovalRequested` / `PendingApprovalView`），前端不再依赖中文风险句；`phi-i18n` 中文标点统一为全角。
+  - 工程：Android 硬件返回键接入；根级 `ErrorBoundary`；工作区目录选择器（`tauri-plugin-dialog`）；Settings 页面独立 chunk；`typecheck`/`test`/`check` 脚本；新增 26 个纯函数测试；`tests/` 加入版本控制白名单。
+- **第三批（文件拆分与边界收敛）**：
+  - `App.tsx` 729 → 442 行；流/事件、模型选择、纯 helper 拆到 `src/app/`。
+  - `ProviderEditor.tsx` 1150 → 423 行；连接表单、模型列表、wizard 模型选择、共享表单 helper 拆为独立文件。
+  - `Markdown.tsx` 673 → 304 行；纯 parser 拆到 `markdown/parse.ts`。
+  - `RichHtml.tsx` 1063 → 396 行；allowlist、属性、SVG、表单、状态拆到 `rich-html/`。
+  - `App.css` 3299 → 15 行 barrel；15 个有序模块在 `src/styles/app/`，拼接字节级一致。
+  - `Settings.css` 1212 → 10 行 barrel；10 个有序模块在 `src/settings/styles/`，拼接字节级一致。
+  - 新增 `src/bridge.ts` 集中命令/事件边界；页面不再直接写 `invoke`/`listen` 字符串；Rust→TS 类型仍为手写镜像。
+  - 抽屉增加焦点陷阱与关闭后焦点返还；移动端设置页显示节点存储说明；触摸命中区统一到 44px。
+  - 新增 happy-dom + Babel Solid 的 DOM 级渲染测试（9 个），合计 35 个前端测试。
+
+仍未处理（后续）：Rust→TS 类型生成（bridge facade 已落地）、ESLint/格式化、虚拟列表与流式 O(n²)。

@@ -1,0 +1,193 @@
+/* responsive */
+
+@media (max-width: 1000px) {
+  .providers-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-nav {
+    width: 190px;
+  }
+
+  .settings-content {
+    padding: var(--sp-4) var(--sp-4) 0;
+  }
+
+  .providers-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .providers-list {
+    position: static;
+  }
+
+  .connection-fields {
+    max-width: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-page {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    overflow: visible;
+    border-right: none;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .settings-back {
+    flex: none;
+    margin: 0;
+  }
+
+  .settings-nav-item {
+    flex: none;
+  }
+
+  .settings-nav .side-label,
+  .settings-nav-foot {
+    display: none;
+  }
+
+  .settings-content {
+    padding: var(--sp-4) var(--sp-4) 0;
+  }
+
+  .settings-content-inner {
+    max-width: none;
+  }
+
+  .settings-content-foot {
+    display: block;
+    padding: 0 0 calc(var(--sp-5) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .providers-layout.detail-open .providers-list,
+  .providers-layout:not(.detail-open) .provider-detail {
+    display: none;
+  }
+
+  .settings-page-head {
+    flex-wrap: wrap;
+  }
+
+  .map-row {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .map-row input:first-child {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .map-row input:nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .map-row .icon-btn {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  /* Chinese micro labels need a little more size on phone screens. */
+  .settings-page .field > span:first-child {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .settings-page .field-hint,
+  .settings-page .field-error {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .settings-subtitle {
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .provider-meta,
+  .editor-meta {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .model-tag,
+  .provider-active {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 560px) {
+  .settings-page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .picker-search {
+    max-width: none;
+  }
+
+  .provider-model-main,
+  .model-pick-main {
+    flex-basis: 160px;
+  }
+}
+
+@media (pointer: coarse) {
+  .settings-page .btn,
+  .settings-page .settings-nav-item,
+  .settings-page .settings-back,
+  .settings-page .provider-item,
+  .settings-page input:not([type="checkbox"]),
+  .settings-page select {
+    min-height: 44px;
+  }
+
+  .settings-page .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .settings-page .link-button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .settings-page .memory-forget {
+    width: 44px;
+    height: 44px;
+  }
+
+  .settings-page .provider-model-row,
+  .settings-page .model-pick-row {
+    min-height: 44px;
+  }
+
+  .settings-page .editor-section.collapsible > summary {
+    min-height: 44px;
+  }
+
+  .settings-page .map-row {
+    grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.4fr) auto;
+  }
+}
+
+@media (max-width: 760px) and (pointer: coarse) {
+  .settings-page .map-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}

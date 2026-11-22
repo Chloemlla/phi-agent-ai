@@ -149,6 +149,18 @@ If a model call fails after some text was already streamed, that partial text is
 persisted instead of being dropped. `shell_exec` keeps its own per-command
 timeout (default 120s, max 300s); the HTTP client keeps its request timeout.
 
+Multi-agent (single-level Lead-Sidekick with per-agent message threads) and
+auxiliary model roles (session title, memory maintenance) are designed but not
+implemented: see `docs/40-runtime/multi-agent.md`,
+`docs/40-runtime/auxiliary-models.md` and ADR-0012–0014. Image generation has
+its own user-selected model configuration and `image.generate` port
+(`docs/40-runtime/auxiliary-models.md` §6, ADR-0016); the decision model is a
+separate typed-judgment port (`docs/40-runtime/decision-model.md`, ADR-0015).
+The legacy `Task` entity, `TaskCreated` event and `taskId` field were deleted
+outright (ADR-0012); runs no longer carry a task id. Delegation is expected to
+live in the runtime skeleton; do not add a `strategy.orchestration` slot until
+a replaceable orchestrator is actually needed.
+
 ## Memory
 
 Long-term memory is an optional built-in plugin (`memory.store` slot). A node

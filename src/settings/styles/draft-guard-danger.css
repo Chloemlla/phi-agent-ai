@@ -1,0 +1,48 @@
+/* Unsaved-draft guard and inline delete confirmation */
+
+.draft-guard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-3);
+  padding: 10px 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--r-md);
+  background: var(--warn-soft);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.draft-guard-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-leave-guard {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  margin: 0 0 var(--sp-3);
+}
+
+.editor-danger {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-softer);
+}
+
+.editor-danger-question {
+  flex: 1 1 220px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}

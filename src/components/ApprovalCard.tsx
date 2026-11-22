@@ -26,7 +26,12 @@ export function ApprovalCard(props: {
   onResolve: (approved: boolean) => Promise<void>;
 }) {
   const [busy, setBusy] = createSignal(false);
-  const level = () => riskLevel(props.approval.toolId, props.approval.risk);
+  const level = () =>
+    riskLevel(
+      props.approval.riskLevel,
+      props.approval.toolId,
+      props.approval.risk,
+    );
   const expired = () => {
     const expires = Date.parse(props.approval.expiresAt);
     return Number.isFinite(expires) && expires <= props.now;
@@ -100,7 +105,7 @@ export function ApprovalCard(props: {
         </button>
         <button
           type="button"
-          classList={{ btn: true, default: true, small: level() === "low", reject: true }}
+          classList={{ btn: true, small: level() === "low", reject: true }}
           disabled={busy() || expired()}
           onClick={() => void resolve(false)}
         >

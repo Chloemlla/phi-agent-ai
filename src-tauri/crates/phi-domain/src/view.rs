@@ -28,7 +28,6 @@ pub struct MessageView {
 #[serde(rename_all = "camelCase")]
 pub struct RunView {
     pub id: String,
-    pub task_id: String,
     pub turn_id: String,
     pub state: String,
     pub steps: u64,
@@ -67,7 +66,10 @@ pub struct PendingApprovalView {
     pub tool_id: String,
     pub args_preview: Value,
     pub action_digest: String,
+    /// Localized human-readable risk sentence.
     pub risk: String,
+    /// Structured risk tier (`low`, `medium`, `high`).
+    pub risk_level: String,
     pub requested_at: String,
     pub expires_at: String,
 }

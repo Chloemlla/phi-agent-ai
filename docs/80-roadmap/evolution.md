@@ -1,6 +1,6 @@
 # 演进路线：MVP → 成长 → 成熟
 
-> 状态：🌿 · 最后更新：2026-11-08
+> 状态：🌿 · 最后更新：2026-11-22
 > 上游：`10-architecture/overview.md` §6、`00-overview/open-questions.md`（Q3 桌面优先）
 > 方法：借鉴 `awesome-architecture/tutorial/20-演进剧本MVP到规模化.md`、`演进触发信号.md`
 
@@ -24,7 +24,7 @@
 
 **据此调整**：
 - **移动端完整支持不作为 v1 门槛**。
-- **F4 多 Agent / 辅助模型审批从 v1 硬门槛移到后续迭代**；但**架构预留必须在 v1 就位**（执行树 `parentRunId`、`strategy.orchestration` 扩展点、Task 树、深度/扇出上限、取消传播）。
+- **F4 多 Agent / 辅助模型审批从 v1 硬门槛移到后续迭代**；但**架构预留必须在 v1 就位**（执行树 `parentRunId`、`strategy.orchestration` 扩展点、Matter / 深度/扇出上限、取消传播）。2026-11-22 起，第一版形态定为单层 Lead-Sidekick（ADR-0013），`Task` 已删除并由 Matter 取代（ADR-0012）；`strategy.orchestration` 槽位暂不新增，委派属于运行时骨架。
 - **移动技术验证提前**：在**冻结插件 ABI 之前**，验证 Rust + QuickJS 在移动端的启动、宿主调用、挂起与恢复限制。完整移动产品可以后做，但平台假设不能到最后才发现不成立。
 
 | 阶段 | 架构长什么样 | 功能范围 | 该操心什么 |
@@ -136,7 +136,7 @@
    M3.5 移动技术验证（在冻结插件 ABI 之前）
    M4  v1 服务端节点 + 同机/局域网 attach
    M5  TS 插件 ABI（内嵌 QuickJS）+ 自带 CLI 逃生舱 + 插件可安装
-   M6  多 Agent 单层主从 + 辅助模型审批（后续迭代）
+   M6  Lead-Sidekick 单层委派 + 辅助模型角色（后续迭代；见 ADR-0013 / ADR-0014）
    M7  移动端完整体验
    M8  R1 换端 → R2 复制 → 插件市场（按需）
 ```

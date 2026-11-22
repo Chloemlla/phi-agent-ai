@@ -93,7 +93,7 @@
 | 模块 | 职责 | 依赖端口 | 移除后果 |
 |---|---|---|---|
 | `plugin-loop` 〔基线〕 | 提供可插拔的行动循环策略（ReAct/plan-execute/…）与 **Run/Step/检查点/用量记录**（预算硬上限为可选目标态） | Model, Journal | 无运行时骨架 → `Maintenance`（必需槽位 `runtime.skeleton`） |
-| `plugin-orchestrator` | 多 Agent 协作编排（supervisor/group-chat/pipeline） | Loop, Session | 只能单 Agent（v1 目标态） |
+| `plugin-orchestrator` | 多 Agent 协作编排（supervisor/group-chat/pipeline） | Loop, Session | 第一版由 `plugin-loop` 内置 Lead-Sidekick，暂不拆出（ADR-0013） |
 | `plugin-context` 〔基线〕 | 上下文构筑（分层组装、压缩） | Memory, Model | 上下文退化为原始堆叠 |
 | `plugin-session` 〔基线〕 | 会话/轮次/运行的状态管理与事件产出 | Storage, Journal | 无会话模型 → `Maintenance`（必需槽位 `session.store`） |
 

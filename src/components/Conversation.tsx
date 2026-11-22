@@ -1,7 +1,13 @@
 // Conversation transcript: document flow with role rows, collapsible tool
 // blocks and risk-graded approval cards. No left/right bubbles.
 
-import { For, Show } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+} from "solid-js";
 import {
   formatClock,
   lastAssistantText,
@@ -296,7 +302,7 @@ export function Conversation(props: {
   const failedRun = () =>
     props.run && FAILED_STATES.includes(props.run.state) ? props.run : null;
 
-  const toolNames = () => {
+  const toolNames = createMemo(() => {
     const names = new Map<string, string>();
     for (const message of props.detail?.session.messages ?? []) {
       for (const block of message.blocks) {
@@ -304,7 +310,7 @@ export function Conversation(props: {
       }
     }
     return names;
-  };
+  });
 
   const durableStream = () =>
     streamMatchesDurable(props.streamText, lastAssistantText(props.detail));
@@ -312,8 +318,29 @@ export function Conversation(props: {
   const showStream = () => props.streamText.length > 0 && !durableStream();
   const streamSegments = () => splitInlineUi(props.streamText);
 
+  // Announce pending approvals once per count change; the transcript itself is
+  // not a live region.
+  const approvalCount = createMemo(
+    () => props.detail?.pendingApprovals.length ?? 0,
+  );
+  const [approvalNotice, setApprovalNotice] = createSignal("");
+  createEffect(() => {
+    const count = approvalCount();
+    setApprovalNotice(
+      count > 0 ? tArgs("Approval required ({count})", { count }) : "",
+    );
+  });
+
   return (
     <div class="conversation-inner">
+      <div
+        class="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {approvalNotice()}
+      </div>
       <Show when={!props.modeOk}>
         <div class="banner warn" role="status">
           <IconAlert size={15} />

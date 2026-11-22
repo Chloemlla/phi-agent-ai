@@ -1,6 +1,6 @@
 # 术语表 / 领域语言
 
-> 状态：🌱（随讨论增补） · 最后更新：2026-11-08
+> 状态：🌱（随讨论增补） · 最后更新：2026-11-22
 
 这是 phi-agent 的**统一语言（ubiquitous language）**。所有设计文档与代码中的专有名词以本表为准。
 
@@ -31,11 +31,16 @@
 | 术语 | 定义 | _避免_ |
 |---|---|---|
 | **会话 Session** | 一段有边界的交互上下文（对话）。默认由**一个节点**持有（单写者）。包含轮次、消息、记忆作用域与运行。 | 对话、聊天、线程 |
-| **任务 Task** | 一个**命名的目标**，可跨会话、可指派、可由多个 Run/Agent 协作。**数据上恒在**（每个 Run 必带 `taskId`），**界面上可隐式**（未显式建立时惰性创建隐藏 Task，无全局默认 Task）。 | job、to-do、工单 |
+| **事项 Matter** | 一个**长期目标 / 理解容器**，可跨会话、跨项目、日程与时间延续；保存理解与关联，不保存执行实时状态；Run 结束不会自动完成。 | job、to-do、工单 |
+| **任务 Task（已删除）** | 旧顶层目标实体，已被 Matter 取代（ADR-0012）；已从领域模型与代码中删除，不保留兼容。 | — |
+| **会话线程 Thread** | 会话内消息的可见性作用域：`main` 是用户 / Lead，`agent:<id>` 是某个 Sidekick；不同线程不共享历史。 | channel、频道、群聊 |
 | **轮次 Turn** | 会话中一次「用户发言 + Agent 全部回应」的往返。 | 消息、message |
 | **运行 Run** | 会话内一次 Agent 行动循环的执行，产出若干步骤与检查点。 | 任务执行、job、execution |
 | **步骤 Step** | 运行中的一次循环迭代（一次「规划→行动→观察」）。 | 迭代、iteration |
 | **执行树 Run Tree** | 根 Run 与子 Run 经 `parentRunId` 组成的树；一个 Turn 至多一个活跃**根 Run**，子 Run 并行但不新建用户轮次。 | 子任务、subagent 树 |
+| **Agent 实例 Agent Instance** | 一个持久 Agent 身份（Lead / Sidekick），拥有消息线程、pinned 模型与委派关系；一个身份可产生多个 Run，比单次执行活得久。 | 子任务、bot |
+| **委派 Delegation** | 父 Agent 创建子 Agent 并交付 brief 的持久关系；包含报告目标与工作模式，可查询、可恢复、可进入。 | dispatch（更重的交办层，暂未引入） |
+| **报告 Report** | 子 Run 终态后交付给请求者的结果；**完成、交付、已读**是三个不同状态，不能互相冒充。 | 汇总、result |
 | **结果未知 Outcome Unknown** | 工具调用的一种终态：可能已执行、但无法查证且非幂等。暂停依赖它的后续动作，等待核对。 | 失败、超时（都不准确） |
 | **附加 Attach** | 一个外壳连到某节点的某会话，进行查看/控制（v1 协同的基本形态）。 | 连接、connect |
 | **换端 Handoff** | 把进行中 Run 的所有权（检查点 + 事件）迁到另一节点继续（预留 R1）。 | 迁移、migration、转移 |
@@ -46,6 +51,12 @@
 | 术语 | 定义 | _避免_ |
 |---|---|---|
 | **Agent 定义 Agent Definition** | 一个 Agent 的声明：角色、提示、可用工具/技能、模型、预算（目标态）。是数据，不是代码。 | Agent 模板、bot |
+| **Lead** | 根 Agent，唯一面向用户的接口；负责规划、审查和选择 Sidekick 模型。 | 主 Agent、supervisor |
+| **Sidekick** | 被 Lead 派发的执行 Agent；使用独立线程，不直接对用户说话，不能再派发子 Agent。 | worker、subagent（口语可接受） |
+| **辅助模型 Auxiliary Model** | 按角色绑定的服务调用模型，用于标题、记忆整理、生图、审批判定等；不跑行动循环、不进入 Run 树。 | 小模型（仅口语）、judge（仅审批角色） |
+| **服务调用 Service Call** | 系统或插件发起的一次受限模型 / 生图调用，有审计与用量，不创建 Turn / Run / Step。 | 后台 Run、内部执行 |
+| **决策模型 Decision Model** | 接收状态 + 类型化问题（`noul` / `choice` / `score`），返回概率 / 置信度的判断层；不生成文本、不调工具、不拥有权限。 | judge（仅审批角色）、分类器 |
+| **生图模型 Image Model** | 用户配置的图片生成模型；由 `image.generate` 端口调用，Agent 只能主动调用工具，不能选择或切换模型。 | 图片模型池 |
 | **行动循环 Loop / Loop Strategy** | 驱动「规划→行动→观察」的可插拔策略（ReAct、plan-execute、reflexion…）。内核不内置某一种。 | agent loop（可接受）、主循环 |
 | **工具 Tool** | 一个可被调用的能力，有输入 schema 与执行体；可能有副作用，需经策略与沙箱。 | 函数、function、action |
 | **技能 Skill** | 一个声明式的「知识+指引」包（清单 + 指令/提示 + 资源 + 可选脚本）。注上下文、导行为，区别于「调用」。 | 能力、capability |
@@ -121,4 +132,4 @@
 | Skill vs Capability vs Plugin | 三者边界见上表，但「技能能否携带工具」的边界待定 |
 | Node vs Server | 「服务端节点」是否要单独叫法，还是 Node 的一种 role？ |
 
-> **已落定**：`Session` vs `Task` —— 两者分开，`Session` 是交互上下文（对话），`Task` 是命名目标（ADR-0008）；`Run` 必属一个 `Task`（数据上恒在，界面上可隐式）。
+> **已落定（2026-11-22 更新）**：`Session` 与长期目标分开——`Session` 是交互上下文（对话），`Matter` 是长期目标 / 理解容器（ADR-0012）；`Run` 的 `matterId` 可选，不强制每个 Run 属于 Matter。旧 `Task` 已删除。

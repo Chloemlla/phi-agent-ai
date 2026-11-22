@@ -251,7 +251,10 @@ pub struct ApprovalSpec {
     pub tool_id: String,
     pub args_preview: Value,
     pub action_digest: String,
+    /// Localized human-readable risk sentence.
     pub risk: String,
+    /// Structured risk tier (`low`, `medium`, `high`).
+    pub risk_level: String,
     pub expires_in_secs: u64,
 }
 

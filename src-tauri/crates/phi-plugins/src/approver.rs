@@ -75,6 +75,7 @@ impl ApproverPort for HumanApprover {
             args_preview: spec.args_preview.clone(),
             action_digest: spec.action_digest.clone(),
             risk: spec.risk.clone(),
+            risk_level: spec.risk_level.clone(),
             requested_at,
             expires_at: expires_at.clone(),
         };
@@ -103,6 +104,7 @@ impl ApproverPort for HumanApprover {
                 tool_id: spec.tool_id,
                 action_digest: spec.action_digest,
                 risk: spec.risk,
+                risk_level: spec.risk_level,
                 args_preview: spec.args_preview,
                 expires_at,
             },

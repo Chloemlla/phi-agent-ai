@@ -65,15 +65,20 @@ export function modeTone(mode: string | null | undefined): Tone {
   }
 }
 
-/// The node currently reports risk as a human sentence. The level is derived
-/// from the tool identity first, because that is the stable semantic; the
-/// sentence is only a fallback for future tools.
-export function riskLevel(toolId: string, risk: string): RiskLevel {
+// The backend reports a structured risk tier; the human sentence is only a
+// fallback for journals written before the field existed. Tool identity is the
+// last resort because it is a stable semantic signal.
+export function riskLevel(
+  level: string | undefined,
+  toolId: string,
+  risk: string,
+): RiskLevel {
+  if (level === "low" || level === "medium" || level === "high") return level;
   if (toolId === "shell_exec") return "high";
   if (toolId === "fs_write") return "medium";
   const lowered = risk.toLowerCase();
-  if (lowered.includes("irreversible") || risk.includes("不可逆")) return "high";
-  if (lowered.includes("reversible") || risk.includes("可逆")) return "medium";
+  if (lowered.includes("irreversible")) return "high";
+  if (lowered.includes("reversible")) return "medium";
   return "low";
 }
 

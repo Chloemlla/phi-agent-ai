@@ -1,0 +1,277 @@
+/* ─────────────────────────── model picker ─────────────────────────── */
+
+.model-picker {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(320px, 60vw);
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.model-chip:hover:not(:disabled),
+.model-picker.open .model-chip {
+  background: var(--bg-subtle);
+  border-color: var(--border-softer);
+  color: var(--text-primary);
+}
+
+.model-chip:disabled {
+  opacity: 0.5;
+}
+
+.model-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.model-chip-effort {
+  flex: none;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.model-chip svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.model-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
+  animation: pop var(--dur-fast) var(--ease);
+}
+
+.model-menu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.model-menu-provider {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(300px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.model-item {
+  position: relative;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.model-row:hover,
+.model-row:focus-visible {
+  background: var(--bg-subtle);
+}
+
+.model-row:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+}
+
+.model-row.current {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.model-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-row-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--accent-ink);
+}
+
+.model-row-effort {
+  flex: none;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.model-row.current .model-row-effort {
+  color: var(--accent-ink);
+}
+
+.model-submenu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 6px);
+  z-index: 61;
+  width: 168px;
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.model-submenu.flip {
+  left: auto;
+  right: calc(100% + 6px);
+}
+
+.model-submenu-label {
+  padding: 3px 8px 5px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.model-effort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.model-effort:hover,
+.model-effort:focus-visible {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.model-effort:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+}
+
+.model-effort.checked {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.model-effort-check {
+  width: 14px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.model-note {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Coarse pointers: the submenu expands inline under the row. */
+.model-picker.coarse .model-submenu {
+  position: static;
+  width: auto;
+  margin: 0 0 2px 16px;
+  padding: 0 0 2px;
+  border: none;
+  border-left: 1px solid var(--border-softer);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.model-picker.coarse .model-submenu-label {
+  padding-left: 10px;
+}
+
+.model-picker.coarse .model-effort {
+  min-height: 38px;
+  padding-left: 10px;
+}
+
+/* Narrow mouse windows get the same inline submenu as touch devices; a
+   right-hand flyout would run off the viewport. */
+@media (max-width: 760px) {
+  .model-submenu {
+    position: static;
+    width: auto;
+    margin: 0 0 2px 16px;
+    padding: 0 0 2px;
+    border: none;
+    border-left: 1px solid var(--border-softer);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .model-submenu-label {
+    padding-left: 10px;
+  }
+
+  .model-effort {
+    min-height: 36px;
+    padding-left: 10px;
+  }
+}

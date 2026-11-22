@@ -3,20 +3,17 @@
 // touches the database directly.
 
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
-import { t, tArgs } from "../i18n";
+import {
+  addMemory as addMemoryCommand,
+  forgetMemories,
+  getMemoryStats,
+  listMemories,
+  searchMemories,
+} from "../bridge";
+import { t, tArgs, lang } from "../i18n";
+import { errorText } from "../errors";
 import { IconCheck, IconSearch, IconTrash } from "../components/Icons";
-import type {
-  ForgetReport,
-  MemoryAddOutcome,
-  MemoryHit,
-  MemoryRecord,
-  MemoryStats,
-} from "../types";
-
-function errorText(error: unknown): string {
-  return typeof error === "string" ? error : String(error);
-}
+import type { MemoryRecord, MemoryStats } from "../types";
 
 function scopeLabel(scope: MemoryRecord["scope"]): string {
   switch (scope) {
@@ -57,9 +54,13 @@ function stateLabel(state: MemoryRecord["state"]): string {
   }
 }
 
+const SEARCH_LIMIT = 50;
+
 function formatTime(raw: string): string {
   const date = new Date(raw);
-  return Number.isNaN(date.getTime()) ? raw : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? raw
+    : date.toLocaleString(lang() === "zh-CN" ? "zh-CN" : "en-US");
 }
 
 export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
@@ -67,6 +68,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   const [stats, setStats] = createSignal<MemoryStats | null>(null);
   const [query, setQuery] = createSignal("");
   const [filtered, setFiltered] = createSignal(false);
+  const [truncated, setTruncated] = createSignal(false);
   const [fact, setFact] = createSignal("");
   const [scope, setScope] = createSignal<"user" | "project">("project");
   const [loading, setLoading] = createSignal(true);
@@ -102,12 +104,12 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   async function loadList() {
     // The search box drives BM25 search explicitly; loading the list must not
     // silently apply a substring filter from an unsubmitted query.
-    const list = await invoke<MemoryRecord[]>("list_memories", { text: null });
+    const list = await listMemories(null);
     setMemories(list);
   }
 
   async function loadStats() {
-    setStats(await invoke<MemoryStats>("get_memory_stats"));
+    setStats(await getMemoryStats());
   }
 
   async function load() {
@@ -115,9 +117,10 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   }
 
   async function runSearch(text: string) {
-    const hits = await invoke<MemoryHit[]>("search_memories", { query: text, limit: 50 });
+    const hits = await searchMemories(text, SEARCH_LIMIT);
     setMemories(hits.map((hit) => hit.record));
     setFiltered(true);
+    setTruncated(hits.length >= SEARCH_LIMIT);
   }
 
   /// Reload whatever the page is currently showing: BM25 results stay BM25
@@ -145,6 +148,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
   async function search(event: Event) {
     event.preventDefault();
     disarmDelete();
+    setTruncated(false);
     const text = query().trim();
     if (!text) {
       setFiltered(false);
@@ -171,6 +175,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
 
   async function refresh() {
     try {
+      setTruncated(false);
       await load();
     } catch (e) {
       setError(errorText(e));
@@ -186,10 +191,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
     setError("");
     setNotice("");
     try {
-      const outcome = await invoke<MemoryAddOutcome>("add_memory", {
-        fact: text,
-        scope: scope(),
-      });
+      const outcome = await addMemoryCommand(text, scope());
       if (outcome.status === "admitted") {
         setNotice(t("Memory saved."));
       } else if (outcome.status === "duplicate") {
@@ -222,7 +224,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
     setError("");
     setNotice("");
     try {
-      const report = await invoke<ForgetReport>("forget_memories", { ids: [memory.id] });
+      const report = await forgetMemories([memory.id]);
       setNotice(
         tArgs("Deleted {records} fact(s) and {episodes} source excerpt(s).", {
           records: report.records,
@@ -270,11 +272,13 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
             value={fact()}
             onInput={(event) => setFact(event.currentTarget.value)}
             placeholder={t("Add a stable fact the agent should remember")}
+            aria-label={t("Add a stable fact the agent should remember")}
             maxLength={2000}
           />
           <select
             class="settings-input memory-scope"
             value={scope()}
+            aria-label={t("Scope")}
             onChange={(event) => setScope(event.currentTarget.value as "user" | "project")}
           >
             <option value="project">{t("Project")}</option>
@@ -291,6 +295,7 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
             value={query()}
             onInput={(event) => setQuery(event.currentTarget.value)}
             placeholder={t("Search memories")}
+            aria-label={t("Search memories")}
           />
           <button class="btn" type="submit" disabled={busy()}>
             <IconSearch size={14} />
@@ -305,13 +310,17 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
       </section>
 
       <Show when={error()}>
-        <div class="banner danger">{error()}</div>
+        <div class="banner danger" role="alert">{error()}</div>
       </Show>
       <Show when={notice()}>
-        <div class="settings-note">
+        <div class="settings-note" role="status">
           <IconCheck size={14} />
           {notice()}
         </div>
+      </Show>
+
+      <Show when={filtered() && truncated()}>
+        <p class="hint">{t("Showing up to 50 matches.")}</p>
       </Show>
 
       <Show when={loading()}>
@@ -355,7 +364,12 @@ export function MemoryPage(props: { onRefresh: () => Promise<void> }) {
                 disabled={busy()}
                 onClick={() => forget(memory)}
               >
-                <IconTrash size={14} />
+                <Show
+                  when={pendingDelete() === memory.id}
+                  fallback={<IconTrash size={14} />}
+                >
+                  <IconCheck size={14} />
+                </Show>
               </button>
             </li>
           )}

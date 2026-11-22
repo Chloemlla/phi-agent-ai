@@ -1,6 +1,6 @@
 # 插件系统与扩展点
 
-> 状态：🌿 · 最后更新：2026-11-08
+> 状态：🌿 · 最后更新：2026-11-22
 > 上游：ADR-0001（微内核）、ADR-0005（插件三档）、原则 P1/P5/P6/P9/P10
 > 关联：`10-architecture/module-map.md`（模块清单）
 
@@ -179,7 +179,7 @@ limits:                            # 运行限制（宿主强制）
 | 扩展点 | 契约 | 说明 |
 |---|---|---|
 | `strategy.loop` | 行动循环策略 | ReAct / plan-execute / reflexion，内核不内置任一种 |
-| `strategy.orchestration` | 多 Agent 编排 | supervisor / group-chat / pipeline |
+| `strategy.orchestration` | 多 Agent 编排 | supervisor / group-chat / pipeline；第一版 Lead-Sidekick 在运行时骨架内，暂不启用此槽位（ADR-0013） |
 | `context.contributor` | 向上下文注入内容 | 注入项目规则、注入检索结果 |
 | `strategy.modelRouter` | 模型路由策略 | 简单任务给小的、复杂给大的 |
 | `retrieval.strategy` | 记忆/检索策略 | 混合召回 + 重排 + 置信门控 |
@@ -197,6 +197,8 @@ limits:                            # 运行限制（宿主强制）
 | `provider.sandbox` 🔒 | 沙箱执行后端 | 进程 / 容器 / 远端（按端选择档位） |
 | `provider.memoryBackend` | 记忆的存储后端 | SQLite / 向量库 / 远端 |
 | `provider.mcpServer` | MCP 工具来源 | 接入外部 MCP（经防腐层翻译 schema） |
+| `image.generate` | 图片生成后端 | OpenAI Images / Gemini Images / 插件；独立配置，模型由用户选择（ADR-0016） |
+| `decision.evaluate` | 类型化决策后端 | Jev / 兼容协议；只在判断点使用，不生成文本（ADR-0015） |
 
 ### D · 边界适配型（多为 T2 或内核内置适配器）
 

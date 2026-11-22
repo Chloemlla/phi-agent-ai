@@ -4,7 +4,7 @@
 
 import { Show, createSignal, onCleanup, onMount } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { t } from "../i18n";
+import { t, tArgs } from "../i18n";
 import { modeTone, stateLabel } from "../status";
 import { isMobilePlatform } from "../types";
 import {
@@ -167,6 +167,7 @@ export function Titlebar(props: {
                 [`tone-${modeTone(props.mode)}`]: true,
               }}
               title={props.modeReason}
+              aria-label={tArgs("Mode {mode}", { mode: stateLabel(props.mode) })}
             >
               <span class="dot" />
               {stateLabel(props.mode)}
@@ -204,6 +205,23 @@ export function Titlebar(props: {
         </Show>
 
         <Show when={mobile()}>
+          <Show when={props.mode}>
+            <span
+              class="titlebar-status"
+              role="status"
+              title={tArgs("Mode {mode}", { mode: stateLabel(props.mode) })}
+              aria-label={tArgs("Mode {mode}", {
+                mode: stateLabel(props.mode),
+              })}
+            >
+              <span
+                classList={{
+                  dot: true,
+                  [`tone-${modeTone(props.mode)}`]: true,
+                }}
+              />
+            </span>
+          </Show>
           <button
             type="button"
             classList={{ "icon-btn": true, active: props.settingsOpen }}

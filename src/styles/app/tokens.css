@@ -1,0 +1,105 @@
+/* phi-agent visual language. Tokens are the only source of color; components
+   reference roles, never raw hex. Light theme only in v1. */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg-app: #f5f6f7;
+  --bg-surface: #ffffff;
+  --bg-sidebar: #fafbfb;
+  --bg-subtle: #f2f3f5;
+  --bg-inset: #eceef1;
+
+  /* borders */
+  --border-softer: #f0f1f3;
+  --border-soft: #e5e7ea;
+  --border-strong: #d3d7dc;
+
+  /* text */
+  --text-primary: #1c2228;
+  --text-secondary: #4e5863;
+  --text-muted: #626c77;
+  --text-faint: #7d8792;
+
+  /* accent: sky blue from the visual spec; no neon gradients. White on this
+     blue is only 2.75:1, so primary-button text uses dark ink while accent-ink
+     carries readable body text and focus indicators. */
+  --accent: #5b9df8;
+  --accent-hover: #4a90f5;
+  --accent-active: #3d84ef;
+  --accent-soft: #eef4fe;
+  --accent-softer: #f6faff;
+  --accent-border: #cfe2fc;
+  --accent-ink: #2565c7;
+  --accent-bright: #7ab3ff;
+  --on-accent: #0b1f33;
+
+  /* semantic states: main + soft + border + readable ink on soft */
+  --ok: #2e7d5b;
+  --ok-soft: #edf5f0;
+  --ok-border: #c9e0d4;
+  --ok-ink: #236247;
+  --warn: #a8701b;
+  --warn-soft: #f8f3e8;
+  --warn-border: #e6d5b0;
+  --warn-ink: #7c5212;
+  --danger: #bd4b40;
+  --danger-soft: #fbeeec;
+  --danger-soft-hover: #f6e2df;
+  --danger-border: #eccac5;
+  --danger-ink: #973a31;
+
+  /* risk */
+  --risk-low: #4e5863;
+  --risk-medium: #a8701b;
+  --risk-high: #bd4b40;
+
+  /* chart palette: validated against the white chart surface (dataviz) */
+  --chart-single: #2b6fd4;
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+  --chart-other: #78828d;
+
+  /* type */
+  --font-ui: "Figtree", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Noto Sans SC", "JetBrains Mono", Consolas, monospace;
+
+  /* spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* radius */
+  --r-sm: 6px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 10px;
+
+  /* depth: barely-there; separation comes from hairlines */
+  --shadow-xs: 0 1px 1px rgba(28, 34, 40, 0.03);
+  --shadow-sm: 0 1px 2px rgba(28, 34, 40, 0.04);
+  --shadow-md: 0 4px 14px rgba(28, 34, 40, 0.08), 0 1px 3px rgba(28, 34, 40, 0.04);
+  --shadow-lg: 0 12px 32px rgba(28, 34, 40, 0.12), 0 3px 8px rgba(28, 34, 40, 0.05);
+  --shadow-pop: 0 3px 10px rgba(28, 34, 40, 0.08);
+  --overlay: rgba(24, 29, 34, 0.32);
+
+  /* motion */
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --dur-slow: 280ms;
+  --ease: cubic-bezier(0.32, 0.72, 0.35, 1);
+
+  /* window chrome */
+  --titlebar-h: 44px;
+}

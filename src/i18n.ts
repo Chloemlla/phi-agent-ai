@@ -58,11 +58,13 @@ const ZH: Record<string, string> = {
   "Call {name}": "调用 {name}",
   "Tool result": "工具结果",
   "The agent is working…": "Agent 正在工作…",
+  "Describe a task…": "输入任务…",
   "Describe a task… (Enter to send, Shift+Enter for a newline)": "输入任务…（Enter 发送，Shift+Enter 换行）",
   "Message": "消息",
 
   // approvals
   "Approval required": "需要审批",
+  "Approval required ({count})": "需要审批（{count} 项）",
   "Low risk": "低风险",
   "Medium risk": "中风险",
   "High risk": "高风险",
@@ -78,14 +80,13 @@ const ZH: Record<string, string> = {
   "Time": "时间",
   "Cancel": "取消",
   "Send": "发送",
-  "This interface block is too large to display.":
-    "这个界面块太大，无法显示。",
   "Label": "标签",
 
   // settings: general
   "Workspace": "工作区",
   "The folder the agent may read and edit.": "Agent 可以读取和编辑的文件夹。",
   "Absolute workspace path": "工作区绝对路径",
+  "Choose folder": "选择文件夹",
   "Save": "保存",
   "Saved": "已保存",
   "General": "通用",
@@ -152,6 +153,7 @@ const ZH: Record<string, string> = {
   "Connection failed: {error}": "连接失败：{error}",
   "Saving…": "保存中…",
   "Test connection": "测试连接",
+  "Save & test": "保存并测试",
   "Set as active": "设为当前",
   "Delete provider": "删除供应商",
 
@@ -178,12 +180,17 @@ const ZH: Record<string, string> = {
   "Project": "项目",
   "User": "用户",
   "Run": "运行",
+  "Scope": "范围",
   "Add": "添加",
   "Search memories": "搜索记忆",
   "Search": "搜索",
   "Clear": "清除",
   "Delete": "删除",
   "Confirm delete": "确认删除",
+  "Discard unsaved changes?": "放弃未保存的更改？",
+  "Discard": "放弃",
+  "Something went wrong.": "出错了。",
+  "Reload": "重新加载",
   "Click delete again to confirm permanent deletion.":
     "再次点击删除以确认永久删除。",
   "Deleted {records} fact(s) and {episodes} source excerpt(s).":
@@ -191,6 +198,7 @@ const ZH: Record<string, string> = {
   "Memory saved.": "记忆已保存。",
   "This fact is already stored.": "这条事实已经存在。",
   "No memories match this search.": "没有匹配的记忆。",
+  "Showing up to 50 matches.": "最多显示前 50 条匹配结果。",
   "No memories yet. The agent can save facts with its memory tool.":
     "还没有记忆。Agent 可以用记忆工具保存事实。",
   "Redacted": "已脱敏",
@@ -205,7 +213,7 @@ const ZH: Record<string, string> = {
   "State superseded": "已取代",
 
   // chat shell: model picker, markdown, notifications, tool errors
-  "API key (optional)": "API Key（可选）",
+  "API key (optional)": "API 密钥（可选）",
   "Add manually": "手动添加",
   "Add model IDs manually": "手动添加模型 ID",
   "Add model by id": "按 ID 添加模型",
@@ -236,13 +244,13 @@ const ZH: Record<string, string> = {
   "Fetch models": "获取模型",
   "Fetching models…": "正在获取模型…",
   "High": "高",
-  "Input {input} · Output {output} tokens": "输入 {input} · 输出 {output} tokens",
+  "Input {input} · Output {output} tokens": "输入 {input} · 输出 {output} 个 Token",
   "Keep current key": "保留当前密钥",
   "Low": "低",
   "Mapped": "已映射",
   "Medium": "中",
   "Model": "模型",
-  "Model scale (1-5)": "模型规模（1-5）",
+  "Model scale (1-5)": "模型规模（1–5）",
   "Models without a mapping use default settings.":
     "没有映射结果的模型使用默认设置。",
   "Name is required.": "名称不能为空。",
@@ -271,7 +279,7 @@ const ZH: Record<string, string> = {
   "The model cannot be changed while a run is active.":
     "运行进行中，无法切换模型。",
   "Thinking": "思考",
-  "Tokens": "Token",
+  "Tokens": "Token 数",
   "Tool failed": "工具失败",
   "Tool failed: {name}": "工具失败：{name}",
   "Tool result: {name}": "工具结果：{name}",

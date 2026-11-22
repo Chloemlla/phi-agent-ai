@@ -1,7 +1,7 @@
 # phi-agent 设计文档集
 
 > 本地优先、多端协同的 Agent 客户端 —— 架构与设计文档
-> 版本：v0.1（草稿，持续迭代） · 最后更新：2026-11-20
+> 版本：v0.1（草稿，持续迭代） · 最后更新：2026-11-22
 
 ---
 
@@ -67,6 +67,9 @@ docs/
 │   └── plugin-system.md             # 插件系统与扩展点（含 UI 内嵌模型）
 ├── 40-runtime/
 │   ├── agent-loop.md                # Agent 行动循环
+│   ├── multi-agent.md               # Lead-Sidekick 线程化委派
+│   ├── auxiliary-models.md          # 文本辅助角色 + 生图独立配置
+│   ├── decision-model.md            # Jev 类型化决策：审批分流/输出压缩
 │   ├── tools-and-skills.md          # 工具与技能
 │   ├── model-gateway.md             # 模型网关与路由
 │   ├── context-and-memory.md        # 上下文与记忆
@@ -118,6 +121,9 @@ docs/
 | `20-domain/domain-model.md` | 🌱 | 聚合/值对象/状态机/不变量/事件 |
 | `30-extension/plugin-system.md` | 🌿 | 三档 ABI + 扩展点目录 + UI 内嵌模型 |
 | `40-runtime/agent-loop.md` | 🌿 | 循环/收敛/多 Agent |
+| `40-runtime/multi-agent.md` | 🌿 | Lead-Sidekick、消息线程、报告与监督 |
+| `40-runtime/auxiliary-models.md` | 🌿 | 文本辅助角色；生图独立配置 |
+| `40-runtime/decision-model.md` | 🌿 | Jev 类型化决策：审批分流、输出压缩 |
 | `40-runtime/tools-and-skills.md` | 🌿 | 工具/技能/MCP/沙箱 |
 | `40-runtime/model-gateway.md` | 🌿 | 路由/缓存/计量/密钥 |
 | `40-runtime/context-and-memory.md` | 🌿 | 上下文分层/记忆 MVP |
@@ -132,7 +138,7 @@ docs/
 | `70-quality/frontend-review-2026-11-20.md` | 🌿 | UI/UX 与前端工程审查；reduced-motion/字体决策 |
 | `80-roadmap/evolution.md` | 🌿 | 交付边界与里程碑（MVP/v1/后续） |
 | `80-roadmap/scope-additions.md` | 🌿 | 范围增补记录（原设计之外新增/移除的能力与原因） |
-| `adr/0001`–`adr/0011` | 🌳 | 十一条关键决策（已接受） |
+| `adr/0001`–`adr/0016` | 🌳 | 十六条关键决策（0012–0016 已接受；0008 被 0012 取代） |
 
 ---
 

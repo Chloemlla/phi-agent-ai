@@ -7,10 +7,18 @@
 // wizard and the user leaves before finishing, the page removes that empty
 // draft so the provider list has no residue.
 
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import {
+  listProviders,
+  removeProvider,
+  saveProvider,
+  setActiveProvider,
+  testProvider,
+} from "../bridge";
 import { t, tArgs } from "../i18n";
-import { IconCircleAlert, IconPlus } from "../components/Icons";
+import { errorText } from "../errors";
+import { pushToast } from "../toast";
+import { IconArrowLeft, IconCircleAlert, IconPlus } from "../components/Icons";
 import { ProviderEditor, protocolLabel } from "./ProviderEditor";
 import {
   cloneModel,
@@ -20,10 +28,6 @@ import {
   type ProviderTestView,
   type ProviderView,
 } from "./types";
-
-function errorText(error: unknown): string {
-  return typeof error === "string" ? error : String(error);
-}
 
 function viewToDraft(view: ProviderView): ProviderInput {
   return {
@@ -51,6 +55,41 @@ function emptyDraft(): ProviderInput {
     websiteUrl: "",
     notes: "",
   };
+}
+
+/// Fields that participate in the unsaved-draft check. `id` and the secret are
+/// handled separately: an untouched `apiKey` is undefined, while "" clears it.
+function draftSnapshot(input: ProviderInput): string {
+  return JSON.stringify({
+    name: input.name ?? "",
+    protocol: input.protocol ?? "openai_chat",
+    baseUrl: input.baseUrl ?? "",
+    model: input.model ?? "",
+    models: input.models ?? [],
+    headers: input.headers ?? {},
+    websiteUrl: input.websiteUrl ?? "",
+    notes: input.notes ?? "",
+  });
+}
+
+function hasDraftContent(input: ProviderInput): boolean {
+  return (
+    (input.name ?? "").trim() !== "" ||
+    (input.baseUrl ?? "").trim() !== "" ||
+    (input.websiteUrl ?? "").trim() !== "" ||
+    (input.notes ?? "").trim() !== "" ||
+    (input.model ?? "").trim() !== "" ||
+    (input.models?.length ?? 0) > 0 ||
+    Object.keys(input.headers ?? {}).length > 0 ||
+    (input.apiKey ?? "") !== "" ||
+    (input.protocol ?? "openai_chat") !== "openai_chat"
+  );
+}
+
+function apiKeyDirty(input: ProviderInput, view: ProviderView | null): boolean {
+  if (input.apiKey === undefined) return false;
+  // "" means "clear the stored secret"; only a change when one is stored.
+  return input.apiKey !== "" || Boolean(view?.hasKey);
 }
 
 /// Build the connection-only part of a provider input.
@@ -110,7 +149,11 @@ function mergeModelSpecs(existing: ModelSpec[], selected: ModelSpec[]): ModelSpe
   return merged;
 }
 
-export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
+export function ProvidersPage(props: {
+  active: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  onRefresh: () => Promise<void>;
+}) {
   const [providers, setProviders] = createSignal<ProviderView[]>([]);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [draft, setDraft] = createSignal<ProviderInput | null>(null);
@@ -122,9 +165,32 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
   const [error, setError] = createSignal("");
   const [notice, setNotice] = createSignal("");
   const [testResult, setTestResult] = createSignal<ProviderTestView | null>(null);
+  const [narrow, setNarrow] = createSignal(
+    typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 760px)").matches,
+  );
+  const [detailOpen, setDetailOpen] = createSignal(false);
+  const [pendingSwitch, setPendingSwitch] = createSignal<
+    ProviderView | "new" | null
+  >(null);
 
   const selectedView = () =>
     providers().find((provider) => provider.id === selectedId()) ?? null;
+
+  /// Draft differs from the selected saved provider, or a new form has content.
+  function isDirty(): boolean {
+    const current = draft();
+    if (!current) return false;
+    if (isNew()) return hasDraftContent(current);
+    const view = selectedView();
+    if (!view) return false;
+    return (
+      draftSnapshot(current) !== draftSnapshot(viewToDraft(view)) ||
+      apiKeyDirty(current, view)
+    );
+  }
+
+  createEffect(() => props.onDirtyChange?.(isDirty()));
 
   const visibleProviders = () => {
     if (!isNew()) return providers();
@@ -135,6 +201,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
   };
 
   function selectView(view: ProviderView) {
+    setPendingSwitch(null);
     setSelectedId(view.id);
     setIsNew(false);
     setCreatedInWizard(false);
@@ -142,7 +209,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
   }
 
   async function refreshList(): Promise<ProviderView[]> {
-    const list = await invoke<ProviderView[]>("list_providers");
+    const list = await listProviders();
     setProviders(list);
     return list;
   }
@@ -191,20 +258,93 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
     }
   });
 
+  onMount(() => {
+    const query = window.matchMedia("(max-width: 760px)");
+    const update = () => {
+      const matches = query.matches;
+      // Crossing into the narrow layout with a draft must keep that editor
+      // visible instead of falling back to the list and re-seeding it.
+      if (matches && !narrow() && draft()) setDetailOpen(true);
+      setNarrow(matches);
+    };
+    query.addEventListener("change", update);
+    onCleanup(() => query.removeEventListener("change", update));
+  });
+
+  // Android hardware back while Settings is open: close the provider detail
+  // first so App can close Settings only on the second press.
+  onMount(() => {
+    const handleBack = (event: Event) => {
+      if (!props.active || !narrow() || !detailOpen()) return;
+      event.preventDefault();
+      void closeDetail();
+    };
+    window.addEventListener("phi:settings-back", handleBack);
+    onCleanup(() => window.removeEventListener("phi:settings-back", handleBack));
+  });
+
   // Leaving Settings (or the app) with an unfinished wizard must not leave a
   // zero-model draft behind.
   onCleanup(() => {
     const id = isNew() && createdInWizard() ? draft()?.id : undefined;
     if (id) {
-      void invoke("remove_provider", { providerId: id }).catch(() => undefined);
+      void removeProvider(id).catch(() => undefined);
     }
   });
 
+  /// Guard switching away from an edited provider. The draft is only replaced
+  /// after the user explicitly discards it.
+  function requestNew() {
+    if (isDirty()) {
+      setDetailOpen(true);
+      setPendingSwitch("new");
+      return;
+    }
+    void startNew();
+  }
+
+  function requestOpen(view: ProviderView) {
+    if (!isNew() && view.id === selectedId()) {
+      setPendingSwitch(null);
+      setDetailOpen(true);
+      return;
+    }
+    if (isDirty()) {
+      setDetailOpen(true);
+      setPendingSwitch(view);
+      return;
+    }
+    void openProvider(view);
+  }
+
+  function discardPending() {
+    const action = pendingSwitch();
+    setPendingSwitch(null);
+    if (action === "new") {
+      void startNew();
+    } else if (action) {
+      void openProvider(action);
+    }
+  }
+
+  /// Mobile Back. A wizard has a persisted connection (and possibly a
+  /// zero-model provider), so closing it must also clean that up.
+  async function closeDetail() {
+    setPendingSwitch(null);
+    if (isNew()) {
+      await cancelNew();
+      return;
+    }
+    setDetailOpen(false);
+  }
+
   async function startNew() {
+    setPendingSwitch(null);
+    setDetailOpen(true);
     const staleId = isNew() && createdInWizard() ? draft()?.id : undefined;
     if (staleId) {
       try {
-        await invoke("remove_provider", { providerId: staleId });
+        await removeProvider(staleId);
       } catch {
         // A leftover empty draft is harmless; continue with a fresh form.
       }
@@ -227,11 +367,13 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
   }
 
   async function openProvider(view: ProviderView) {
+    setPendingSwitch(null);
+    setDetailOpen(true);
     if (isNew() && createdInWizard()) {
       const staleId = draft()?.id;
       if (staleId && staleId !== view.id) {
         try {
-          await invoke("remove_provider", { providerId: staleId });
+          await removeProvider(staleId);
           await refreshList();
         } catch {
           // Keep going: the user asked for a different provider.
@@ -246,6 +388,8 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
   }
 
   async function cancelNew() {
+    setPendingSwitch(null);
+    setDetailOpen(false);
     const cleanupId =
       createdInWizard() ? draft()?.id ?? selectedId() : null;
     setIsNew(false);
@@ -257,7 +401,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
     setNotice("");
     if (cleanupId) {
       try {
-        await invoke("remove_provider", { providerId: cleanupId });
+        await removeProvider(cleanupId);
       } catch {
         // If removal fails, the draft simply stays in the provider list.
       }
@@ -278,8 +422,9 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
     setNotice("");
     try {
       const input = buildConnection(current, selectedView(), true);
-      const saved = await invoke<ProviderView>("save_provider", { input });
+      const saved = await saveProvider(input);
       if (!current.id) setCreatedInWizard(true);
+      setPendingSwitch(null);
       upsertProvider(saved);
       setSelectedId(saved.id);
       // The secret is now stored; never keep the typed value in the draft.
@@ -288,7 +433,9 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       await props.onRefresh().catch(() => undefined);
       return saved;
     } catch (e) {
-      setError(errorText(e));
+      const message = errorText(e);
+      setError(message);
+      pushToast("danger", message);
       return null;
     }
   }
@@ -320,11 +467,12 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       input.models = nextModels;
       input.model = (current.model ?? "").trim() || nextModels[0]?.id || "";
 
-      const saved = await invoke<ProviderView>("save_provider", { input });
+      const saved = await saveProvider(input);
       upsertProvider(saved);
       setSelectedId(saved.id);
       setIsNew(false);
       setCreatedInWizard(false);
+      setPendingSwitch(null);
       setDraft(viewToDraft(saved));
       setTestResult(null);
       await refreshList();
@@ -332,7 +480,9 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       setNotice(t("Provider saved."));
       return saved;
     } catch (e) {
-      setError(errorText(e));
+      const message = errorText(e);
+      setError(message);
+      pushToast("danger", message);
       return null;
     }
   }
@@ -384,12 +534,12 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       input.models = merged;
       input.model = primary;
 
-      const saved = await invoke<ProviderView>("save_provider", { input });
+      const saved = await saveProvider(input);
       if (wasNew) {
         // The user just finished onboarding this provider; make it the one the
         // composer uses instead of silently keeping the previous provider.
         try {
-          await invoke("set_active_provider", { providerId: saved.id });
+          await setActiveProvider(saved.id);
         } catch {
           // Activation can fail for a keyless remote provider; the explicit
           // "Set as active" action remains available.
@@ -399,6 +549,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       setSelectedId(saved.id);
       setIsNew(false);
       setCreatedInWizard(false);
+      setPendingSwitch(null);
       setDraft(viewToDraft(saved));
       setTestResult(null);
       await refreshList();
@@ -410,7 +561,9 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       );
       return true;
     } catch (e) {
-      setError(errorText(e));
+      const message = errorText(e);
+      setError(message);
+      pushToast("danger", message);
       return false;
     }
   }
@@ -429,12 +582,15 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
     try {
       const saved = await persistEdit();
       if (!saved) return;
-      const result = await invoke<ProviderTestView>("test_provider", {
-        providerId: saved.id,
-      });
+      const result = await testProvider(saved.id);
       setTestResult(result);
+      if (!result.ok) {
+        pushToast("danger", result.error || t("Something went wrong."));
+      }
     } catch (e) {
-      setTestResult({ ok: false, latencyMs: 0, modelCount: 0, error: errorText(e) });
+      const message = errorText(e);
+      setTestResult({ ok: false, latencyMs: 0, modelCount: 0, error: message });
+      pushToast("danger", message);
     } finally {
       setBusy(false);
     }
@@ -446,12 +602,14 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
     setBusy(true);
     setError("");
     try {
-      await invoke("set_active_provider", { providerId: id });
-      await load(id);
+      await setActiveProvider(id);
+      await refreshList();
       await props.onRefresh().catch(() => undefined);
       setNotice(t("Provider is now active."));
     } catch (e) {
-      setError(errorText(e));
+      const message = errorText(e);
+      setError(message);
+      pushToast("danger", message);
     } finally {
       setBusy(false);
     }
@@ -460,17 +618,12 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
   async function handleDelete() {
     const view = selectedView();
     if (!view) return;
-    if (
-      !window.confirm(
-        tArgs("Delete provider {name}? This cannot be undone.", { name: view.name }),
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     setError("");
     try {
-      await invoke("remove_provider", { providerId: view.id });
+      await removeProvider(view.id);
+      setPendingSwitch(null);
+      setDetailOpen(false);
       setSelectedId(null);
       setDraft(null);
       setIsNew(false);
@@ -480,7 +633,9 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       await props.onRefresh().catch(() => undefined);
       setNotice(t("Provider deleted."));
     } catch (e) {
-      setError(errorText(e));
+      const message = errorText(e);
+      setError(message);
+      pushToast("danger", message);
     } finally {
       setBusy(false);
     }
@@ -497,10 +652,12 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
             )}
           </p>
         </div>
-        <button class="btn primary" onClick={() => void startNew()}>
-          <IconPlus size={15} />
-          {t("Add provider")}
-        </button>
+        <Show when={!narrow() || !detailOpen()}>
+          <button class="btn primary" onClick={requestNew}>
+            <IconPlus size={15} />
+            {t("Add provider")}
+          </button>
+        </Show>
       </div>
 
       <Show when={error() && !draft()}>
@@ -511,7 +668,12 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
       </Show>
 
       <Show when={!loading()} fallback={<div class="loading">{t("Loading…")}</div>}>
-        <div class="providers-layout">
+        <div
+          class="providers-layout"
+          classList={{
+            "detail-open": narrow() && (detailOpen() || visibleProviders().length === 0),
+          }}
+        >
           <div class="providers-list">
             <Show
               when={visibleProviders().length > 0}
@@ -533,7 +695,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
                         ? "true"
                         : undefined
                     }
-                    onClick={() => void openProvider(provider)}
+                    onClick={() => requestOpen(provider)}
                   >
                     <span class="provider-item-head">
                       <span class="provider-name" title={provider.name}>
@@ -565,6 +727,29 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
           </div>
 
           <div class="provider-detail">
+            <Show when={narrow() && detailOpen() && !isNew()}>
+              <button
+                type="button"
+                class="settings-back provider-back"
+                onClick={() => void closeDetail()}
+              >
+                <IconArrowLeft size={15} />
+                {t("Back")}
+              </button>
+            </Show>
+            <Show when={pendingSwitch()}>
+              <div class="draft-guard" role="alert">
+                <span>{t("Discard unsaved changes?")}</span>
+                <div class="draft-guard-actions">
+                  <button class="btn danger" onClick={discardPending}>
+                    {t("Discard")}
+                  </button>
+                  <button class="btn" onClick={() => setPendingSwitch(null)}>
+                    {t("Cancel")}
+                  </button>
+                </div>
+              </div>
+            </Show>
             <Show
               when={draft()}
               fallback={
@@ -573,7 +758,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
                   <p class="hint">
                     {t("Add a provider to call a model. The agent cannot run without one.")}
                   </p>
-                  <button class="btn primary" onClick={() => void startNew()}>
+                  <button class="btn primary" onClick={requestNew}>
                     <IconPlus size={15} />
                     {t("Add provider")}
                   </button>
@@ -589,6 +774,7 @@ export function ProvidersPage(props: { onRefresh: () => Promise<void> }) {
                   view={selectedView()}
                   isNew={isNew()}
                   busy={busy()}
+                  dirty={isDirty()}
                   error={error()}
                   notice={notice()}
                   testResult={testResult()}

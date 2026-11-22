@@ -86,7 +86,6 @@ export type Message = {
 
 export type Run = {
   id: string;
-  taskId: string;
   turnId: string;
   state: string;
   steps: number;
@@ -119,7 +118,10 @@ export type PendingApproval = {
   toolId: string;
   argsPreview: unknown;
   actionDigest: string;
+  /** Localized human-readable risk sentence. */
   risk: string;
+  /** Structured risk tier: `low`, `medium` or `high`. */
+  riskLevel: string;
   requestedAt: string;
   expiresAt: string;
 };

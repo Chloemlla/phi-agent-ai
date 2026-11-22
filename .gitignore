@@ -8,6 +8,7 @@
 # Repository metadata
 !/.gitignore
 !/.gitattributes
+!/bunfig.toml
 !/AGENT.md
 !/CLAUDE.md
 !/.github/
@@ -33,6 +34,8 @@
 !/scripts/**
 !/src/
 !/src/**
+!/tests/
+!/tests/**
 !/public/
 !/public/**
 

@@ -1,6 +1,6 @@
 # 模型网关
 
-> 状态：🌿 · 最后更新：2026-11-08
+> 状态：🌿 · 最后更新：2026-11-22
 > 上游：`20-domain/domain-model.md`（ModelCall 事件）、`30-extension/plugin-system.md`（provider.model / strategy.modelRouter）
 > 关联：`40-runtime/policy-and-approval.md`（辅助模型）、`70-quality/`（评测）
 
@@ -210,6 +210,8 @@
 - 可被 `strategy.modelRouter` 单独指向「便宜快」的模型。
 
 它的用途：**权限审批**（`judge.approver`）、分类、抽取、轻量校验。
+
+> **2026-11-22 扩展**：文本辅助角色扩展为按角色绑定：`session_title`（会话标题）、`memory_maintenance`（记忆后台整理）、`approval_judge`（后续）、`summarizer` / `embedding`（后续）。它们仍然是**服务调用 / 后台任务**，不进入 Turn / Run / 执行树；角色绑定、外发授权、事件与安全见 `auxiliary-models.md` 与 ADR-0014。生图使用独立的 `image.generate` 端口与用户选择的模型（ADR-0016）；决策模型使用独立的 `decision.evaluate` 端口与 Jev 类型化协议（ADR-0015、`decision-model.md`），都不走聊天网关。
 
 ---
 

@@ -24,7 +24,6 @@ struct StoredMessage {
 #[derive(Clone)]
 struct RunRecord {
     id: String,
-    task_id: String,
     turn_id: String,
     state: String,
     steps: u64,
@@ -494,7 +493,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
             run_id,
             session_id,
             turn_id,
-            task_id,
         } => {
             if let Some(session) = projection.sessions.get_mut(&session_id) {
                 if !session.runs.contains_key(&run_id) {
@@ -504,7 +502,6 @@ fn apply_record(projection: &mut Projection, record: &EventRecord) {
                     run_id.clone(),
                     RunRecord {
                         id: run_id,
-                        task_id,
                         turn_id,
                         state: "Scheduled".to_string(),
                         steps: 0,
@@ -648,7 +645,6 @@ fn update_run(
 fn run_view(r: &RunRecord) -> RunView {
     RunView {
         id: r.id.clone(),
-        task_id: r.task_id.clone(),
         turn_id: r.turn_id.clone(),
         state: r.state.clone(),
         steps: r.steps,
@@ -711,8 +707,7 @@ mod tests {
                 "type": "RunScheduled",
                 "runId": "run-1",
                 "sessionId": session.id,
-                "turnId": turn.turn_id,
-                "taskId": "task-1"
+                "turnId": turn.turn_id
             }),
         )
         .unwrap();
@@ -755,8 +750,7 @@ mod tests {
                 "type": "RunScheduled",
                 "runId": "run-1",
                 "sessionId": session.id,
-                "turnId": turn.turn_id,
-                "taskId": "task-1"
+                "turnId": turn.turn_id
             }),
         )
         .unwrap();

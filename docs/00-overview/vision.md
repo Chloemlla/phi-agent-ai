@@ -62,7 +62,7 @@
 | F4 | **多 Agent** | 多 Agent 协作完成任务；另有「辅助模型」做权限审批 | 见 `40-runtime/agent-loop.md`、`40-runtime/policy-and-approval.md` |
 | F5 | **插件系统** | 广度对标 Minecraft 的 Mod/Plugin：可加内容、可改行为、可换实现 | 见 `30-extension/plugin-system.md` |
 
-> **F4 的阶段注记**：多 Agent 的**架构预留**在 v1 就位（执行树 `parentRunId`、`strategy.orchestration` 扩展点、Task 树、深度与扇出上限），但**实现不作为 v1 硬门槛**——先做单层主从，再扩展。理由与交付边界见 `80-roadmap/evolution.md`。
+> **F4 的阶段注记**：多 Agent 的**架构预留**在 v1 就位（执行树 `parentRunId`、`strategy.orchestration` 扩展点、Matter、深度与扇出上限），但**实现不作为 v1 硬门槛**——先做单层主从，再扩展。理由与交付边界见 `80-roadmap/evolution.md`。
 
 > **刻意留白**：F1–F5 的具体形态（哪些工具、什么样的协同交互、审批策略长什么样）**尚未确定**，后续由你提供。架构必须能在**不知道这些细节**的前提下成立——这正是「不要写死功能性需求」的含义：**设计的是接缝（seam）与契约，不是功能本身。**
 

@@ -2,7 +2,7 @@
 // indicator, not a filled blue row: selection should be legible without
 // shouting. On narrow windows the same element becomes a drawer.
 
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, onCleanup } from "solid-js";
 import { formatRelative } from "../format";
 import { t, tArgs } from "../i18n";
 import { modeTone, runTone, stateLabel } from "../status";
@@ -13,20 +13,61 @@ export function Sidebar(props: {
   sessions: SessionSummary[];
   currentId: string | null;
   open: boolean;
+  modal: boolean;
   mode: string;
   nodeId: string;
   now: number;
   onNew: () => void;
   onSelect: (id: string) => void;
 }) {
+  let rootRef: HTMLElement | undefined;
+
+  // On phones/tablets the rail is a modal drawer: focus enters it, stays
+  // inside, and returns to the trigger when it closes.
+  createEffect(() => {
+    if (!props.modal || !props.open) return;
+    const root = rootRef;
+    if (!root) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const focusable = () =>
+      Array.from(
+        root.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null);
+    queueMicrotask(() => focusable()[0]?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    root.addEventListener("keydown", onKeyDown);
+    onCleanup(() => {
+      root.removeEventListener("keydown", onKeyDown);
+      previous?.focus?.();
+    });
+  });
+
   return (
     <aside
+      ref={rootRef}
       classList={{
         sidebar: true,
         open: props.open,
         collapsed: !props.open,
       }}
       aria-label={t("Sessions")}
+      aria-hidden={props.open ? undefined : "true"}
+      inert={props.open ? undefined : true}
     >
       <div class="sidebar-inner">
         <button

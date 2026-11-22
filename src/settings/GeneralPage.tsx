@@ -1,13 +1,14 @@
 // General settings: workspace boundary and interface language.
 
 import { Show, createSignal } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  setLanguage as setNodeLanguage,
+  setWorkspace as setNodeWorkspace,
+} from "../bridge";
 import { setLang, t } from "../i18n";
-import { IconCheck } from "../components/Icons";
-
-function errorText(error: unknown): string {
-  return typeof error === "string" ? error : String(error);
-}
+import { errorText } from "../errors";
+import { IconCheck, IconFolderOpen } from "../components/Icons";
 
 export function GeneralPage(props: {
   workspace: string;
@@ -22,11 +23,24 @@ export function GeneralPage(props: {
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal<"workspace" | "language" | null>(null);
 
-  async function saveWorkspace() {
+  async function chooseWorkspace() {
     setError("");
+    try {
+      const picked = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: workspace() || undefined,
+      });
+      if (typeof picked === "string" && picked) setWorkspace(picked);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  async function saveWorkspace() {    setError("");
     setBusy(true);
     try {
-      const savedPath = await invoke<string>("set_workspace", { path: workspace() });
+      const savedPath = await setNodeWorkspace(workspace());
       setWorkspace(savedPath);
       await props.onRefresh().catch(() => undefined);
       setSaved("workspace");
@@ -42,9 +56,7 @@ export function GeneralPage(props: {
     setError("");
     setBusy(true);
     try {
-      const savedLanguage = await invoke<string>("set_language", {
-        language: language(),
-      });
+      const savedLanguage = await setNodeLanguage(language());
       setLang(savedLanguage);
       await props.onRefresh().catch(() => undefined);
       setSaved("language");
@@ -68,7 +80,7 @@ export function GeneralPage(props: {
       </div>
 
       <Show when={error()}>
-        <div class="banner danger">{error()}</div>
+        <div class="banner danger" role="alert">{error()}</div>
       </Show>
 
       <section class="settings-card">
@@ -80,12 +92,17 @@ export function GeneralPage(props: {
             value={workspace()}
             onInput={(event) => setWorkspace(event.currentTarget.value)}
             placeholder={t("Absolute workspace path")}
+            aria-label={t("Workspace")}
           />
+          <button class="btn" type="button" disabled={busy()} onClick={() => void chooseWorkspace()}>
+            <IconFolderOpen size={14} />
+            {t("Choose folder")}
+          </button>
           <button class="btn primary" disabled={busy()} onClick={() => void saveWorkspace()}>
             {t("Save")}
           </button>
           <Show when={saved() === "workspace"}>
-            <span class="saved-note">
+            <span class="saved-note" role="status">
               <IconCheck size={14} />
               {t("Saved")}
             </span>
@@ -102,6 +119,7 @@ export function GeneralPage(props: {
           <select
             class="settings-input"
             value={language()}
+            aria-label={t("Interface language")}
             onChange={(event) => setLanguage(event.currentTarget.value)}
           >
             <option value="en">{t("English")}</option>
@@ -111,7 +129,7 @@ export function GeneralPage(props: {
             {t("Save")}
           </button>
           <Show when={saved() === "language"}>
-            <span class="saved-note">
+            <span class="saved-note" role="status">
               <IconCheck size={14} />
               {t("Saved")}
             </span>

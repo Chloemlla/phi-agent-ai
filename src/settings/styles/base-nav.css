@@ -1,0 +1,172 @@
+/* Settings page: flat provider forms, hairline lists and responsive navigation. */
+
+.settings-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-app);
+}
+
+.settings-nav {
+  width: 224px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-soft);
+}
+
+.settings-back {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  margin-bottom: var(--sp-3);
+  border-radius: var(--r-md);
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.settings-back:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.settings-nav-item.active {
+  background: var(--bg-surface);
+  border-color: var(--border-soft);
+  color: var(--text-primary);
+}
+
+.settings-nav-foot {
+  margin-top: auto;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* Bottom spacing lives on the inner element so a sticky editor footer can
+     pin to the true bottom of the scrollport. */
+  padding: var(--sp-6) var(--sp-6) 0;
+}
+
+.settings-content-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding-bottom: calc(var(--sp-7) + env(safe-area-inset-bottom, 0px));
+}
+
+.settings-content-foot {
+  display: none;
+}
+
+.settings-pane.hidden {
+  display: none;
+}
+
+.settings-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.settings-page-head h1 {
+  margin: 0 0 var(--sp-1);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-subtitle {
+  margin: 0;
+  max-width: 620px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.settings-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.settings-input {
+  flex: 1;
+  min-width: 180px;
+  max-width: 560px;
+}
+
+/* Keep every settings control in the same 34-40px band. */
+.settings-page .btn {
+  height: 36px;
+}
+
+.settings-page .icon-btn {
+  width: 34px;
+  height: 34px;
+}
+
+.settings-page input:not([type="checkbox"]),
+.settings-page select {
+  min-height: 36px;
+}
+
+.settings-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ok-ink);
+}
+
+.settings-note svg {
+  flex: none;
+}

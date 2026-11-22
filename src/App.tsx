@@ -1,8 +1,24 @@
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import {
+  Show,
+  Suspense,
+  createEffect,
+  createSignal,
+  lazy,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import { exit, onBackButtonPress } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  approve,
+  cancelRun as cancelRunCommand,
+  createSession,
+  getBootstrap,
+  getSession,
+  sendMessage,
+} from "./bridge";
 import { setLang, t } from "./i18n";
+import { errorText } from "./errors";
 import { pushToast } from "./toast";
 import { Conversation } from "./components/Conversation";
 import { Composer } from "./components/Composer";
@@ -10,158 +26,44 @@ import { Runbar } from "./components/Runbar";
 import { Sidebar } from "./components/Sidebar";
 import { Titlebar } from "./components/Titlebar";
 import { Toasts } from "./components/Toasts";
-import { SettingsPage } from "./settings/SettingsPage";
 import { isActiveState } from "./status";
-import {
-  isMobilePlatform,
-  isThinkingLevel,
-  type Bootstrap,
-  type ModelSelection,
-  type ModelStreamEvent,
-  type ProviderView,
-  type SendResult,
-  type SessionDetail,
-  type SessionSummary,
-  type ThinkingLevel,
-} from "./types";
+import { isMobilePlatform, type Bootstrap, type SessionDetail } from "./types";
+import { prunePendingCalls, reuseMessages } from "./app/sessionStream";
+import { activeProviderOf, useModelSelection } from "./app/modelSelection";
+import { usePhiStream } from "./app/usePhiStream";
 import "./App.css";
 
-const TERMINAL_EVENTS = new Set([
-  "RunSucceeded",
-  "RunFailed",
-  "RunAborted",
-]);
+const SettingsPage = lazy(() =>
+  import("./settings/SettingsPage").then((module) => ({
+    default: module.SettingsPage,
+  })),
+);
 
-const STORAGE_PREFIX = "phi.model.";
 const NARROW_QUERY = 900;
-
-/// One in-flight model call's streamed text. The backend journals one
-/// assistant message per call, so the live view must track calls separately;
-/// concatenating every call into one buffer duplicates earlier text once the
-/// durable messages arrive.
-type PendingCall = {
-  callId: string;
-  runId: string;
-  text: string;
-};
-
-function prunePendingCalls(
-  calls: PendingCall[],
-  detail: SessionDetail | null,
-): PendingCall[] {
-  if (calls.length === 0) return calls;
-  const assistantTexts = (detail?.session.messages ?? [])
-    .filter((message) => message.role === "assistant")
-    .map((message) =>
-      message.blocks
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("")
-        .trim(),
-    )
-    .filter(Boolean);
-  if (assistantTexts.length === 0) return calls;
-
-  // Only the newest messages can belong to the calls still on screen. Matching
-  // in order (not just "any message contains this text") handles repeated
-  // answers across turns without dropping live text early.
-  const remaining: PendingCall[] = [];
-  let cursor = Math.max(0, assistantTexts.length - calls.length - 1);
-  for (const call of calls) {
-    const text = call.text.trim();
-    if (!text) {
-      remaining.push(call);
-      continue;
-    }
-    let matched = -1;
-    for (let index = cursor; index < assistantTexts.length; index += 1) {
-      if (assistantTexts[index].includes(text)) {
-        matched = index;
-        break;
-      }
-    }
-    if (matched === -1) {
-      remaining.push(call);
-    } else {
-      cursor = matched + 1;
-    }
-  }
-  return remaining;
-}
-
-function errorText(error: unknown): string {
-  return typeof error === "string" ? error : String(error);
-}
-
-function activeProviderOf(bootstrap: Bootstrap): ProviderView | null {
-  return (
-    bootstrap.providers.find((provider) => provider.id === bootstrap.activeProviderId) ??
-    bootstrap.providers.find((provider) => provider.active) ??
-    bootstrap.providers[0] ??
-    null
-  );
-}
-
-function readStoredSelection(
-  providerId: string,
-): { modelId: string; thinking: ThinkingLevel } | null {
-  try {
-    const raw = window.localStorage.getItem(`${STORAGE_PREFIX}${providerId}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as {
-      modelId?: unknown;
-      thinking?: unknown;
-    };
-    if (typeof parsed.modelId !== "string" || !parsed.modelId) return null;
-    return {
-      modelId: parsed.modelId,
-      thinking: isThinkingLevel(parsed.thinking) ? parsed.thinking : "off",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredSelection(selection: ModelSelection) {
-  try {
-    window.localStorage.setItem(
-      `${STORAGE_PREFIX}${selection.providerId}`,
-      JSON.stringify({
-        modelId: selection.modelId,
-        thinking: selection.thinking,
-      }),
-    );
-  } catch {
-    // Persistence is best-effort; the selection still applies to this window.
-  }
-}
 
 function App() {
   const [boot, setBoot] = createSignal<Bootstrap | null>(null);
   const [detail, setDetail] = createSignal<SessionDetail | null>(null);
   const [currentId, setCurrentId] = createSignal<string | null>(null);
   const [input, setInput] = createSignal("");
-  const [pendingCalls, setPendingCalls] = createSignal<PendingCall[]>([]);
-  const streamText = () =>
-    pendingCalls()
-      .map((call) => call.text)
-      .join("\n\n");
-  const [streamRunId, setStreamRunId] = createSignal<string | null>(null);
-  const [streamSessionId, setStreamSessionId] = createSignal<string | null>(null);
-  const [streamEnded, setStreamEnded] = createSignal(false);
-  const [runTerminal, setRunTerminal] = createSignal(false);
   const [sidebarOpen, setSidebarOpen] = createSignal(false);
   const [creatingSession, setCreatingSession] = createSignal(false);
   const [view, setView] = createSignal<"chat" | "settings">("chat");
-  const [selection, setSelection] = createSignal<ModelSelection | null>(null);
   const [narrow, setNarrow] = createSignal(
     typeof window !== "undefined" && window.innerWidth <= NARROW_QUERY,
   );
   const [now, setNow] = createSignal(Date.now());
   let transcriptRef: HTMLElement | undefined;
-  let refreshTimer: number | undefined;
-  let streamFallbackTimer: number | undefined;
   let inlineSendBusy = false;
   let sidebarInitialized = false;
+
+  const stream = usePhiStream({
+    currentId,
+    currentRun: () => currentRun(),
+    refresh: () => refresh(),
+    notifyError,
+  });
+  const { selection, updateSelection } = useModelSelection(boot);
 
   const mobile = () => isMobilePlatform(boot()?.platform);
   const drawerMode = () => mobile() || narrow();
@@ -171,33 +73,19 @@ function App() {
   }
 
   async function refresh() {
-    const bootstrap = await invoke<Bootstrap>("get_bootstrap");
+    const bootstrap = await getBootstrap();
     setLang(bootstrap.language);
     setBoot(bootstrap);
     const id = currentId() ?? bootstrap.lastSessionId;
     if (id) {
       setCurrentId(id);
-      const next = await invoke<SessionDetail>("get_session", { sessionId: id });
+      const next = await getSession(id);
       // A slower response for another session must not overwrite the one the
       // user is looking at now.
       if (currentId() !== id) return;
-      setDetail(next);
-      setPendingCalls((calls) => prunePendingCalls(calls, next));
+      setDetail((prev) => reuseMessages(prev, next));
+      stream.setPendingCalls((calls) => prunePendingCalls(calls, next));
     }
-  }
-
-  function clearStreamFallback() {
-    if (streamFallbackTimer) {
-      window.clearTimeout(streamFallbackTimer);
-      streamFallbackTimer = undefined;
-    }
-  }
-
-  function scheduleRefresh() {
-    if (refreshTimer) window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => {
-      void refresh().catch(notifyError);
-    }, 120);
   }
 
   function currentRun() {
@@ -239,18 +127,28 @@ function App() {
     void newSession();
   }
 
+  function requestCloseSettings() {
+    // Settings may have an unsaved provider draft and can cancel this event.
+    if (
+      window.dispatchEvent(
+        new CustomEvent("phi:settings-leave", { cancelable: true }),
+      )
+    ) {
+      setView("chat");
+    }
+  }
+
   function handleOpenSettings() {
     if (drawerMode()) setSidebarOpen(false);
-    setView((current) => (current === "chat" ? "settings" : "chat"));
+    if (view() === "settings") {
+      requestCloseSettings();
+      return;
+    }
+    setView("settings");
   }
 
   function handleOpenUrl(url: string) {
     void openUrl(url).catch(notifyError);
-  }
-
-  function updateSelection(next: ModelSelection) {
-    setSelection(next);
-    writeStoredSelection(next);
   }
 
   onMount(() => {
@@ -265,90 +163,46 @@ function App() {
     window.addEventListener("resize", onResize);
     document.addEventListener("keydown", onKeyDown);
 
-    let unlistenEvent: (() => void) | undefined;
-    let unlistenStream: (() => void) | undefined;
+    let unlistenBack: (() => void) | undefined;
 
-    void listen<{
-      payload?: { type?: string; runId?: string; callId?: string };
-    }>("phi://event", (event) => {
-      const payload = event.payload?.payload;
-      const type = payload?.type;
-      if (type === "ModelCallFailed" && payload?.callId) {
-        // The failed attempt's partial text is dropped; a retry streams as a
-        // fresh call and the durable message carries any kept text.
-        setPendingCalls((calls) =>
-          calls.filter((call) => call.callId !== payload.callId),
-        );
-      }
-      if (type && TERMINAL_EVENTS.has(type)) {
-        // Ignore another session's run finishing while this one streams.
-        const activeStream = streamRunId();
-        if (!activeStream || !payload?.runId || payload.runId === activeStream) {
-          // Keep the live text until the durable message arrives. One delayed
-          // refresh covers the case where the first projection missed it; only
-          // if the handoff really missed do we mark the stream as stopped.
-          setRunTerminal(true);
-          clearStreamFallback();
-          streamFallbackTimer = window.setTimeout(() => {
-            if (pendingCalls().length > 0) setStreamEnded(true);
-            void refresh().catch(notifyError);
-          }, 2000);
+    void onBackButtonPress(({ canGoBack }) => {
+      if (view() === "settings") {
+        // Let a settings pane handle one level (provider detail) first, then
+        // let the settings shell guard unsaved drafts.
+        if (
+          window.dispatchEvent(
+            new CustomEvent("phi:settings-back", { cancelable: true }),
+          )
+        ) {
+          requestCloseSettings();
         }
+        return;
       }
-      scheduleRefresh();
-    }).then((fn) => {
-      unlistenEvent = fn;
-    });
+      if (sidebarOpen() && drawerMode()) {
+        setSidebarOpen(false);
+        return;
+      }
+      if (canGoBack) {
+        window.history.back();
+        return;
+      }
+      void exit(0).catch(() => undefined);
+    })
+      .then((listener) => {
+        unlistenBack = () => {
+          void listener.unregister();
+        };
+      })
+      .catch(() => undefined);
 
-    void listen<ModelStreamEvent>("phi://model-stream", (event) => {
-      const payload = event.payload;
-      if (payload.kind === "text") {
-        const text = payload.text ?? "";
-        if (!text) return;
-        const sourceSession = streamSessionId();
-        if (sourceSession && currentId() !== sourceSession) return;
-        const runId = streamRunId();
-        if (runId && payload.runId !== runId) return;
-        if (!runId) {
-          // Accept only a run that belongs here: one we just sent, or the
-          // active run of the session already on screen. Never latch onto a
-          // background run from another session.
-          const source = streamSessionId();
-          const current = currentRun();
-          const known =
-            source === currentId() ||
-            (current !== null && current.id === payload.runId);
-          if (!known) return;
-          setStreamRunId(payload.runId);
-          if (!source) setStreamSessionId(currentId());
-          setStreamEnded(false);
-          setRunTerminal(false);
-        }
-        const callId = payload.callId || `${payload.runId}:${payload.index ?? 0}`;
-        setPendingCalls((calls) => {
-          const index = calls.findIndex((call) => call.callId === callId);
-          if (index === -1) {
-            return [...calls, { callId, runId: payload.runId, text }];
-          }
-          return calls.map((call, i) =>
-            i === index ? { ...call, text: call.text + text } : call,
-          );
-        });
-      }
-      // `done` is a model-call boundary, not the end of the run. That call's
-      // text stays on screen until its durable assistant message replaces it.
-    }).then((fn) => {
-      unlistenStream = fn;
-    });
+    const stopStream = stream.start();
 
     onCleanup(() => {
       window.clearInterval(ticker);
       window.removeEventListener("resize", onResize);
       document.removeEventListener("keydown", onKeyDown);
-      if (refreshTimer) window.clearTimeout(refreshTimer);
-      clearStreamFallback();
-      unlistenEvent?.();
-      unlistenStream?.();
+      stopStream();
+      unlistenBack?.();
     });
   });
 
@@ -363,60 +217,10 @@ function App() {
     setSidebarOpen(!drawer);
   });
 
-  // Keep the composer's model choice valid for the active provider.
-  createEffect(() => {
-    const bootstrap = boot();
-    if (!bootstrap) return;
-    const active = provider();
-    if (!active) {
-      if (selection()) setSelection(null);
-      return;
-    }
-
-    const current = selection();
-    if (current && current.providerId === active.id) {
-      const model = active.models.find(
-        (candidate) => candidate.id === current.modelId && candidate.enabled,
-      );
-      if (model) {
-        return;
-      }
-    }
-
-    const enabled = active.models.filter((candidate) => candidate.enabled);
-    if (enabled.length === 0) {
-      if (selection()) setSelection(null);
-      return;
-    }
-    const primary =
-      enabled.find((candidate) => candidate.id === active.model) ?? enabled[0];
-    const stored = readStoredSelection(active.id);
-    const storedModel = stored
-      ? enabled.find((candidate) => candidate.id === stored.modelId)
-      : null;
-
-    const modelId = storedModel?.id ?? primary.id;
-    const thinking: ThinkingLevel =
-      stored && stored.modelId === modelId ? stored.thinking : "off";
-    setSelection({ providerId: active.id, modelId, thinking });
-  });
-
-  // Once every live call has a durable message, drop the stream bookkeeping
-  // for the finished run.
-  createEffect(() => {
-    if (pendingCalls().length > 0) return;
-    if (!runTerminal() && !streamEnded()) return;
-    clearStreamFallback();
-    setStreamRunId(null);
-    setStreamSessionId(null);
-    setStreamEnded(false);
-    setRunTerminal(false);
-  });
-
   createEffect(() => {
     const messages = detail()?.session.messages.length ?? 0;
     const approvals = detail()?.pendingApprovals.length ?? 0;
-    const streaming = streamText().length;
+    const streaming = stream.streamText().length;
     void messages;
     void approvals;
     void streaming;
@@ -435,27 +239,22 @@ function App() {
     const id = currentId();
     if (!text || !id) return;
     if (fromComposer) setInput("");
-    setPendingCalls([]);
-    clearStreamFallback();
-    setStreamRunId(null);
-    setStreamSessionId(id);
-    setStreamEnded(false);
-    setRunTerminal(false);
+    stream.resetStream(id);
     const pick = selection();
     try {
-      const result = await invoke<SendResult>("send_message", {
+      const result = await sendMessage({
         sessionId: id,
         text,
         ...(pick
           ? { model: pick.modelId, thinking: pick.thinking }
           : {}),
       });
-      setStreamRunId(result.runId);
+      stream.setStreamRunId(result.runId);
     } catch (error) {
       notifyError(error);
       if (fromComposer) setInput(text);
     }
-    scheduleRefresh();
+    stream.scheduleRefresh();
   }
 
   function send() {
@@ -483,39 +282,31 @@ function App() {
 
   async function resolveApproval(approvalId: string, approved: boolean) {
     try {
-      await invoke("approve", { approvalId, approved, note: null });
+      await approve(approvalId, approved, null);
     } catch (error) {
       notifyError(error);
     }
-    scheduleRefresh();
+    stream.scheduleRefresh();
   }
 
   async function cancelRun(runId: string) {
     try {
-      await invoke("cancel_run", { runId });
+      await cancelRunCommand(runId);
     } catch (error) {
       notifyError(error);
     }
-    scheduleRefresh();
+    stream.scheduleRefresh();
   }
 
   async function newSession() {
     if (creatingSession()) return;
     setCreatingSession(true);
-    setPendingCalls([]);
-    clearStreamFallback();
-    setStreamRunId(null);
-    setStreamSessionId(null);
-    setStreamEnded(false);
-    setRunTerminal(false);
+    stream.resetStream(null);
     try {
-      const summary = await invoke<SessionSummary>("create_session", {
-        title: null,
-      });
+      const summary = await createSession(null);
       setCurrentId(summary.id);
-      setDetail(
-        await invoke<SessionDetail>("get_session", { sessionId: summary.id }),
-      );
+      const next = await getSession(summary.id);
+      setDetail((prev) => reuseMessages(prev, next));
       await refresh();
     } catch (error) {
       notifyError(error);
@@ -525,20 +316,13 @@ function App() {
   }
 
   async function selectSession(id: string) {
-    setPendingCalls([]);
-    clearStreamFallback();
-    setStreamRunId(null);
-    setStreamSessionId(null);
-    setStreamEnded(false);
-    setRunTerminal(false);
+    stream.resetStream(null);
     setCurrentId(id);
     try {
-      const next = await invoke<SessionDetail>("get_session", {
-        sessionId: id,
-      });
+      const next = await getSession(id);
       if (currentId() !== id) return;
-      setDetail(next);
-      setPendingCalls((calls) => prunePendingCalls(calls, next));
+      setDetail((prev) => reuseMessages(prev, next));
+      stream.setPendingCalls((calls) => prunePendingCalls(calls, next));
     } catch (error) {
       notifyError(error);
     }
@@ -571,12 +355,14 @@ function App() {
       <Show
         when={view() === "chat"}
         fallback={
-          <SettingsPage
-            workspace={boot()?.workspace ?? ""}
-            language={boot()?.language ?? "en"}
-            onBack={() => setView("chat")}
-            onRefresh={refresh}
-          />
+          <Suspense fallback={<div class="loading">{t("Loading…")}</div>}>
+            <SettingsPage
+              workspace={boot()?.workspace ?? ""}
+              language={boot()?.language ?? "en"}
+              onBack={() => setView("chat")}
+              onRefresh={refresh}
+            />
+          </Suspense>
         }
       >
         <div class="shell">
@@ -591,20 +377,24 @@ function App() {
             sessions={boot()?.sessions ?? []}
             currentId={currentId()}
             open={sidebarOpen()}
+            modal={drawerMode()}
             mode={boot()?.mode ?? ""}
             nodeId={boot()?.nodeId ?? ""}
             now={now()}
             onNew={handleNewSession}
             onSelect={handleSelectSession}
           />
-          <main class="main">
+          <main
+            class="main"
+            inert={drawerMode() && sidebarOpen() ? true : undefined}
+          >
             <section class="conversation">
               <div class="transcript" ref={(element) => (transcriptRef = element)}>
                 <Conversation
                   detail={detail()}
                   run={currentRun()}
-                  streamText={streamText()}
-                  streamEnded={streamEnded()}
+                  streamText={stream.streamText()}
+                  streamEnded={stream.streamEnded()}
                   modeOk={modeOk()}
                   modeReason={boot()?.modeReason ?? ""}
                   modelConfigured={boot()?.model.configured ?? false}

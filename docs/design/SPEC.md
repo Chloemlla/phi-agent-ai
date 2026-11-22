@@ -65,9 +65,10 @@
 | `--accent-soft` | `#EEF4FE` | 着色底（tag、选中） |
 | `--accent-softer` | `#F6FAFF` | 最弱着色（空状态图标底） |
 | `--accent-border` | `#CFE2FC` | 强调边框 |
-| `--accent-ink` | `#2B6FD4` | 浅底上的强调文字 |
+| `--accent-ink` | `#2565C7` | 浅底上的强调文字、焦点环 |
+| `--on-accent` | `#0B1F33` | accent 填充上的文字（深色，保证对比度） |
 
-> 规则：**一屏只让一个元素"最亮"。** 强调色用于"当前最重要的那一个动作/状态"，不要大面积平铺。
+> 规则：**一屏只让一个元素"最亮"。** 强调色用于"当前最重要的那一个动作/状态"，不要大面积平铺。天蓝色上不用白字：白字对比度只有 2.75:1，主按钮与强调填充统一使用 `--on-accent` 深色文字。
 
 ### 1.5 语义状态色（克制、去饱和）
 
@@ -106,7 +107,7 @@
 | Token | 字族栈 | 用途 |
 |---|---|---|
 | `--font-ui` | `"Figtree", "Noto Sans SC", system-ui, sans-serif` | 界面：英文走 **Figtree**，中文走**思源黑体（Noto Sans SC）** |
-| `--font-mono` | `"Cascadia Code", "JetBrains Mono", Consolas, monospace` | **一切数据**：数字、命令、digest、token 数、路径、代码（微软 **Cascadia Code**） |
+| `--font-mono` | `"Cascadia Code", "Noto Sans SC", "JetBrains Mono", Consolas, monospace` | **一切数据**：数字、命令、digest、token 数、路径、代码（微软 **Cascadia Code**；中文回退思源黑体，避免落进系统宋体） |
 
 > 匹配逻辑：Figtree 无中文字形，中文自动落到 Noto Sans SC；西文与中文混排时
 > 各自使用自己的字体，字号一致、视觉重量对齐（二者 x-height 接近，混排不跳）。
@@ -116,8 +117,8 @@
 phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用资产**，禁止运行时走 CDN，也禁止假设系统已预装（Cascadia Code 仅在装有 Windows Terminal / VS 的机器上存在）。
 
 - 目录：`src/assets/fonts/`（Tauri 打包进 resources，与现有 `src/assets/` 同级约定）。
-- 格式：**woff2**（子集化；思源黑体按常用汉字子集 + 动态 `unicode-range` 分片，控制体积）。
-- 字重：Figtree 400 / 500 / 600 / 700；Noto Sans SC 400 / 500 / 700；Cascadia Code 400 / 600。
+- 格式：**woff2**。思源黑体使用 `chinese-simplified` 单子集文件，避免每个字重打包 101 个 `unicode-range` 分片造成的体积膨胀。
+- 字重：Figtree 400 / 500 / 600 / 700（含 400 / 600 italic）；Noto Sans SC 400 / 500 / 600；Cascadia Code 400 / 600。中文强调使用着重号（text-emphasis），不使用合成斜体。
 - 用 `@font-face` 声明，`font-display: swap`，`font-family` 名与 token 表一致。
 - 许可：三者均为 OFL / 宽松许可，可随 GPL-3.0 项目分发（保留 LICENSE 文件）。
 
@@ -259,7 +260,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 
 ### 5.2 审批按钮语义
 
-- **批准** = primary（accent + `--shadow-pop`），文案视风险而定（low「批准」/ high「批准并运行」）。
+- **批准** = primary（accent 填充 + `--on-accent` 深色文字），文案视风险而定（low「批准」/ high「批准并运行」）。
 - **拒绝** = 中性按钮，hover 才转 danger（避免误触，也避免过度恐吓）。
 - 高危需在按钮旁给一句**约束说明**（如"批准仅对这条命令、这套参数生效"）。
 
@@ -379,7 +380,7 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 - ❌ 不让高危元素"闪烁/抖动"吓人（高危靠结构与色，不靠动）。
 - ❌ 不用超过 320ms 的单元素动画。
 - ❌ 不用弹性过大的缓动（如强 back/bounce），保持干净专业。
-- ✅ 尊重 `prefers-reduced-motion`：关闭 pulse/spin/rise，仅保留 opacity 过渡。
+- 不提供 `prefers-reduced-motion` 降级；动效在所有系统设置下保持启用（2026-11-22 决定）。
 
 ### 7.5 性能
 
@@ -391,10 +392,9 @@ phi-agent 离线可用，**三个字体都必须作为 webfont 打包进应用�
 ## 8. 可访问性
 
 - 正文对比度 ≥ 4.5:1；辅助文字 ≥ 3:1（`--text-muted` 在最浅底上需校验）。
-- 所有交互元素有 `:focus-visible` 环：`2px --accent` + `2px` offset。
+- 所有交互元素有 `:focus-visible` 环：`2px --accent-ink` + `2px` offset。
 - 状态不只靠颜色：配文字标签或图标（如状态点旁永远有文字）。
-- 支持 `prefers-reduced-motion`（见 §7.5）。
-- 点击目标桌面 ≥ 24px（icon 按钮 30px）；触摸设备 ≥ 40px。
+- 点击目标桌面 ≥ 24px（icon 按钮 30px）；触摸设备 ≥ 44px。
 
 ---
 

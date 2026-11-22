@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-> 状态：🌿 · 最后更新：2026-11-08
+> 状态：🌿 · 最后更新：2026-11-22
 
 本目录存放 phi-agent 的架构决策记录。ADR 记录**难以逆转、且当时有真实取舍**的决定，让后来者知道「为什么是这样」。
 
@@ -68,10 +68,15 @@ adr/
 | [0005](0005-plugin-abi-tiers.md) | 插件以 TypeScript 为主，性能敏感处自带原生 CLI | 已接受（修订） | 2026-11-08 |
 | [0006](0006-plugin-ui-embedded.md) | 插件 UI 一律内嵌于外壳布局，不建独立窗口 | 已接受 | 2026-11-08 |
 | [0007](0007-plugin-runtime-and-ui-isolation.md) | 插件运行与隔离：QuickJS 内核引擎 + UI 受控组件协议 | 已接受 | 2026-11-08 |
-| [0008](0008-optional-task-entity.md) | 引入可选的「任务 Task」作为顶层目标（B-lite） | 已接受（修订） | 2026-11-08 |
+| [0008](0008-optional-task-entity.md) | 引入可选的「任务 Task」作为顶层目标（B-lite） | 已废弃（被 0012 取代；Task 已删除） | 2026-11-08 |
 | [0009](0009-narrow-kernel-and-release-baseline.md) | 内核狭义化，能力由「发行基线 + 必需槽位」保证 | 已接受 | 2026-11-08 |
 | [0010](0010-security-authority-and-approval-binding.md) | 安全权威只能收紧；审批绑定冻结后的具体动作 | 已接受 | 2026-11-08 |
 | [0011](0011-handoff-unit-is-session.md) | 换端以整个 Session 为所有权单位 | 已接受 | 2026-11-08 |
+| [0012](0012-matter-instead-of-task.md) | 用 Matter（事项）取代隐式 Task 作为长期目标 | 已接受 | 2026-11-22 |
+| [0013](0013-thread-scoped-delegation.md) | 多 Agent 采用同会话消息线程与子 Run（Lead-Sidekick） | 已接受 | 2026-11-22 |
+| [0014](0014-auxiliary-model-roles.md) | 辅助模型按角色绑定，作为服务调用而不是 Agent | 已接受 | 2026-11-22 |
+| [0015](0015-decision-model-jev.md) | 决策模型作为有界判断层（Jev），而不是文本生成器 | 已接受 | 2026-11-22 |
+| [0016](0016-image-generation-config.md) | 生图使用独立配置与端口，模型由用户选择 | 已接受 | 2026-11-22 |
 
 ## 候选（尚未落定）
 

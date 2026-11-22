@@ -1,6 +1,6 @@
 # 范围增补记录
 
-> 状态：🌿 · 最后更新：2026-11-20
+> 状态：🌿 · 最后更新：2026-11-22
 > 上游：原始设计文档集（2026-11-08 版，`00-overview/` 至 `80-roadmap/` 与 `adr/`）
 > 用途：记录**原设计文档里没有、后续实现阶段新增**的能力。设计文档描述目标，本文件记录两者之间的增量；被移除的增补也保留，不抹掉历史。
 
@@ -36,6 +36,14 @@
 | 15 | 平台原生标题栏与移动端适配 | 界面 | 已实现（Windows/Linux/macOS/Android） | `src/components/Titlebar.tsx`、`src/App.css`、`gen/android/` |
 | 16 | 聊天体验重构 | 界面 | 已实现（模型选择、toast、Markdown、流式交接） | `src/components/`、`src/toast.ts` |
 | 17 | 内联 HTML 界面块 | 界面 + 提示词 + 状态 | 已实现（取代工作台视图） | `src/components/RichHtml.tsx`、`uiExpression.ts`、`InlineChart.tsx`、`assets/inline-ui-system-prompt.txt` |
+| 18 | 动效与字体策略调整 | 界面 / 设计系统 | 已实现（2026-11-22） | `design/SPEC.md`、`src/App.css`、`src/index.tsx`、字体打包 |
+| 19 | Matter 事项（取代隐式 Task） | 领域 | 设计中（未实现） | `adr/0012`、`40-runtime/multi-agent.md` §2 |
+| 20 | Lead-Sidekick 线程化委派 | 运行时 + 界面 | 设计中（未实现） | `adr/0013`、`40-runtime/multi-agent.md` |
+| 21 | 文本辅助模型角色（标题/记忆整理） | 模型 + 运行时 + 界面 | 设计中（未实现） | `adr/0014`、`40-runtime/auxiliary-models.md` |
+| 22 | 结构化审批风险等级 | 安全 + 界面 | 已实现（2026-11-22） | `src-tauri/crates/phi-contracts`、`src/status.ts` |
+| 23 | 决策模型（Jev 类型化判断） | 模型 + 运行时 + 安全 | 设计中（未实现） | `adr/0015`、`40-runtime/decision-model.md` |
+| 24 | 生图独立配置（用户选模型） | 模型 + 界面 | 设计中（未实现） | `adr/0016`、`40-runtime/auxiliary-models.md` §6 |
+| 22 | 结构化审批风险等级 | 协议 / 界面 | 已实现（2026-11-22） | `phi-contracts/src/ports.rs`、`phi-domain`、`phi-plugins`、`src/status.ts`、`src/types.ts` |
 
 ---
 
@@ -231,6 +239,90 @@
   - 流式：`inlineUi.ts` 把文本切成正文与 html 围栏，围栏内容边流边渲染；持久消息由 Markdown 渲染器统一处理。
 - **能力差异**：地图、图片搜索、日历、可编辑表格、沙盒 HTML/JS（`HtmlView`）与 OpenUI 的完整组件集未实现；没有模型编写的 JavaScript。需要用户选择时用表单或 `data-ui-send` 按钮；数据用表格、指标或图表表达。安全承诺不变：永不执行或注入模型生成的代码，也永不注入原始 HTML 字符串。
 - **文档影响**：README（中英）、`AGENT.md`、`design/SPEC.md`、`20-domain/domain-model.md`。
+
+### 2.18 动效与字体策略调整（2026-11-22）
+
+- **原状**：SPEC §7.4/§8 要求尊重 `prefers-reduced-motion`；字体按 Noto Sans SC 四个字重 × 101 个 `unicode-range` 子集打包，`dist/assets` 约 12MB、CSS 约 453KB。
+- **为什么改**：用户判断动效的性能开销几乎可以忽略，保留动效可提升体验；字体包体积明显偏大，且中文微字号/字体回退存在不一致。
+- **当前实现**：
+  - 删除 `src/App.css` 的 `prefers-reduced-motion` 降级，动效在所有系统设置下保持启用；SPEC §7.4/§8 同步。
+  - Figtree 使用 latin 400/500/600/700；Noto Sans SC 使用 `chinese-simplified` 400/500/600 单子集；Cascadia Code 使用 latin 400/600；`--font-mono` 增加 Noto Sans SC 作为中文回退。
+  - 结果：`dist/assets` 约 3.7MB，字体约 3.4MB / 11 个 woff2（含 Figtree 两个斜体），CSS 约 61KB。
+  - 恢复视觉规格中的天蓝强调色 token（`#5B9DF8` 系列）；为满足对比度，`--on-accent` 使用深色 `#0B1F33`、`--accent-ink` 使用 `#2565C7`，焦点环改用 accent-ink。
+  - 设置页工作区增加目录选择器（`tauri-plugin-dialog`），不再要求手机用户手输绝对路径。
+- **取舍**：放弃系统级减少动效适配；`chinese-simplified` 单子集不覆盖繁体/生僻字，回退系统 CJK 字体。
+- **文档影响**：`design/SPEC.md` §2.1/§2.2/§7.4/§8；完整审查与后续项见 `docs/70-quality/frontend-review-2026-11-20.md`。
+
+### 2.19 Matter 事项（取代隐式 Task）
+
+- **原状**：`Task` 是 ADR-0008 引入的顶层目标，但实现只是在每个 Run 调度时惰性创建一个隐藏 Task；没有聚合状态、真实标题、任务树，前端只有 `taskId` 字段。效果上接近「一个会话 / 一轮 = 一个 Task」。
+- **为什么改**（2026-11-22）：用户明确不希望 Task 绑定到单个 Session / Turn；接下来要做超级 Agent，需要一个跨会话、跨执行的长期目标单位。调研 Varin 后，采用「事项（matter）」语义：保存理解和关联，不保存实时状态，Run 结束不自动完成。
+- **设计**：Matter 是可选聚合，跨 Session / Turn / Run；`Run.matterId` 可选；取消每个 Run 惰性创建 Task；`Task` / `TaskCreated` / `taskId` 直接删除，不保留兼容。详见 ADR-0012 与 `40-runtime/multi-agent.md` §2。
+- **当前状态**：设计已定，未实现；Matter 看板、日程、主动跟进属于超级 Agent 阶段。
+- **文档影响**：`20-domain/domain-model.md` §3.0（改写为 Matter）、`00-overview/glossary.md`、ADR-0012、ADR-0008 状态。
+
+### 2.20 Lead-Sidekick 线程化委派
+
+- **原状**：单 Agent 运行时；一个 Session 同时只能有一个 Run；没有子 Agent、委派或 Agent 间通信。
+- **为什么加**（2026-11-22）：用户偏好 Fusion 的 Lead-Sidekick：规划与执行分离，Lead 是唯一用户接口，Sidekick 用更便宜的模型执行；多个 Sidekick 可并行，但不允许嵌套，Sidekick 之间可以定向交流。相比图编排，这种形态更符合当前单写者、审批绑定、诚实取消的约束。
+- **设计**：
+  - 同一个 Session 内，根 Run（Lead）+ 子 Run（Sidekick），子 Run 带 `parentRunId`，共享 Turn 与 Matter，不新建用户轮次。
+  - 消息按线程隔离：`main` 与 `agent:<id>`，Lead 不读 Sidekick 轨迹，只收 brief / 报告。
+  - 每次委派创建持久 `AgentInstance`，Lead 在 `delegate` 时选择模型（scale 不得越级，pinned，不静默回退）。
+  - 多 Sidekick、扇出上限、Sidekick 之间 `send_message` 定向通信；Sidekick 没有 `delegate`。
+  - 人仍是唯一审批者；`shared` / `read_only` 工作模式，同一时刻只有一个 shared writer；`isolated_write` 后续再做。
+  - 报告区分 completed / delivered / read，失败 / 取消 / 部分结果同样形成报告。
+- **当前状态**：设计已定，未实现；按 `40-runtime/multi-agent.md` §10 分期落地，headless 先行。
+- **文档影响**：`40-runtime/multi-agent.md`、ADR-0013、`40-runtime/agent-loop.md` §7、`00-overview/glossary.md`；后续实现时更新 `AGENT.md`。
+
+### 2.21 文本辅助模型角色（标题 / 记忆整理）
+
+- **原状**：`40-runtime/model-gateway.md` §8 把辅助模型定义为审批 / 分类 / 抽取的受限调用，但代码没有角色绑定；会话标题固定为 `New session`；记忆没有后台整理。
+- **为什么加**（2026-11-22）：用户要求支持会话标题生成、记忆后台整理等辅助模型用途。如果每个功能各自读配置、各自打 provider API，设置、外发授权、用量和审计会散落；如果做成 Agent / Run，又会污染 Turn / Run 语义并引出审批递归。
+- **设计**：
+  - 文本辅助角色按应用级绑定：`session_title`、`memory_maintenance`、`approval_judge`（后续）、`summarizer` / `embedding`（后续）。
+  - 辅助调用是**服务调用 / 后台任务**，不创建 Turn / Run / Step / AgentInstance；有独立审计与用量事件。
+  - 未绑定、能力不匹配或缺少外发授权时功能明确禁用，不回退到其他模型。
+  - 标题在首条助手回复后生成，只覆盖默认标题，用户改名后不再自动覆盖。
+  - 记忆整理按写入阈值 / 空闲 / 显式命令触发，提案过后台准入屏障；安全操作可自动应用，纠正 / 失效待确认，`forget` 永不自动。
+- **当前状态**：设计已定，未实现；先做角色配置、标题与记忆整理。
+- **文档影响**：`40-runtime/auxiliary-models.md`、ADR-0014、`40-runtime/model-gateway.md` §8、`00-overview/glossary.md`；后续实现时更新 `AGENT.md` 与设置页文档。
+
+### 2.22 结构化审批风险等级（2026-11-22）
+
+- **原状**：审批的视觉等级由前端从 `toolId` 和本地化风险句推断；`src/status.ts` 里还包含中文 `"不可逆"` / `"可逆"` 字面量，违反英文源码规则，也无法适配其他语言。
+- **为什么改**：风险等级是安全语义，权威应在内核；前端只应渲染。
+- **当前实现**：
+  - `ApprovalSpec`、`ApprovalRequested`（`#[serde(default)]`，兼容旧 journal）和 `PendingApprovalView` 增加 `risk_level`。
+  - `loop_plugin` 对 `shell_exec` 写 `"high"`，其余审批请求写 `"medium"`；本地化 `risk` 句保持不变。
+  - 前端 `PendingApproval.riskLevel` 优先使用该字段；旧 journal 缺失时回退到 tool id 与英文风险句，不再包含中文 literal。
+- **文档影响**：`40-runtime/policy-and-approval.md`（如描述审批 DTO/事件）与 `src/types.ts` 注释。
+
+### 2.23 决策模型（Jev 类型化判断）
+
+- **原状**：审批弹窗全部由人处理；长工具输出直接截断或整段塞进上下文；没有可校准的封闭式判断层。
+- **为什么加**（2026-11-22）：用户要求接入 Jev 决策模型（BYOK，端点自己填写），用于长工具调用精简、审批弹窗减负等判断点。Jev 不生成文本，而是接收状态和类型化问题（`noul` / `choice` / `score`），返回带校准概率的结构化判定。
+- **设计**：
+  - 独立 `decision.evaluate` 端口与 `jev_decisions` 协议；`decision.json` 配置端点、Key、模型、超时。
+  - 决策点单独配置阈值：`approval_triage`（审批分流）、`tool_output_compaction`（输出压缩策略）；后续可加循环终止 / 路由。
+  - 审批分流只在用户预授权的低风险类别内自动放行；高风险 / 不可逆 / 未知风险永远人工；失败 / 低置信度回到人。
+  - 长工具输出由决策模型选择策略，真正的摘要由文本 `summarizer` 或确定性截断完成；完整输出保留在 Blob。
+  - 事件、审计、撤销、外发授权与 headless 入口齐全。
+- **当前状态**：设计已定，未实现；先做审批分流与输出压缩两个点。
+- **文档影响**：`40-runtime/decision-model.md`、ADR-0015、`40-runtime/policy-and-approval.md`、`40-runtime/model-gateway.md` §8、`00-overview/glossary.md`。
+
+### 2.24 生图独立配置（用户选模型）
+
+- **原状**：没有生图能力；聊天 provider 配置只覆盖文本协议。
+- **为什么加**（2026-11-22）：用户明确要求生图单独配置，模型由用户选择而非 Agent 选择，并且由 Agent 主动调用工具。
+- **设计**：
+  - 独立 `image.json`（provider、baseUrl、Key、用户选择的模型、默认参数、上限、外发授权），不复用聊天 provider 或 `auxiliary.json`。
+  - 可选 `image.generate` 端口；`image_generate` 工具没有 `model` 参数，运行时注入用户配置的模型；Agent 只决定何时生成与提示词。
+  - Agent 主动调用，不是后台任务；默认只给 Lead，是否给 Sidekick 由配置决定。
+  - 本地内容寻址资产库；PNG / JPEG / WebP / GIF 可渲染，SVG 只下载不内联；校验 MIME / 尺寸 / 文件大小；提示词外发需 `EgressGrant`。
+  - 独立图片模型目录记录能力（4K、蒙版编辑、参考图、GIF / SVG、速度档位），不硬编码未公开分辨率。
+- **当前状态**：设计已定，未实现。
+- **文档影响**：`40-runtime/auxiliary-models.md` §6、ADR-0016、`00-overview/glossary.md`；后续实现时更新 `AGENT.md` 与设置页文档。
 
 ---
 

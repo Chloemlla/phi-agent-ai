@@ -38,19 +38,11 @@ pub enum DomainEvent {
         content_ref: String,
     },
 
-    // ── task ──────────────────────────────────────────────────────────
-    TaskCreated {
-        task_id: String,
-        title: String,
-        implicit: bool,
-    },
-
     // ── run / step ────────────────────────────────────────────────────
     RunScheduled {
         run_id: String,
         session_id: String,
         turn_id: String,
-        task_id: String,
     },
     RunStarted {
         run_id: String,
@@ -173,7 +165,12 @@ pub enum DomainEvent {
         run_id: String,
         tool_id: String,
         action_digest: String,
+        /// Localized human-readable risk sentence.
         risk: String,
+        /// Structured risk tier (`low`, `medium`, `high`). Defaulted so
+        /// journals written before this field existed still deserialize.
+        #[serde(default)]
+        risk_level: String,
         args_preview: Value,
         expires_at: String,
     },

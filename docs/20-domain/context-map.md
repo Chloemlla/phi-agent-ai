@@ -1,6 +1,6 @@
 # 限界上下文地图
 
-> 状态：🌱 · 最后更新：2026-11-08
+> 状态：🌱 · 最后更新：2026-11-22
 > 上游：`00-overview/glossary.md`（术语）、`10-architecture/overview.md`（分层）
 > 下游：`20-domain/domain-model.md`（本文的细化：实体/状态机/不变量/事件）
 
@@ -19,7 +19,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
                   ▼
   ┌──────────────────────────┐        ┌──────────────────────────┐
   │ ② 会话、任务与运行         │◀──────▶│ ③ Agent 运行时            │
-  │ Session/Task/Run          │  驱动   │ Agent Runtime            │
+  │ Session/Matter/Run        │  驱动   │ Agent Runtime            │
   │ 核心域 ★                 │        │ 核心域 ★                 │
   │ Session/Turn/Run/Step    │        │ AgentDef/Loop/Context    │
   └───────┬───────────┬──────┘        └───────┬───────────┬──────┘
@@ -100,9 +100,9 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 - **Principal**：宿主附加的调用者身份（用户/项目/Agent/Run 组合），横切策略判定、事件订阅、记忆读写、UI 宿主桥（ADR-0010）。
 - 不变量：节点身份稳定；信任是双向显式建立的，不可隐式继承；**Principal 不可由调用方伪造**。
 
-### ② 会话、任务与运行 ★
-- **Task**（顶层目标，数据上恒在）：可跨会话、可指派、可由多个 Run/Agent 协作；界面上可隐式。/ **Session**：交互上下文，归属一个节点（单写者，**换端单位**）。/ **Turn**：一次往返。/ **Run**：一次 Agent 执行，必属一个 Task 与一个 Session。/ **Step**：一次循环迭代。
-- 不变量：一个 Run 恰好属于一个 Task 与一个 Session；Session 的写者同一时刻唯一（v1），换端以整个 Session 为单位（ADR-0011）；所有状态变化成为事件。
+### ② 会话、事项与运行 ★
+- **Matter**（可选长期目标 / 理解容器）：可跨会话、跨执行；保存理解和关联，不保存执行实时状态。/ **Session**：交互上下文，归属一个节点（单写者，**换端单位**）。/ **Turn**：一次往返。/ **Run**：一次 Agent 执行，归属一个 Session；`matterId` 可选。/ **Step**：一次循环迭代。
+- 不变量：一个 Run 恰好属于一个 Session；`matterId` 可选（ADR-0012）；Session 的写者同一时刻唯一（v1），换端以整个 Session 为单位（ADR-0011）；所有状态变化成为事件。
 
 ### ③ Agent 运行时 ★
 - **AgentDefinition**：角色/提示/工具/技能/模型/预算（目标态）。/ **LoopStrategy**：可插拔算法。/ **ContextAssembly**：一次模型调用的上下文快照。
@@ -145,7 +145,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 | 事件 | 由谁发布 | 关心它的上下文 |
 |---|---|---|
 | `SessionStarted` / `SessionArchived` / `SessionOwnershipTransferred` | ② | ⑦⑨ |
-| `TaskCreated` / `TaskAssigned` / `TaskCompleted` | ② | ③⑨ |
+| `MatterCreated` / `MatterLinked` / `MatterCompleted` | ② | ③⑨ |
 | `MessageAppended` / `ModelOutputRecorded` / `ContextSnapshotRecorded` | ② | ⑦ |
 | `TurnCompleted` | ② | ⑦⑩ |
 | `RunStarted` / `RunSucceeded` / `RunFailed` / `RunAborted` / `RunAwaitingReconciliation` | ②③ | ⑦⑤⑥ |
@@ -166,7 +166,7 @@ DDD 的限界上下文（Bounded Context）划分。**划分依据是「语言�
 
 ## 6. 划分结论
 
-1. **② 会话 与 任务**：**已定 · B-lite 修订版**（`open-questions.md` Q5、ADR-0008）。新增 `Task`（命名目标，可跨会话/可指派/可协作）作为顶层；`Session` 与 `Run` 保持原义；**每个 Run 必属一个 Task**（数据上恒在，界面上可隐式，惰性创建，无全局默认 Task）。
+1. **② 会话与事项**：**已定 · Matter（ADR-0012，取代 ADR-0008 的 Task）**。`Matter` 是可选的长期目标 / 理解容器，可跨会话；`Session` 与 `Run` 保持原义；`Run.matterId` 可选，不强制每个 Run 属于 Matter。旧 `Task` 已删除，不保留兼容。
 2. **⑩ 记忆/反思**：**已定 · 升格为核心域**（`open-questions.md` Q6）。更名为「认知、记忆与反思」，独立优先级与评测。
 3. **⑥ 治理**：**已定 · 保持独立上下文**（`open-questions.md` Q7）。它是横切工具/模型/记忆/插件的单一收口，语言与变更节奏都与运行时不同。
 4. **① 身份与设备**：**已定 · 提供 `Principal`**（ADR-0010）。身份由宿主附加，横切策略、事件订阅、记忆、UI 桥。

@@ -1,6 +1,6 @@
 # Agent 行动循环
 
-> 状态：🌿 · 最后更新：2026-11-08
+> 状态：🌿 · 最后更新：2026-11-22
 > 上游：`20-domain/domain-model.md`（Run/Step/事件）、`30-extension/plugin-system.md`（扩展点）
 > 关联：`40-runtime/context-and-memory.md`（每步的上下文）、`40-runtime/policy-and-approval.md`（动作闸门）
 
@@ -161,7 +161,7 @@ Step 输入 = 系统提示 + Agent 定义 + 技能注入 + 会话历史(压缩�
 - **结果以摘要回灌**主线，不把子 Agent 的全部轨迹塞回父上下文。
 - 子 Agent 的副作用同样过策略与沙箱——**多 Agent 不放大权限**。
 - **取消传播**：根 Run 进入终态（含 `Aborted`）后，有界宽限期内**强制取消全部后代**——不留无人管理的执行（`I-3-6`）。取消必须传达到模型请求、CLI 子进程与孙 Run。
-- **工作区规则**：子 Agent **默认只读**；需要并行写时使用**独立工作树**，由主流程合并。多个 Agent 同时改同一文件不在 v1 支持范围。
+- **工作区规则**：子 Agent 默认只读；第一版 `shared` 写通过单写者租约串行化，`isolated_write`（独立工作树 + 合并）后续再做。多个 Agent 同时写同一文件不在第一版支持范围。
 
 ```
   父 Run（根） ──切用量/预算（目标态）──▶ 子 Run A（独立上下文，只读工作区）
@@ -170,9 +170,11 @@ Step 输入 = 系统提示 + Agent 定义 + 技能注入 + 会话历史(压缩�
         └─ 终态 → 宽限期 → 取消所有后代
 ```
 
-**编排的承载单位是 Task**（ADR-0008）：父 Task 派生子 Task / 子 Run，形成**任务树**；深度与扇出均有上限。
+**编排的承载单位是 AgentInstance + 执行树**：一次委派创建持久 `AgentInstance` 与其子 Run；Matter 是可选的长期目标，不承担执行编排。深度与扇出均有上限（ADR-0012 / ADR-0013、`multi-agent.md`）。
 
 > **v1 的范围**：以上**架构预留**在 v1 就位（执行树字段、`strategy.orchestration` 扩展点、不变量、取消传播），但**多 Agent 实现不作为 v1 硬门槛**——先做单层主从，再扩展。见 `80-roadmap/evolution.md`。
+
+> **2026-11-22 决定**：第一版多 Agent 采用单层 **Lead-Sidekick**：同一个 Session 内，Lead 是唯一面向用户的接口，Sidekick 是独立消息线程里的子 Run；Sidekick 不能再派生，多个 Sidekick 可并行并定向通信。详细设计见 `multi-agent.md`，决策见 ADR-0013。原 supervisor / group-chat / pipeline 仍是后续备选，不是第一版。
 
 > **多 Agent = 分布式 + 扇出放大**（`awesome-architecture` 的硬骨头叠加）。控制扇出与深度，否则成本与延迟指数上涨。
 

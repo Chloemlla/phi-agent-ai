@@ -12,7 +12,7 @@ export {
   Copy as IconCopy,
   Eye as IconEye,
   EyeOff as IconEyeOff,
-  KeyRound as IconKey,
+  FolderOpen as IconFolderOpen,
   Menu as IconMenu,
   PanelLeft as IconPanel,
   Plus as IconPlus,

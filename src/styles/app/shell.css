@@ -1,0 +1,327 @@
+/* ─────────────────────────── app shell ─────────────────────────── */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+.app.mobile {
+  --titlebar-h: calc(48px + env(safe-area-inset-top, 0px));
+}
+
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+/* ─────────────────────────── title bar ─────────────────────────── */
+
+.titlebar {
+  flex: none;
+  position: relative;
+  z-index: 40;
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 0 12px;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border-softer);
+  user-select: none;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.titlebar.mobile {
+  padding: env(safe-area-inset-top, 0px) 8px 0;
+  gap: 6px;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.titlebar.mobile .titlebar-title {
+  justify-content: center;
+}
+
+.tb-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: min(46vw, 520px);
+}
+
+.tb-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: min(38vw, 420px);
+}
+
+.titlebar.mobile .tb-title {
+  max-width: 100%;
+  text-align: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding-right: 8px;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.icon-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.icon-btn.active {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.menu-toggle {
+  display: none;
+}
+
+.titlebar.mobile .menu-toggle {
+  display: grid;
+}
+
+/* macOS traffic lights */
+.win-controls.mac {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding-right: 4px;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.mac-dot {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+}
+
+.mac-dot::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+  background: var(--border-strong);
+  transition: filter var(--dur-fast) var(--ease);
+}
+
+.mac-dot.close::before {
+  background: #ff5f57;
+}
+
+.mac-dot.min::before {
+  background: #febc2e;
+}
+
+.mac-dot.max::before {
+  background: #28c840;
+}
+
+.mac-dot:hover::before {
+  filter: brightness(0.9);
+}
+
+/* Windows/Linux caption buttons: 46x32 hit areas, neutral hover, red close */
+.caption-controls {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  margin-left: 8px;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.caption-btn {
+  width: 46px;
+  height: 100%;
+  min-height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border-radius: 0;
+  transition: background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.caption-btn:hover {
+  background: rgba(28, 34, 40, 0.06);
+  color: var(--text-primary);
+}
+
+.caption-btn:active {
+  background: rgba(28, 34, 40, 0.1);
+}
+
+.caption-btn.close:hover {
+  background: #e81123;
+  color: #ffffff;
+}
+
+.caption-btn.close:active {
+  background: #c50f1f;
+  color: #ffffff;
+}
+
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 99px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-surface);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mode-pill.tone-ok {
+  background: var(--ok-soft);
+  border-color: var(--ok-border);
+  color: var(--ok-ink);
+}
+
+.mode-pill.tone-warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn-ink);
+}
+
+.mode-pill.tone-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger-ink);
+}
+
+/* Mobile keeps node mode visible as a compact dot; the drawer carries detail. */
+.titlebar-status {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+}
+
+.titlebar-status .dot {
+  width: 8px;
+  height: 8px;
+}
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--text-faint);
+}
+
+.dot.tone-live {
+  background: var(--accent);
+  animation: pulse 1.8s var(--ease) infinite;
+}
+
+.dot.tone-ok {
+  background: var(--ok);
+}
+
+.dot.tone-warn {
+  background: var(--warn);
+}
+
+.dot.tone-danger {
+  background: var(--danger);
+}
+
+.dot.tone-idle {
+  background: var(--border-strong);
+}

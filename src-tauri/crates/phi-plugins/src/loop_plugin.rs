@@ -90,17 +90,6 @@ impl RuntimePort for LoopPlugin {
         }
 
         let run_id = self.ids.new_id("run");
-        let task_id = self.ids.new_id("task");
-
-        self.bus.publish(
-            &req.session_id,
-            "plugin-loop",
-            &DomainEvent::TaskCreated {
-                task_id: task_id.clone(),
-                title: i18n::t("Implicit task"),
-                implicit: true,
-            },
-        )?;
 
         self.bus.publish(
             &req.session_id,
@@ -109,7 +98,6 @@ impl RuntimePort for LoopPlugin {
                 run_id: run_id.clone(),
                 session_id: req.session_id.clone(),
                 turn_id: req.turn_id.clone(),
-                task_id,
             },
         )?;
 
@@ -801,10 +789,13 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 let _ = decide(ctx, &call, "deny", &rationale);
                 return deny_result(&call, &rationale);
             };
-            let risk = if call.tool_id == "shell_exec" {
-                i18n::t("Irreversible: code execution and permissions")
+            let (risk_level, risk) = if call.tool_id == "shell_exec" {
+                (
+                    "high",
+                    i18n::t("Irreversible: code execution and permissions"),
+                )
             } else {
-                i18n::t("Reversible: data modification")
+                ("medium", i18n::t("Reversible: data modification"))
             };
             // Approval has its own timeout, independent of any run budget.
             let expires_in_secs = env_u64("PHI_APPROVAL_TIMEOUT_SECS", 300);
@@ -816,6 +807,7 @@ async fn execute_tool(ctx: &RunContext, step_id: &str, call: ToolCall) -> ToolEx
                 args_preview: journal_args_preview(&call.tool_id, &call.input),
                 action_digest: digest.clone(),
                 risk,
+                risk_level: risk_level.to_string(),
                 expires_in_secs,
             };
             let pending = match approver.request(spec) {
