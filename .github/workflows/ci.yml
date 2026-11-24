@@ -313,10 +313,14 @@ jobs:
       - uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
-        # android-37 is the Lumen Crash SDK's compile target. AGP can also fetch
-        # a missing platform on demand, but installing it up front keeps the
-        # failure mode out of the Gradle step.
-        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "ndk;27.2.12479018"
+        # `platforms;android-37` is the Lumen Crash SDK's compile target. It is
+        # not published in the channel sdkmanager queries by default, so that
+        # install stays best-effort and AGP fetches the platform itself once the
+        # licenses are accepted. Build-tools and the NDK are required.
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "build-tools;36.0.0" "ndk;27.2.12479018"
+          sdkmanager "platforms;android-37" || echo "::warning::platforms;android-37 is not installable here; AGP will download it"
 
       - name: Configure Android environment
         run: |
