@@ -121,7 +121,7 @@ kotlin {
 // metadata version, so it is worth seeing up front.
 logger.lifecycle(
     "Kotlin plugin resolved for :app: " +
-        org.jetbrains.kotlin.gradle.plugin.getKotlinPluginVersion(project),
+        org.jetbrains.kotlin.gradle.plugin.getKotlinPluginVersion(logger),
 )
 
 composeCompiler {
