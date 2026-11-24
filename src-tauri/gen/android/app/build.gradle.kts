@@ -116,6 +116,23 @@ kotlin {
     }
 }
 
+// States which Kotlin plugin the build resolved. A mismatch against the version
+// the crash SDK was compiled with only surfaces later, as an unreadable AAR
+// metadata version, so it is worth seeing up front.
+logger.lifecycle(
+    "Kotlin plugin resolved for :app: " +
+        org.jetbrains.kotlin.gradle.plugin.getKotlinPluginVersion(project),
+)
+
+composeCompiler {
+    // The Compose mapping file is metadata for deobfuscating Compose runtime
+    // frames in the Play Console. Producing it requires
+    // `org.jetbrains.kotlin:compose-group-mapping`, which is published only for
+    // Kotlin versions newer than the one AGP brings in, so the task cannot
+    // resolve its classpath and the release build stops on it.
+    includeComposeMappingFile = false
+}
+
 rust {
     rootDirRel = "../../../"
 }

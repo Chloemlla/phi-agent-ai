@@ -15,6 +15,15 @@ buildscript {
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.10")
         classpath("org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.4.10")
     }
+    // AGP depends on an older Kotlin Gradle plugin, so its transitive version
+    // competes with the two above. Forcing them keeps the compiler that runs
+    // over :app identical to the one that produced the SDK's AAR metadata.
+    configurations.all {
+        resolutionStrategy.force(
+            "org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.10",
+            "org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.4.10",
+        )
+    }
 }
 
 // The Kotlin half of rustls-platform-verifier ships as an AAR from the
