@@ -180,6 +180,14 @@ Rust 侧（`src-tauri/src/android.rs`）：
 - `startupHangWatchdogEnabled` 关闭，冷启动卡死只能靠系统 ANR 发现。
 - Rust backtrace 未符号化：报告里有地址与 `.so` 名，符号化需要保留未 strip 的构建产物。
 - WebView renderer 的 tombstone 需要 API 31+；更低版本只有退出原因字符串。
+- SDK 用 Kotlin 2.4.10 编译，应用的 Kotlin 插件版本必须与之一致，否则报
+  “binary version of its metadata is 2.4.0, expected version is 2.2.0”，错误指
+  向 SDK 而不是真正原因。决定编译器版本的是 `buildSrc/build.gradle.kts`（它的
+  classpath 先于 buildscript classpath 加载），根 `build.gradle.kts` 的声明只是
+  第二道保险；构建日志会以 warn 级别打印实际解析到的版本。
+- Compose mapping 文件生成已关闭（`includeComposeMappingFile = false`）：它依赖
+  的 `org.jetbrains.kotlin:compose-group-mapping` 只对更新版本的 Kotlin 发布，
+  而它的用途仅是 Play Console 里 Compose 调用栈的反混淆。
 
 ---
 
