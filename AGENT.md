@@ -97,6 +97,18 @@ The Android build lives in `src-tauri/gen/android/` and reuses the same
   not exist below API 26. Compose is enabled because the crash report screen is
   Compose; the compiler plugin version must match the Kotlin plugin version
   (both are pinned in the root `build.gradle.kts`).
+- **Kotlin plugin version.** The version is pinned in *three* places and only
+  `buildSrc` decides the outcome: AGP depends on its own Kotlin plugin, and
+  `buildSrc`'s classpath is loaded before the buildscript classpath, so the
+  plugin listed in `buildSrc/build.gradle.kts` is what actually compiles `:app`.
+  It must stay at the version the crash SDK was built with — a compiler older
+  than an AAR's Kotlin metadata fails with `binary version of its metadata is
+  X, expected version is Y`, and the error points at the SDK rather than at the
+  real cause. `:app` logs the resolved version at warn level so the next such
+  failure is one line to diagnose. Compose mapping file generation is off: it
+  needs `org.jetbrains.kotlin:compose-group-mapping`, which only exists for
+  Kotlin versions newer than AGP's, and it only feeds Compose frame
+  deobfuscation in the Play Console.
 - **Crash reporting.** `LumenCrash` is installed in `PhiApplication` and the
   SDK artifacts come from a GitHub release staged into
   `src-tauri/gen/android/lumen-crash-maven` by
