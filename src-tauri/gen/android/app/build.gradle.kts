@@ -119,7 +119,7 @@ kotlin {
 // States which Kotlin plugin the build resolved. A mismatch against the version
 // the crash SDK was compiled with only surfaces later, as an unreadable AAR
 // metadata version, so it is worth seeing up front.
-logger.lifecycle(
+logger.warn(
     "Kotlin plugin resolved for :app: " +
         org.jetbrains.kotlin.gradle.plugin.getKotlinPluginVersion(logger),
 )
